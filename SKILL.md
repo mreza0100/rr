@@ -1,6 +1,8 @@
 ---
 name: rr
-description: "Research-and-Report protocol. Research can target the internet, the local codebase, or both — RR detects this from the topic and tells the agent which sources to use. Two modes — RR (build an RRP, spawn a research agent to execute the dynamic multi-batch pipeline, deliver the agent's report) and RRP (write a self-contained prompt for the user to run in another chat). Use this skill INSTEAD of jumping straight to web search OR straight to grep — RR is a structured pipeline executed by a delegated agent, not a single query."
+version: "1.1.0"
+repo: "https://github.com/mreza0100/rr"
+description: "Research-and-Report protocol. Research can target the **internet, the local codebase, or both** — RR detects this from the topic and tells the agent which sources to use. Two modes — RR (build an RRP, spawn a research agent to execute the dynamic multi-batch pipeline, deliver the agent's report) and RRP (write a self-contained prompt for the user to run in another chat). Triggered when the user says 'RR', 'research and report', 'RRP', 'RR-prompt', 'research <topic>', 'look into <topic>', or 'find out <topic>'. Use this skill INSTEAD of jumping straight to web search OR straight to grep — RR is a structured pipeline executed by a delegated agent, not a single query."
 ---
 
 # RR — Research & Report
@@ -43,11 +45,11 @@ Restate the refined goal to yourself. If the refinement materially changes the s
 
 ### Step 2 — Determine the storage path
 
-Every RR run produces a research file. Store it in a research directory appropriate to your project structure. Recommended convention:
+Every RR run produces exactly one research file. Store it in a centralized research directory so all research is discoverable in one place.
 
-**Filename:** `{topic-slug}-{YYYY-MM-DD}.md` (e.g., `vector-db-comparison-2026-04-30.md`).
+**Filename:** `{caller}-{topic-slug}-{YYYY-MM-DD}.md` where `{caller}` is the command or agent that triggered the RR (e.g., `mentor-funding-landscape-2026-05-10.md`, `dev-vector-db-comparison-2026-04-30.md`). If RR was triggered standalone (no command context), use `dev` as the caller prefix.
 
-**Directory:** Use a `research/` directory scoped to the context that triggered the research. If your project has command-specific documentation directories, store research under the relevant command's research folder. If no specific context, use a general research directory (e.g., `docs/research/`).
+**Directory:** Use a single centralized research directory (e.g., `docs/research/`). Consistency matters more than the exact path — pick one convention for your project and stick to it.
 
 If the directory doesn't exist, the spawned agent will create it.
 
@@ -190,3 +192,23 @@ Load this skill when the user's message includes any of:
 - "research and report on <something>" / "do an RR on <something>"
 
 Do NOT load this skill for ordinary research requests like "look up X" or "what is Y" — those don't need the pipeline.
+
+---
+
+## Version & Updates
+
+**Current version:** 1.1.0
+**Repository:** https://github.com/mreza0100/rr
+
+To check for updates, compare the `version` field in your installed SKILL.md frontmatter against the latest in the repository.
+
+**To update:**
+
+```bash
+cd /path/to/rr-repo && git pull
+cp SKILL.md /your/project/.claude/skills/rr/SKILL.md
+```
+
+**Changelog:**
+- **1.1.0** — Caller-prefixed filenames for research output. Expanded trigger list in description. Centralized storage directory recommendation. Version tracking added.
+- **1.0.0** — Initial release. Scout → fan-out pipeline, RR + RRP modes, three research surfaces.
