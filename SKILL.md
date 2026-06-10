@@ -1,7 +1,7 @@
 ---
 name: rr
-version: "1.2.0"
-repo: "https://github.com/mreza0100/rr"
+version: '1.2.1'
+repo: 'https://github.com/mreza0100/rr'
 description: Reza's Research-and-Report protocol. Research can target the **internet, the local codebase, or both** — RR detects this from the topic and tells the agents which sources to use. Two modes — RR (run a Workflow pipeline — scout → fan-out → adversarial verify → synthesize — and deliver its report) and RRP (write a self-contained prompt for the user to run in another chat). Triggered when the user says "RR", "research and report", "RRP", "RR-prompt", "research <topic>", "look into <topic>", or "find out <topic>". Use this skill INSTEAD of jumping straight to web search OR straight to grep — RR is a structured Workflow pipeline, not a single query.
 ---
 
@@ -65,109 +65,97 @@ Reference script (adapt the prompts and `context` per topic):
 
 ```js
 export const meta = {
-  name: "rr-research",
-  description:
-    "RR — scout the landscape, fan out per sub-question (research → adversarial verify), synthesize a cited report + plan",
+  name: 'rr-research',
+  description: 'RR — scout the landscape, fan out per sub-question (research → adversarial verify), synthesize a cited report + plan',
   phases: [
-    { title: "Scout", detail: "map the landscape, surface sub-questions" },
+    { title: 'Scout', detail: 'map the landscape, surface sub-questions' },
     {
-      title: "Fan-out",
-      detail: "per sub-question lane: research then adversarially verify",
+      title: 'Fan-out',
+      detail: 'per sub-question lane: research then adversarially verify',
     },
     {
-      title: "Synthesize",
-      detail: "fold verified findings into Verdict / Findings / Plan",
+      title: 'Synthesize',
+      detail: 'fold verified findings into Verdict / Findings / Plan',
     },
   ],
 };
-const { goal, surface, context } = args;
+const A = typeof args === 'string' ? JSON.parse(args) : args;
+const { goal, surface, context } = A;
 const head = `Goal: ${goal}\nResearch surface: ${surface}\nContext: ${context}\n`;
 const SUBQ = {
-  type: "object",
-  required: ["subQuestions"],
+  type: 'object',
+  required: ['subQuestions'],
   properties: {
-    landscape: { type: "string" },
+    landscape: { type: 'string' },
     subQuestions: {
-      type: "array",
+      type: 'array',
       items: {
-        type: "object",
-        required: ["question", "rationale"],
+        type: 'object',
+        required: ['question', 'rationale'],
         properties: {
-          question: { type: "string" },
-          rationale: { type: "string" },
+          question: { type: 'string' },
+          rationale: { type: 'string' },
         },
       },
     },
   },
 };
 const FIND = {
-  type: "object",
-  required: ["findings"],
+  type: 'object',
+  required: ['findings'],
   properties: {
     findings: {
-      type: "array",
+      type: 'array',
       items: {
-        type: "object",
-        required: ["claim", "sources", "confidence"],
+        type: 'object',
+        required: ['claim', 'sources', 'confidence'],
         properties: {
-          claim: { type: "string" },
-          sources: { type: "array", items: { type: "string" } },
-          confidence: { type: "string", enum: ["high", "medium", "low"] },
+          claim: { type: 'string' },
+          sources: { type: 'array', items: { type: 'string' } },
+          confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
         },
       },
     },
   },
 };
 const REPORT = {
-  type: "object",
-  required: ["verdict", "findings", "plan", "confidence"],
+  type: 'object',
+  required: ['verdict', 'findings', 'plan', 'confidence'],
   properties: {
-    verdict: { type: "string" },
-    findings: { type: "array", items: { type: "string" } },
-    plan: { type: "string" },
-    openQuestions: { type: "array", items: { type: "string" } },
-    confidence: { type: "string", enum: ["high", "medium", "low"] },
+    verdict: { type: 'string' },
+    findings: { type: 'array', items: { type: 'string' } },
+    plan: { type: 'string' },
+    openQuestions: { type: 'array', items: { type: 'string' } },
+    confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
   },
 };
 
-phase("Scout");
-let subQuestions = args.subQuestions;
+phase('Scout');
+let subQuestions = A.subQuestions;
 if (!subQuestions?.length) {
-  const scout = await agent(
-    `${head}\nRun ONE entry-point batch to map this topic. Return a landscape summary (what you searched, key findings with sources/URLs) and 2-6 sub-questions for parallel fan-out, each with a one-line rationale. Don't answer everything — the next stage fans out.`,
-    { phase: "Scout", schema: SUBQ },
-  );
+  const scout = await agent(`${head}\nRun ONE entry-point batch to map this topic. Return a landscape summary (what you searched, key findings with sources/URLs) and 2-6 sub-questions for parallel fan-out, each with a one-line rationale. Don't answer everything — the next stage fans out.`, { phase: 'Scout', schema: SUBQ });
   subQuestions = scout.subQuestions;
 }
 
-phase("Fan-out");
+phase('Fan-out');
 const lanes = await pipeline(
   subQuestions,
   (sq) =>
-    agent(
-      `${head}\nResearch ONLY this sub-question: "${sq.question}" (${sq.rationale}). Run a dynamic batch sweep — each batch shaped by the last. Return findings as claims, each with its sources/URLs and a confidence rating.`,
-      {
-        label: `research:${sq.question.slice(0, 32)}`,
-        phase: "Fan-out",
-        schema: FIND,
-      },
-    ),
+    agent(`${head}\nResearch ONLY this sub-question: "${sq.question}" (${sq.rationale}). Run a dynamic batch sweep — each batch shaped by the last. Return findings as claims, each with its sources/URLs and a confidence rating.`, {
+      label: `research:${sq.question.slice(0, 32)}`,
+      phase: 'Fan-out',
+      schema: FIND,
+    }),
   (res, sq) =>
-    agent(
-      `${head}\nAdversarially verify these findings for "${sq.question}". Try to REFUTE each claim: drop any you can't corroborate, flag single-source claims as unverified, prefer newer/primary sources, re-rate confidence honestly. Findings: ${JSON.stringify(res.findings)}`,
-      {
-        label: `verify:${sq.question.slice(0, 32)}`,
-        phase: "Fan-out",
-        schema: FIND,
-      },
-    ),
+    agent(`${head}\nAdversarially verify these findings for "${sq.question}". Try to REFUTE each claim: drop any you can't corroborate, flag single-source claims as unverified, prefer newer/primary sources, re-rate confidence honestly. Findings: ${JSON.stringify(res.findings)}`, {
+      label: `verify:${sq.question.slice(0, 32)}`,
+      phase: 'Fan-out',
+      schema: FIND,
+    }),
 );
 
-phase("Synthesize");
-const report = await agent(
-  `Goal: ${goal}\nSynthesize these verified per-sub-question findings into one report. Findings: ${JSON.stringify(lanes.filter(Boolean))}\nReturn: verdict (1-3 sentences), findings (3-7 key bullets, citations inline), plan (concrete, opinionated recommendation), openQuestions (only if material), and an overall confidence rating. Flag any claim resting on a single source.`,
-  { phase: "Synthesize", schema: REPORT },
-);
+phase('Synthesize');
+const report = await agent(`Goal: ${goal}\nSynthesize these verified per-sub-question findings into one report. Findings: ${JSON.stringify(lanes.filter(Boolean))}\nReturn: verdict (1-3 sentences), findings (3-7 key bullets, citations inline), plan (concrete, opinionated recommendation), openQuestions (only if material), and an overall confidence rating. Flag any claim resting on a single source.`, { phase: 'Synthesize', schema: REPORT });
 
 return { goal, surface, subQuestions, lanes: lanes.filter(Boolean), report };
 ```
