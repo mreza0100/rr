@@ -1,6 +1,6 @@
 # RR — Research & Report
 
-**Version:** 1.2.1 · **License:** MIT · **Repo:** [github.com/mreza0100/rr](https://github.com/mreza0100/rr)
+**Version:** 1.3.0 · **License:** MIT · **Repo:** [github.com/mreza0100/rr](https://github.com/mreza0100/rr)
 
 A Claude Code skill for structured, multi-agent research pipelines. Instead of a single search and a one-paragraph answer, RR runs a **Workflow** pipeline that builds knowledge in batches — each batch shaped by what the previous batch found — and finishes with a synthesized, confidence-rated report and an actionable plan.
 
@@ -9,9 +9,10 @@ A Claude Code skill for structured, multi-agent research pipelines. Instead of a
 When you ask an LLM to "research X," it runs one search, reads the top results, and gives you a summary. That's fine for simple lookups. But for real research — comparing options, auditing a codebase, investigating regulations, evaluating trade-offs — you need a pipeline that:
 
 1. **Maps the landscape** first (what are the sub-questions?)
-2. **Fans out** into parallel research lanes (one per sub-question)
-3. **Adversarially verifies** each finding (tries to refute it, flags single-source claims, re-rates confidence)
-4. **Synthesizes** everything into a verdict + plan (not just raw findings)
+2. **Researches in judge-steered rounds** — after every research wave, a judge reads ALL findings so far and decides the next wave's questions; research → judgment → research, never a plan fixed up front
+3. **Refuses to stop early** — the judge may only declare saturation after a pressure-test round has hunted counter-evidence
+4. **Adversarially verifies** the load-bearing claims (tries to refute each, flags single-source claims, re-rates confidence)
+5. **Synthesizes** everything into a verdict + plan (not just raw findings)
 
 RR does this. It delegates the work to a background Workflow so the main conversation stays clean, persists the full research record to a file, and delivers a terse executive summary.
 
@@ -19,7 +20,7 @@ RR does this. It delegates the work to a background Workflow so the main convers
 
 | Mode    | Trigger       | What happens                                                                        |
 | ------- | ------------- | ----------------------------------------------------------------------------------- |
-| **RR**  | `RR <topic>`  | Runs a Workflow pipeline (scout → fan-out → verify → synthesize), delivers a report |
+| **RR**  | `RR <topic>`  | Runs the committed Workflow engine (scout → judge-steered rounds → verify → synthesize), delivers a report |
 | **RRP** | `RRP <topic>` | Writes a self-contained prompt you can run in another chat                          |
 
 ## Three research surfaces
@@ -39,7 +40,7 @@ RR infers the surface from the topic. If ambiguous, it asks.
 ```bash
 # From your project root
 mkdir -p .claude/skills/rr
-cp SKILL.md .claude/skills/rr/SKILL.md
+cp SKILL.md workflow.js .claude/skills/rr/
 ```
 
 Then use it in Claude Code:
@@ -58,11 +59,16 @@ User: "RR <topic>"
   │
   ├─ Step 1: Refine the goal (what do they actually want?)
   ├─ Step 2: Determine storage path
-  ├─ Step 3: Author & run the Workflow
-  │    ├─ phase Scout:     one agent maps the landscape → 2-6 sub-questions
-  │    ├─ phase Fan-out:   pipeline() lane per sub-question — research ─▶ adversarial verify
-  │    └─ phase Synthesize: fold verified lanes → verdict + findings + plan + confidence
-  ├─ Step 4: Write ONE aggregate file (workflow returns structured data; no intermediates)
+  ├─ Step 3: Launch the committed engine — Workflow({scriptPath: '.claude/skills/rr/workflow.js'})
+  │    ├─ phase Scout:    one agent maps the landscape → 2-6 sub-questions     (opus)
+  │    ├─ repeat until saturated or round cap (default 4):
+  │    │    ├─ phase Research: wave of researchers (sonnet) ∥ decided-retrieval
+  │    │    │                  collectors (haiku) — barrier at end of wave
+  │    │    └─ phase Judge:   reads ALL findings, steers the next wave,        (opus)
+  │    │                      calls saturation only after a pressure-test round
+  │    ├─ phase Verify:   one adversarial skeptic per load-bearing claim       (sonnet)
+  │    └─ phase Synthesize: writes the ONE report file, returns exec summary   (opus)
+  ├─ Step 4: Verify the file landed (backfill from the structured return if not)
   └─ Step 5: Deliver terse summary to user
        └─ Verdict + key findings + plan + file path
 ```
@@ -71,13 +77,15 @@ User: "RR <topic>"
 
 **Delegate to a Workflow, don't inline.** Research generates a lot of tool noise. RR runs a background Workflow so the main conversation stays clean and focused.
 
-**Piped stages.** Each sub-question flows through its own `pipeline()` lane: the research result is piped straight into an adversarial verify stage. Lanes are independent — one verifies while another still researches.
+**A committed engine, not an improvised script.** `workflow.js` ships with the skill and is invoked via `scriptPath` — the loop is enforced by a scheduler, never re-authored per run. A prose protocol asks the model to iterate; a scheduler makes the judge's output literally become the next round's input.
 
-**Dynamic batches, not a fixed plan.** Within a lane, each batch is shaped by what the previous batch found. If batch 3 was decided before batch 1 ran, it's not RR.
+**Judge-steered rounds, not one fan-out.** Researchers within a wave run in parallel on different sub-questions; the dynamism lives between waves — the judge reads everything found so far, flags contradictions, and writes the next wave's questions. Decided retrievals (exact URL / grep / file) go to cheap collectors. The judge may only saturate after a pressure-test round has hunted counter-evidence.
 
-**One file, one run.** The pipeline produces exactly one research file. Workflow agents have no filesystem access, so the orchestrator writes it at the end from the workflow's structured return — no intermediates by construction.
+**Tiered models.** Judgment (scout, judge, synthesizer) stays on opus; researchers and verifiers ride sonnet; decided-retrieval collectors ride haiku. An optional `sacred: true` lifts every stage to opus for compliance-grade topics. Collectors return raw excerpts + sources and never conclude — judgment never delegates down.
 
-**Adversarial verify.** Each finding gets a stage that tries to refute it, drops what it can't corroborate, flags single-source claims, and re-rates confidence. The first plausible answer is often a confident-sounding wrong one.
+**One file, one run.** The pipeline produces exactly one research file — the synthesizer writes it from inside the workflow, and the orchestrator verifies it landed (backfilling from the structured return if not). No intermediates by construction.
+
+**Adversarial verify.** Each load-bearing claim gets a skeptic that tries to refute it, drops what it can't corroborate, flags single-source claims, and re-rates confidence. The first plausible answer is often a confident-sounding wrong one.
 
 **Plan, not just findings.** A wall of facts is half the deliverable. Every RR run must produce a concrete, opinionated recommendation.
 
@@ -87,7 +95,7 @@ Compare the `version` field in your installed `SKILL.md` frontmatter against the
 
 ```bash
 cd /path/to/rr-repo && git pull
-cp SKILL.md /your/project/.claude/skills/rr/SKILL.md
+cp SKILL.md workflow.js /your/project/.claude/skills/rr/
 ```
 
 ## License
