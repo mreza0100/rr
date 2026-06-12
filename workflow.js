@@ -2,9 +2,9 @@ export const meta = {
   name: 'rr-research',
   description: 'RR research engine — scout, then judge-steered research rounds (research → judge → research), adversarial verify, synthesize to the report file',
   phases: [
+    // Research/judge rounds render as dynamic 'Round N' groups (per-agent phase opts) —
+    // round count isn't known up front, and meta must stay a pure literal.
     { title: 'Scout', detail: 'map the landscape, derive sub-questions' },
-    { title: 'Research', detail: 'researchers + decided-retrieval collectors fan out per round' },
-    { title: 'Judge', detail: 'reads all findings, steers the next round, calls saturation' },
     { title: 'Verify', detail: 'adversarial attack on the load-bearing claims' },
     { title: 'Synthesize', detail: 'writes the report file, returns the executive summary' },
   ],
@@ -20,7 +20,7 @@ if (!arg.goal || !arg.reportPath || !arg.timestamp || !['internet', 'codebase', 
   throw new Error('rr workflow requires args {goal, surface, reportPath, timestamp} — see .claude/skills/rr/SKILL.md Mode 1 Step 3')
 }
 
-const MAX_ROUNDS = arg.maxRounds || 4
+const MAX_ROUNDS = arg.maxRounds || 6
 const WAVE_CAP = 5      // researchers per round
 const FETCH_CAP = 4     // decided-retrieval collectors per round
 const CLAIM_CAP = 8     // key claims sent to adversarial verify
@@ -112,13 +112,13 @@ for (let round = 1; round <= MAX_ROUNDS; round++) {
     ' Work iteratively WITHIN your lane: 2-4 probes, each shaped by what the previous one returned.' +
     ' Contract: you collect and structure — you never conclude, rank, or recommend; the judge downstream does the thinking.' +
     ' Return up to 8 findings (claim / sources / raw quoted excerpt <=150 words / confidence). When unsure whether something is relevant, INCLUDE it. Report dead ends honestly — a dead end steers the judge.',
-    { label: 'r' + round + ':' + slug(qd.q), phase: 'Research', model: M.researcher, schema: RESEARCH }))
+    { label: 'r' + round + ':' + slug(qd.q), phase: 'Round ' + round, model: M.researcher, schema: RESEARCH }))
   const collectors = orders.map((o, i) => () => run(
     'You are an RR collection agent. You do NOT analyze, judge, summarize, rank, filter-by-importance, or conclude — retrieve and return raw material only.' +
     ' Run exactly this retrieval: ' + o.order + (o.why ? ' (context: ' + o.why + ')' : '') + ' ' + TOOLS +
     ' Return each item as a finding: claim = a neutral one-line label of what the excerpt is (not an interpretation); sources = full URL or file:line; excerpt = the raw text verbatim (<=150 words); confidence = medium.' +
     ' When unsure whether something is relevant, INCLUDE it.',
-    { label: 'r' + round + ':fetch-' + (i + 1), phase: 'Research', model: M.collector, schema: RESEARCH }))
+    { label: 'r' + round + ':fetch-' + (i + 1), phase: 'Round ' + round, model: M.collector, schema: RESEARCH }))
 
   // Barrier is the point: the judge must see the WHOLE round before steering the next one.
   const results = await parallel([...researchers, ...collectors])
@@ -139,7 +139,7 @@ for (let round = 1; round <= MAX_ROUNDS; round++) {
     ' Steer the next round from what THIS round returned: nextQuestions = up to ' + WAVE_CAP + ' NEW open questions (never re-ask one), empty when nothing is missing; retrievals = up to ' + FETCH_CAP + ' decided retrievals (exact URL to fetch / exact grep pattern + dir / exact file to read) for cheap collectors;' +
     ' contradictions = findings that disagree (a contradiction usually earns a next-round question); keyClaims = the <=' + CLAIM_CAP + ' load-bearing claims (verbatim) the final report will rest on.' +
     ' saturated = true ONLY when the goal is answered AND a pressure-test round has already hunted counter-evidence; the FIRST time you believe the goal is answered, return saturated=false with pressure-test questions (counter-evidence, newer sources, contradicting code paths) instead.',
-    { label: 'judge-r' + round, phase: 'Judge', model: M.judge, schema: JUDGE })
+    { label: 'judge-r' + round, phase: 'Round ' + round, model: M.judge, schema: JUDGE })
   if (!judge) { log('judge died twice — stopping rounds with what we have'); break }
 
   roundLog.push({ round, questions: wave.map(x => x.q), retrievals: orders.map(o => o.order), assessment: judge.assessment })

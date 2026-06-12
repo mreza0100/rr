@@ -1,6 +1,6 @@
 ---
 name: rr
-version: "1.3.0"
+version: "1.3.1"
 repo: "https://github.com/mreza0100/rr"
 description: Reza's Research-and-Report protocol. Research can target the **internet, the local codebase, or both** — RR detects this from the topic and tells the agents which sources to use. Two modes — RR (launch the deterministic research workflow that runs scout → judge-steered research rounds → adversarial verify → synthesize and writes the report) and RRP (write a self-contained prompt for the user to run in another chat). Triggered when the user says "RR", "research and report", "RRP", "RR-prompt", "research <topic>", "look into <topic>", or "find out <topic>". Use this skill INSTEAD of jumping straight to web search OR straight to grep — RR is a structured research pipeline, not a single query.
 ---
@@ -57,7 +57,7 @@ Every RR run produces a research file. **All research output goes to a single ce
 
 The pipeline is deterministic — `workflow.js` schedules every stage; the loop is never improvised. Flow graph (declared copy of the script — update both together):
 
-> **scout** → repeat: [**research wave** ∥ → **judge**] until saturated or round cap (default 4) → **adversarial verify** → **synthesize** → report file
+> **scout** → repeat: [**research wave** ∥ → **judge**] until saturated or round cap (default 6) → **adversarial verify** → **synthesize** → report file
 
 The judge is the only stage that thinks: after every wave it reads ALL findings so far and decides the next wave — new open questions go to researchers, decided retrievals (exact URL / grep pattern / file) go to cheap collectors. Research → judgment → research, never a plan fixed up front. The judge saturates only after a pressure-test round has hunted counter-evidence.
 
@@ -74,7 +74,7 @@ Workflow({ scriptPath: '.claude/skills/rr/workflow.js', args: {
   timestamp,     // today's date YYYY-MM-DD from the environment (workflow scripts cannot read the clock)
   subQuestions,  // optional [{q, rationale}] — when the goal is already structured ("compare A, B, C"), skips the scout
   sacred,        // optional — true for compliance/clinical surfaces
-  maxRounds,     // optional, default 4
+  maxRounds,     // optional, default 6
 }})
 ```
 
