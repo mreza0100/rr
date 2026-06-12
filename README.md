@@ -61,7 +61,7 @@ User: "RR <topic>"
   ├─ Step 2: Determine storage path
   ├─ Step 3: Launch the committed engine — Workflow({scriptPath: '.claude/skills/rr/workflow.js'})
   │    ├─ phase Scout:    one agent maps the landscape → 2-6 sub-questions     (opus)
-  │    ├─ repeat until saturated or round cap (default 4):
+  │    ├─ repeat until saturated or round cap (default 6):
   │    │    ├─ phase Research: wave of researchers (sonnet) ∥ decided-retrieval
   │    │    │                  collectors (haiku) — barrier at end of wave
   │    │    └─ phase Judge:   reads ALL findings, steers the next wave,        (opus)
