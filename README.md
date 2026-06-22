@@ -1,6 +1,6 @@
 # RR — Research & Report
 
-**Version:** 1.3.1 · **License:** MIT · **Repo:** [github.com/mreza0100/rr](https://github.com/mreza0100/rr)
+**Version:** 1.3.2 · **License:** MIT · **Repo:** [github.com/mreza0100/rr](https://github.com/mreza0100/rr)
 
 A Claude Code skill for structured, multi-agent research pipelines. Instead of a single search and a one-paragraph answer, RR runs a **Workflow** pipeline that builds knowledge in batches — each batch shaped by what the previous batch found — and finishes with a synthesized, confidence-rated report and an actionable plan.
 

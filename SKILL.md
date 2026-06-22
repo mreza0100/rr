@@ -1,6 +1,6 @@
 ---
 name: rr
-version: "1.3.1"
+version: "1.3.2"
 repo: "https://github.com/mreza0100/rr"
 description: Reza's Research-and-Report protocol. Research can target the **internet, the local codebase, or both** — RR detects this from the topic and tells the agents which sources to use. Two modes — RR (launch the deterministic research workflow that runs scout → judge-steered research rounds → adversarial verify → synthesize and writes the report) and RRP (write a self-contained prompt for the user to run in another chat). Triggered when the user says "RR", "research and report", "RRP", "RR-prompt", "research <topic>", "look into <topic>", or "find out <topic>". Use this skill INSTEAD of jumping straight to web search OR straight to grep — RR is a structured research pipeline, not a single query.
 ---
@@ -47,7 +47,7 @@ Restate the refined goal to yourself. If the refinement materially changes the s
 
 Every RR run produces a research file. **All research output goes to a single centralized directory regardless of which command invoked RR:**
 
-**Storage directory:** `RR/` (gitignored local sandbox, like `RND/` — RR research is working material, not committed)
+**Storage directory:** `RR/` at the monorepo root — gitignored local sandbox, like `RND/` (RR research is working material, not committed). Build `reportPath` as an **absolute** path (`{monorepo-root}/RR/{filename}`); the working directory may be a child project, so a bare relative `RR/` can land the report outside the sandbox.
 
 **Filename convention:** `{caller}-{topic-slug}-{YYYY-MM-DD}.md` where `{caller}` is the command or agent that triggered the RR (e.g., `mentor-funding-landscape-2026-05-10.md`, `professor-eu-llm-providers-2026-05-10.md`). If RR was triggered standalone (no command active), use `dev` as the caller prefix. Use today's date from the environment context.
 
@@ -63,10 +63,10 @@ The judge is the only stage that thinks: after every wave it reads ALL findings 
 
 **Stage→model:** judgment (scout, judge, synthesizer) = `opus`; researchers and verifiers = `sonnet`; decided-retrieval collectors = `haiku`. `sacred: true` (compliance or clinical topics) lifts every stage to `opus` — no cheap collectors near that ground.
 
-Invoke from the main conversation:
+Invoke from the main conversation. Use the **absolute** path to `workflow.js` — the skill's base directory is printed when this skill loads, and the working directory may sit inside a child project (a bare relative path resolves against the CWD and 404s):
 
 ```
-Workflow({ scriptPath: '.claude/skills/rr/workflow.js', args: {
+Workflow({ scriptPath: '<skill-base-dir>/workflow.js', args: {
   goal,          // refined goal from Step 1 — not the raw topic
   context,       // cold-start briefing: stack, constraints, why the question is asked — workflow agents see nothing else
   surface,       // 'internet' | 'codebase' | 'both'
