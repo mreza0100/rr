@@ -8,3 +8,7 @@ Thumbs.db
 *~
 .idea/
 .vscode/
+
+# Node (engine/ build deps + coverage)
+node_modules/
+coverage/

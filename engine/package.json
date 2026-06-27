@@ -1,0 +1,20 @@
+{
+  "name": "rr-engine",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Research and Report (RR) Workflow engine — modular source that bundles to ../workflow.js",
+  "scripts": {
+    "build": "node build.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.9",
+    "vitest": "^4.1.9"
+  },
+  "dependencies": {
+    "mustache": "^4.2.0"
+  }
+}

@@ -1,183 +1,127 @@
 ---
 name: rr
-version: "1.3.2"
+version: "2.0.0"
 repo: "https://github.com/mreza0100/rr"
-description: Reza's Research-and-Report protocol. Research can target the **internet, the local codebase, or both** — RR detects this from the topic and tells the agents which sources to use. Two modes — RR (launch the deterministic research workflow that runs scout → judge-steered research rounds → adversarial verify → synthesize and writes the report) and RRP (write a self-contained prompt for the user to run in another chat). Triggered when the user says "RR", "research and report", "RRP", "RR-prompt", "research <topic>", "look into <topic>", or "find out <topic>". Use this skill INSTEAD of jumping straight to web search OR straight to grep — RR is a structured research pipeline, not a single query.
+description: Launches Research and Report (RR) — a deterministic background Workflow that runs an unbounded, best-first, brainer-steered web crawl, DERIVES an answer (computing it when the answer must be built), and writes a cited multi-section report with a verdict and plan. Use when the user wants a researched answer or a topic landscape ("research X", "look into X", "RR X") and a single web search is not enough. Modes: goal (answer one question) and collect (inventory a topic); "rr fast" answers inline via one quick sub-agent. Runs in the background, returns a completion notification, and persists to RR/{slug}/.
 ---
 
-# RR — Research & Report
+# Research and Report (RR)
 
-> Reza's research protocol. The trigger is `RR` — short for "research and report".
+A deterministic background Workflow that runs an unbounded, best-first, brainer-steered web-research crawl and **derives** a cited, multi-section answer.
 
-When the user says "RR <topic>", they don't want a single search and a one-paragraph answer. They want a **dynamic research pipeline** that builds knowledge in batches, where each batch is shaped by what the previous batch found, and that finishes with a **report and a plan** — not raw findings.
+## Purpose
 
-**Research surface — pick before spawning:**
+RR's job is to **answer the question** — by reasoning over everything it can gather, not merely finding and aggregating facts. It *derives* the answer. Reach for it above all when the answer has to be **built**: a synthesis, a quantitative estimate, or a judgment that no single source holds — e.g. *"estimate the distance to the nearest yet-undetected stellar-mass black hole with error bars, and say which observational method finds it first."* RR gathers the components (population estimates, local densities, detection precedents, instrument forecasts) and reasons them into one answer.
 
-| Surface | Tools the agent uses | When to pick |
-|---------|---------------------|--------------|
-| **internet** | WebSearch, WebFetch, context7 | External topics — libraries, regulations, market, competitive landscape, "what does X look like in 2026" |
-| **codebase** | Read, Grep, Glob, Bash | Internal topics — "how is auth wired", "where do we use SQS", "find every place that touches PHI", "audit our consent flow" |
-| **both** | All of the above | Mixed — "RR best-practice X and how we currently do it", "compare our impl to GraphQL Yoga's recommended pattern" |
+It never stops because a fact wasn't found. A missing piece is a reason to gather more and reason harder — not a dead end. An ingredient it cannot pin down becomes **stated uncertainty** (assumptions, wider error bars, open questions), never an early exit.
 
-If the user doesn't specify, infer from the topic. If genuinely ambiguous, ask one short question ("internet, codebase, or both?") rather than guess. Name the surface in the briefing so the agent uses the right tools.
+## How it works
 
-There are two modes:
+One Opus **brainer** drives the whole run; everything else is its instrument.
 
-| Mode    | Trigger                                                                             | Output                                                                                                       |
-| ------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| **RR**  | "RR <topic>", "research and report on X", "research X", "look into X", "find out X" | Launch the research workflow (scout → research/judge rounds → verify → synthesize), then deliver its report  |
-| **RRP** | "RRP <topic>", "RR-prompt for X", "write me an RR prompt for Y"                     | Write a self-contained prompt the user runs in another chat; do NOT execute and do NOT spawn an agent       |
+1. **Scout** (haiku) — one broad web sweep maps the landscape and seeds the first rabbit-holes.
+2. **Prospector** (opus) — names the high-value authoritative source venues for the topic.
+3. **Research waves** — the brainer scores the open rabbit-holes, pursues the leads worth following (assigning each its venues), and hands them to parallel **lane-researchers** (haiku) that WebSearch + WebFetch and return findings + new rabbit-holes. It folds the findings into a running answer carried wave to wave, re-scores the leads, and decides when the answer is solid. When a calculation would set direction, the brainer derives it itself mid-wave — reasoning it through or running code — and carries the result forward.
+4. **Sentinel** (opus, goal mode) — when the brainer calls done, a terminal skeptic contests it and can force one more wave on a real gap.
+5. **Finalize** — an **initiator** shapes the finish to the query → a **refine** agent fact-checks and corrects each load-bearing fact → an optional **computement** chain derives the quantitative answer (writing + running code, fact-checking its inputs, propagating error bars) → an **aggregator** writes the report.
+6. **Debug** (opt-in) — a final analyst writes `_debug.md` with metrics + raw agent I/O.
 
----
+## Launch
 
-## Mode 1 — RR (launch the research workflow)
-
-**Don't run the pipeline in the main conversation.** Research generates a lot of tool noise — WebSearch results, fetched pages, context7 dumps, grep output — that you don't want filling the main thread. Launch the deterministic workflow instead: `workflow.js` (this directory) schedules every stage in the background, the synthesizer writes the research file, and the run returns only the executive summary. You verify the file and deliver the summary.
-
-### Step 1 — Refine the goal (in reasoning, not output)
-
-Before doing anything, work out in your reasoning what the user **actually** wants from this research. The topic as stated is rarely the goal:
-
-- "RR vector DBs" → probably means "which vector DB should we use for this project given our stack and scale" — not a generic survey.
-- "RR EU AI Act timeline" → probably means "what do we have to do and by when, for our specific risk class" — not a Wikipedia summary.
-
-Restate the refined goal to yourself. If the refinement materially changes the scope and you're not sure, ask the user one short clarifying question before launching the workflow. Otherwise proceed.
-
-### Step 2 — Determine the storage path
-
-Every RR run produces a research file. **All research output goes to a single centralized directory regardless of which command invoked RR:**
-
-**Storage directory:** `RR/` at the monorepo root — gitignored local sandbox, like `RND/` (RR research is working material, not committed). Build `reportPath` as an **absolute** path (`{monorepo-root}/RR/{filename}`); the working directory may be a child project, so a bare relative `RR/` can land the report outside the sandbox.
-
-**Filename convention:** `{caller}-{topic-slug}-{YYYY-MM-DD}.md` where `{caller}` is the command or agent that triggered the RR (e.g., `mentor-funding-landscape-2026-05-10.md`, `professor-eu-llm-providers-2026-05-10.md`). If RR was triggered standalone (no command active), use `dev` as the caller prefix. Use today's date from the environment context.
-
-**File contract** (declared copy of the synthesizer brief in `workflow.js` — update both together): ONE file, no intermediates, sections in this order: (1) Prompt — original request + refined goal, (2) Research rounds — per round, questions asked + judge assessment, (3) Scout landscape, (4) Findings per sub-question — claims with sources, confidence, verification verdicts, (5) Verdict + overall confidence, (6) Plan, (7) Open questions if any.
-
-### Step 3 — Launch the research workflow
-
-The pipeline is deterministic — `workflow.js` schedules every stage; the loop is never improvised. Flow graph (declared copy of the script — update both together):
-
-> **scout** → repeat: [**research wave** ∥ → **judge**] until saturated or round cap (default 6) → **adversarial verify** → **synthesize** → report file
-
-The judge is the only stage that thinks: after every wave it reads ALL findings so far and decides the next wave — new open questions go to researchers, decided retrievals (exact URL / grep pattern / file) go to cheap collectors. Research → judgment → research, never a plan fixed up front. The judge saturates only after a pressure-test round has hunted counter-evidence.
-
-**Stage→model:** judgment (scout, judge, synthesizer) = `opus`; researchers and verifiers = `sonnet`; decided-retrieval collectors = `haiku`. `sacred: true` (compliance or clinical topics) lifts every stage to `opus` — no cheap collectors near that ground.
-
-Invoke from the main conversation. Use the **absolute** path to `workflow.js` — the skill's base directory is printed when this skill loads, and the working directory may sit inside a child project (a bare relative path resolves against the CWD and 404s):
+Call the **Workflow tool**. It runs in the background; a completion notification returns the result — do not block on it. Use the **absolute** path to `workflow.js` (the skill's base dir is printed when the skill loads) — the working directory may sit inside a child project, where a relative path resolves against the CWD and 404s the bundle.
 
 ```
-Workflow({ scriptPath: '<skill-base-dir>/workflow.js', args: {
-  goal,          // refined goal from Step 1 — not the raw topic
-  context,       // cold-start briefing: stack, constraints, why the question is asked — workflow agents see nothing else
-  surface,       // 'internet' | 'codebase' | 'both'
-  reportPath,    // storage path from Step 2
-  timestamp,     // today's date YYYY-MM-DD from the environment (workflow scripts cannot read the clock)
-  subQuestions,  // optional [{q, rationale}] — when the goal is already structured ("compare A, B, C"), skips the scout
-  sacred,        // optional — true for compliance/clinical surfaces
-  maxRounds,     // optional, default 6
-}})
+Workflow({
+  scriptPath: "<skill-base-dir>/workflow.js",
+  args: { query, mode, compute, tag, debug, debugPrompt }
+})
 ```
 
-Tell the user one sentence — "RR workflow dispatched — scout, research/judge rounds, verify, synthesize." — and let it run. Don't predict findings.
+### args
 
-**Sub-agent path (no Workflow tool):** an agent running RR inside its own context (e.g. a researcher sub-agent spawned by another command) executes the same flow graph itself — it is scout, judge, and synthesizer in one context; decided retrievals may go to `model: "haiku"` collector children that return raw excerpts + sources and never conclude; judgment never delegates down; sacred surfaces keep all retrieval at the agent's own tier.
+- `query` (required) — the research question (goal) or collect-target. The crawl sees only this string.
+- `mode` — `'goal'` (default) or `'collect'`. See Modes.
+- `compute` — `true` (default) or `false`. The master switch for derivation: `false` runs no compute agents (no mid-wave compute, no finalize computement) for a faster, gather-and-reason-only run.
+- `tag` (optional) — suffixes the output dir so parallel variants of one query write to distinct dirs.
+- `debug` (optional, `true`) — adds `_debug.md`; pair with `debugPrompt` (string) to focus it on a question.
 
-### Step 4 — Verify the file landed
+## Modes
 
-When the workflow completes, confirm the file exists at the storage path and carries every section of the Step 2 file contract (a quick `ls` + `wc -l`, not a full re-read). If the run returned `fileWritten: false` or findings without the file, write the file yourself from the returned record before delivering.
+- **goal** — satisficing. Answers ONE question and stops once it is answered; the sentinel guards against a premature stop. Pick for a decision or a direct answer.
+- **collect** — exhaustive. Inventories breadth and runs until saturation. Pick for a landscape or a roster.
 
-### Step 5 — Deliver the aggregate report
+## Fast mode
 
-The **one file at the storage path is the complete record.** There are no other files to read. The user does NOT want the per-lane parade or the per-sub-question expansion in the chat — they want the synthesized answer, with a pointer to the single file that has everything.
-
-**Default chat output — terse:**
-
-```
-Saved: {full path to file}
-
-## Verdict
-{1-3 sentences — the headline answer / decision / recommendation} (confidence: high/medium/low)
-
-## Findings (key points)
-{3-7 bullets — the substantive answer condensed. Cite sources inline where it matters.}
-
-## Plan
-{concrete, opinionated, actionable — the action the user should take. If a decision: name it.}
-
-## Open questions
-{anything unresolved, only if material. Skip the section entirely if there's nothing.}
-```
-
-**Do NOT print the round-by-round trail in the chat.** That belongs in the file. If the user wants to see how the research got there, they read the file or ask "show me the rounds."
-
-The **file** carries the full structure per the file contract — that's the persisted research record. Your **chat reply** is the executive summary: Verdict + key Findings + Plan + path to the file.
-
-If the run's summary is thin on Plan or Verdict, write it yourself from the findings, clearly marking it as your synthesis.
-
----
-
-## Mode 2 — RRP (write a prompt for someone else to execute)
-
-When the user says RRP, they will run the prompt **in a different chat** (often a fresh context, possibly a different model). Your job is to write a prompt that produces a usable RR report **without** the executor having access to this conversation, this codebase, or any of the surrounding context.
-
-### Constraints on the prompt you write
-
-- **Self-contained.** No "as we discussed", no reference to prior turns, no assumption that the executor has read any file. If context matters (project stack, scale, constraints, deadline), inline it in the prompt.
-- **Goal first, topic second.** State the refined goal at the top so the executor doesn't waste batches figuring out what's actually wanted.
-- **State the surface.** "Research surface: internet / codebase / both." For codebase research the executor needs path orientation; for internet research the executor needs a time horizon.
-- **Embed the RR protocol inline.** Do NOT assume the executor has the `rr` skill. Briefly explain the dynamic-batch pipeline, the "satisfies and beyond N+1" rule, and the required report structure. ~10 lines is enough — copy the essentials below.
-- **Specify the deliverable shape.** Tell the executor exactly which sections to return (Verdict / Findings / Plan / Open questions in the chat reply; full Pipeline run details in the saved file if any).
-- **Name the time horizon (internet research).** "Use sources from 2025–2026 unless older is the canonical reference." Stale data is the #1 RR failure mode for internet topics.
-- **Authorize tools.** Internet: "Use web search, fetch official docs, prefer primary sources over blog summaries." Codebase: "Use grep, glob, read; prefer reading actual code over guessing from doc strings."
-- Do **not** include secrets, internal URLs, or anything Reza wouldn't paste into a fresh chat window.
-
-### Output format for RRP mode
-
-Wrap the prompt in a fenced block so Reza can copy-paste it cleanly. Briefly above the block, state in one line what context you embedded so he can sanity-check.
+When the user says **"rr fast <query>"**, skip the background Workflow and run a miniature of it inline — the same shape (a lead that follows rabbit-holes by nesting researchers), at a smaller model and fewer rounds, answered right now. Spawn ONE **Sonnet** lead sub-agent (Task-capable, so it can nest) with this prompt:
 
 ```
-Context I embedded: {one line}
-
----PROMPT BELOW — copy into another chat---
-
+Research and answer this directly: "<query>".
+1. Run a targeted WebSearch to map the question; pick the 2-4 highest-value rabbit-holes (each a concrete sub-query).
+2. Spawn one HAIKU sub-agent per rabbit-hole, in PARALLEL, each tasked: "Dig this rabbit-hole for «<query>»: <rabbit-hole>. WebSearch, then WebFetch the 2-3 best sources; in each WebFetch prompt ask the key question first, then append this footer verbatim: <<FOOTER>>. Return 2-4 sentences of findings with inline source links AND the rabbit-holes the pages surfaced."
+3. Read what came back. If 1-2 of the newly-surfaced rabbit-holes are load-bearing and still unanswered, dispatch ONE more parallel Haiku round on them (same task). Then stop.
+4. Synthesize everything into the answer: lead with the answer, then the load-bearing facts with inline source links, then any open questions.
 ```
 
-{the prompt}
+The `<<FOOTER>>` each Haiku digger appends to its WebFetch prompts (this is what makes it surface deeper rabbit-holes instead of stopping at the first hit):
 
 ```
-
+Then append a section titled "Rabbit holes": 0-5 rabbit-holes worth a researcher's time, prioritizing the biggest gaps the page raises but does not explain. Each rabbit-hole: a concrete next web-search query and one line on why it matters. If the page is a dead end or self-contained, give 1 or none — do not pad. Skip anything the page already explains.
 ```
 
-### Reusable RR-protocol snippet to embed inside RRP prompts
+## Getting results
 
-When writing an RRP, paste a compact version of the protocol so the executor knows the shape. Suggested wording:
+After the completion notification, persist the artifacts:
 
-> Run this as a **dynamic research pipeline**, not a single search/grep. The research surface is **{internet / codebase / both}** — use those tools accordingly (web search & fetch for internet; read/grep/glob/bash for codebase). Start with one entry-point query to map the landscape, then plan each next batch based on what the previous batch returned — not a plan written up front. Continue until the goal is answered, then do one extra "pressure-test" batch to look for counter-evidence, newer sources, or contradicting code paths before stopping. Return the result in this shape: **Verdict** (1-3 sentences — the headline answer) / **Findings** (3-7 bullets, citations inline) / **Plan** (concrete, opinionated recommendation) / **Open questions** (anything unresolved). Keep the per-batch breakdown out of the reply — if the user wants the trail, they'll ask.
+```
+node <skill-base-dir>/persist.js <completion-output-file>
+```
 
----
+This writes to `RR/{slug}/`:
 
-## Common failure modes (avoid these in both modes)
+- `result.md` — the deliverable. Read this first.
+- `_frontier.json`, `_tree.md` — the rabbit-hole frontier + the crawl tree; diagnostics.
+- `_compute-*.md` / `_compute-*.py` — any derivations with their code, when compute ran.
+- `_debug.md` — when launched with `debug: true`.
 
-- **Executing RR inline instead of delegating.** RR mode launches the workflow (or, as a sub-agent, runs the flow graph in its own context). If you're running WebSearch/WebFetch/Grep in the main conversation for an RR request, you're doing it wrong — that noise is exactly what delegation keeps out of the main thread.
-- **Single-shot search/grep.** RR is a pipeline. One WebSearch is not RR. One Grep is not RR. (Applies to whoever executes — research agent, or the user in another chat.)
-- **Picking the wrong surface.** Codebase questions ("how does our auth work") sent as internet research return generic blog posts; internet questions ("which vector DB should we use") sent as codebase research return "we don't have one." Pick deliberately. If unsure, ask.
-- **Plan the whole pipeline up front.** The research within each lane is supposed to evolve. If batch 3 was decided before batch 1 ran, the lane isn't doing RR.
-- **Skip the verify stage.** The adversarial verify lane exists because the first answer is often a confident-sounding wrong one — it refutes, drops uncorroborated claims, and flags single-source findings. Don't collapse research and verify into one pass.
-- **A collector that summarizes** has moved judgment to a weak model — reject that collection and re-run it; collectors return raw excerpts, the judge does the thinking.
-- **Dump findings, skip the plan.** Reza asked for a report **and a plan**. A wall of facts is half the deliverable.
-- **Spam the chat with the round-by-round trail.** The user-facing reply is Verdict + Findings + Plan + file path. The per-round trail goes in the file.
-- **Assume the executor has context.** Neither the research agent (RR) nor the user's other chat (RRP) sees this conversation. Inline everything that matters into the briefing / the RRP prompt.
-- **Predicting the findings while the run is live.** You know nothing about what it found until it returns. Don't fabricate or summarize in advance.
-- **Skipping the file write.** Every RR run produces exactly ONE research file in the storage directory — the synthesizer writes it per the file contract, and Step 4 has you backfill it from the run's return if it didn't. If no file is written, the work isn't persisted — future conversations can't reference it. The file is the canonical record; the chat reply is the courtesy summary.
+## Writing the query
 
----
+- Make it specific and self-contained — state the constraints, scale, time horizon, and the deliverable inside the query.
+- **goal:** pose one clear question. A two-axis question ("what works today AND the migration path") is fine.
+- **collect:** frame as "exhaustively inventory X across these dimensions: …" and name the candidates + dimensions.
+- Avoid self-referential queries about the local repo — they make the crawl over-explore local files instead of researching.
 
-## Triggers (so you know when to load this skill)
+<example>
+Vague: "vector databases"
+Good (goal): { query: "Which self-hosted open-source vector database has the best recall-vs-latency tradeoff for ~10M embeddings on a single 16-core box, and what should a small team deploy?", mode: "goal" }
+Why: names the constraints, poses one decision, states the deliverable.
+</example>
 
-Load this skill when the user's message includes any of:
+<example>
+Vague: "tell me about Tailscale"
+Good (collect): { query: "Exhaustively inventory Tailscale across these dimensions: products, funding history, leadership, security posture, notable incidents, and how the WireGuard mesh works.", mode: "collect" }
+Why: the collect frame + named dimensions give a saturation target, not an open browse.
+</example>
 
-- `RR <something>`
-- `RRP <something>` / `RR-prompt for <something>` / "write me an RR prompt"
-- "research and report on <something>" / "do an RR on <something>"
+<example>
+Good (goal, derive): { query: "Estimate the distance to the nearest yet-undetected stellar-mass black hole, with error bars, and say which method (Gaia astrometry, microlensing, X-ray, radial velocity) finds it first and roughly when." }
+Why: no single source holds this — RR gathers the components and computes the answer (compute defaults on).
+</example>
 
-Do NOT load this skill for ordinary research requests like "look up X" or "what is Y" — those don't need the pipeline.
+## Build & maintenance
+
+`workflow.js` is a **build artifact** — never hand-edit it. The source is the modular project under `engine/`:
+
+```
+cd engine && npm install        # first time
+npm run build                   # bundles engine/src/ → ../workflow.js, then validates the sandbox contract
+npm test                        # the vitest suite (unit + integration tests)
+```
+
+Edit `engine/src/` (the modules + `prompts/*.prompt.md`), rebuild, and commit both the source and the regenerated `workflow.js`.
+
+## Working with it
+
+- Pick **goal** for a decision/answer, **collect** for a landscape, **rr fast** for a quick inline take.
+- Full runs are ~45–90 min and token-heavy — launch, then move on; don't predict findings while it runs.
+- Read `result.md` first; everything else is diagnostic.
+- Use a `tag` for side-by-side variants; set `compute: false` for a faster gather-only run.
