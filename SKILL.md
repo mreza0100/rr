@@ -1,8 +1,8 @@
 ---
 name: rr
-version: "2.0.0"
+version: "2.1.0"
 repo: "https://github.com/mreza0100/rr"
-description: Launches Research and Report (RR) — a deterministic background Workflow that runs an unbounded, best-first, brainer-steered web crawl, DERIVES an answer (computing it when the answer must be built), and writes a cited multi-section report with a verdict and plan. Use when the user wants a researched answer or a topic landscape ("research X", "look into X", "RR X") and a single web search is not enough. Modes: goal (answer one question) and collect (inventory a topic); "rr fast" answers inline via one quick sub-agent. Runs in the background, returns a completion notification, and persists to RR/{slug}/.
+description: Launches Research and Report (RR) — a deterministic background Workflow that runs an unbounded, best-first, brainer-steered web crawl, DERIVES an answer (computing it when the answer must be built), and writes a cited multi-section report with a verdict and plan. Use when the user wants a researched answer or a topic landscape ("research X", "look into X", "RR X", "rr fast X") and a single web search is not enough. Modes: goal (answer one question) and collect (inventory a topic); "rr fast X" answers inline now via one quick sub-agent instead of the background Workflow. Runs in the background, returns a completion notification, and persists to RR/{slug}/.
 ---
 
 # Research and Report (RR)
@@ -11,7 +11,7 @@ A deterministic background Workflow that runs an unbounded, best-first, brainer-
 
 ## Purpose
 
-RR's job is to **answer the question** — by reasoning over everything it can gather, not merely finding and aggregating facts. It *derives* the answer. Reach for it above all when the answer has to be **built**: a synthesis, a quantitative estimate, or a judgment that no single source holds — e.g. *"estimate the distance to the nearest yet-undetected stellar-mass black hole with error bars, and say which observational method finds it first."* RR gathers the components (population estimates, local densities, detection precedents, instrument forecasts) and reasons them into one answer.
+RR's job is to **answer the question** — by reasoning over everything it can gather, not merely finding and collating facts. It *derives* the answer. Reach for it above all when the answer has to be **built**: a synthesis, a quantitative estimate, or a judgment that no single source holds — e.g. *"estimate the distance to the nearest yet-undetected stellar-mass black hole with error bars, and say which observational method finds it first."* RR gathers the components (population estimates, local densities, detection precedents, instrument forecasts) and reasons them into one answer.
 
 It never stops because a fact wasn't found. A missing piece is a reason to gather more and reason harder — not a dead end. An ingredient it cannot pin down becomes **stated uncertainty** (assumptions, wider error bars, open questions), never an early exit.
 
@@ -20,10 +20,10 @@ It never stops because a fact wasn't found. A missing piece is a reason to gathe
 One Opus **brainer** drives the whole run; everything else is its instrument.
 
 1. **Scout** (haiku) — one broad web sweep maps the landscape and seeds the first rabbit-holes.
-2. **Prospector** (opus) — names the high-value authoritative source venues for the topic.
-3. **Research waves** — the brainer scores the open rabbit-holes, pursues the leads worth following (assigning each its venues), and hands them to parallel **lane-researchers** (haiku) that WebSearch + WebFetch and return findings + new rabbit-holes. It folds the findings into a running answer carried wave to wave, re-scores the leads, and decides when the answer is solid. When a calculation would set direction, the brainer derives it itself mid-wave — reasoning it through or running code — and carries the result forward.
+2. **Prospector** (opus) — names the high-value authoritative source venues, and when the topic is more active in another language, the native venues to search in (tagged by language).
+3. **Research waves** — the brainer scores the open rabbit-holes, pursues the leads worth following (assigning each its venues), and hands them to parallel **lane-researchers** (haiku) that WebSearch + WebFetch, capture each source's evidence quality (funding, conflicts, sample, limitations), and return findings + new rabbit-holes + the outbound links worth following. A per-wave **validator** (sonnet) checks the wave met its goal and reopens the failed or thin lanes. The brainer folds the findings into a running answer carried wave to wave, re-scores the leads, and decides when the answer is solid — deriving any steering calculation itself mid-wave (reasoning or running code).
 4. **Sentinel** (opus, goal mode) — when the brainer calls done, a terminal skeptic contests it and can force one more wave on a real gap.
-5. **Finalize** — an **initiator** shapes the finish to the query → a **refine** agent fact-checks and corrects each load-bearing fact → an optional **computement** chain derives the quantitative answer (writing + running code, fact-checking its inputs, propagating error bars) → an **aggregator** writes the report.
+5. **Finalize** — an **initiator** shapes the finish, grouping the load-bearing facts → a **refine** pass adversarially hardens each fact group against the sources → an Opus **judge** stress-tests the hardened answer (goal met, verification sound, derivation valid) and steers a bounded remediation loop: the brain derives the answer when one is needed (running code, propagating error bars), refine re-checks a flagged fact, or the crawl reopens on a real gap → a **synthesiser** writes the report.
 6. **Debug** (opt-in) — a final analyst writes `_debug.md` with metrics + raw agent I/O.
 
 ## Launch
@@ -33,7 +33,7 @@ Call the **Workflow tool**. It runs in the background; a completion notification
 ```
 Workflow({
   scriptPath: "<skill-base-dir>/workflow.js",
-  args: { query, mode, compute, tag, debug, debugPrompt }
+  args: { query, mode, compute, computerNote, thinkerNote, researcherNote, tag, debug, debugPrompt }
 })
 ```
 
@@ -42,8 +42,11 @@ Workflow({
 - `query` (required) — the research question (goal) or collect-target. The crawl sees only this string.
 - `mode` — `'goal'` (default) or `'collect'`. See Modes.
 - `compute` — `true` (default) or `false`. The master switch for derivation: `false` runs no compute agents (no mid-wave compute, no finalize computement) for a faster, gather-and-reason-only run.
+- `computerNote` (optional) — extra run-specific guidance for the compute-aware agents (a method to use, a constraint to respect). Appends to the always-present note that the compute environment ships a scientific Python stack (scipy, sympy, uncertainties, pandas, statsmodels, scikit-learn, networkx, pint, rdkit).
+- `thinkerNote` (optional) — operator run-steering for the Opus reasoning tier: priorities, framing, constraints, audience. Shapes HOW the run is approached and what the report emphasizes — not additional questions to research. Reaches the reasoning agents only, never the cheap workers.
+- `researcherNote` (optional) — a terse one-line note (≈6-7 words) to the web-research agents that run WebSearch/WebFetch: scout, prospector, lane-researcher, brainer, and sentinel. Steers HOW they search and fetch (which sources to favour, what to skip). Passthrough, injected verbatim.
 - `tag` (optional) — suffixes the output dir so parallel variants of one query write to distinct dirs.
-- `debug` (optional, `true`) — adds `_debug.md`; pair with `debugPrompt` (string) to focus it on a question.
+- `debug` (optional, default `true`) — writes `_debug.md` (run log + metrics + raw agent I/O); ON by default, pass `debug: false` to turn it off. Pair with `debugPrompt` (string) to focus it on a question.
 
 ## Modes
 
@@ -78,8 +81,8 @@ node <skill-base-dir>/persist.js <completion-output-file>
 
 This writes to `RR/{slug}/`:
 
-- `result.md` — the deliverable. Read this first.
-- `_frontier.json`, `_tree.md` — the rabbit-hole frontier + the crawl tree; diagnostics.
+- `result.md` — the deliverable. Read this first; it opens with a compact **Run arguments** record (the complete launch args).
+- `_rabbitHoles.json`, `_tree.md` — the rabbit-holes (with the run's launch `args` at the top) + the crawl tree; diagnostics.
 - `_compute-*.md` / `_compute-*.py` — any derivations with their code, when compute ran.
 - `_debug.md` — when launched with `debug: true`.
 

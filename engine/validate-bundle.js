@@ -15,6 +15,15 @@ const fail = (msg) => { console.error('✗ bundle invalid — ' + msg); process.
 try { execSync('node --check ' + JSON.stringify(BUNDLE), { stdio: 'pipe' }) }
 catch (e) { fail('node --check failed:\n' + (e.stderr || e.stdout || e.message)) }
 
+// 1b) must ALSO compile as the BODY of the async function the harness wraps it in. `node --check` above
+//     parses the file as an ES MODULE, which tolerates dangling `} from '…'` fragments that a function
+//     scope rejects — the exact failure a multi-line-import drop produced. Compile (don't run) it the way
+//     Workflow loads it: de-export meta (illegal in a function body); the top-level `return await` needs async.
+const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor
+const HARNESS_GLOBALS = ['agent', 'parallel', 'pipeline', 'log', 'phase', 'workflow', 'args', 'budget']
+try { new AsyncFunction(...HARNESS_GLOBALS, src.replace(/^export const meta/, 'const meta')) }
+catch (e) { fail('not valid as the harness function body (how Workflow loads it): ' + e.message) }
+
 // 2) no surviving module system at runtime (the harness wraps it in a function scope).
 //    The ONLY allowed export is the top `export const meta`; no import/require/module.exports.
 if (/\brequire\s*\(/.test(src)) fail('contains require( — must be a self-contained single file')
@@ -26,7 +35,9 @@ if (exportHits.length !== 1) fail('expected exactly ONE export (`export const me
 // 3) `export const meta = { … }` must be the first statement (top of file) and a pure literal.
 const firstStmt = src.replace(/^(?:\s*\/\/[^\n]*\n|\s*\n)*/, '')   // skip leading comments + blank lines
 if (!/^export const meta = \{/.test(firstStmt)) fail('file must BEGIN with `export const meta = {` (after comments)')
-const metaBlock = firstStmt.slice(0, firstStmt.indexOf('\n}\n') + 3) || firstStmt.slice(0, 4000)
+// meta literal ends at the first COLUMN-0 `}` (nested braces are indented; a formatter's trailing `;` is tolerated).
+const metaEnd = firstStmt.indexOf('\n}')
+const metaBlock = metaEnd >= 0 ? firstStmt.slice(0, metaEnd + 2) : firstStmt.slice(0, 4000)
 if (/\.\.\./.test(metaBlock)) fail('meta object uses a spread — it must be a pure literal')
 if (/=>|\bfunction\b|\brequire\s*\(|\bimport\s*\(/.test(metaBlock)) fail('meta object is computed (call/function) — it must be a pure literal')
 
