@@ -6,7 +6,7 @@ import type { DebugAnalystArgs } from '../../types/index.js';
 
 const DEBUG_TPL = `{{! debug — consolidates metrics, run log, and raw agent I/O into one debug report }}
 Consolidate and analyze this RR run's diagnostics for an engineer debugging the pipeline. Goal: "{{query}}".
-Walk it phase by phase — scout → prospector → each research wave → sentinel → finalize (initiate → refine → judge → synthesise) — reporting what happened at each with the actual numbers, plus anomalies, degraded/failed agents, or wasted effort to fix.
+Walk it phase by phase — scout → prospector → each research wave → finalize (initiate → refine → judge → synthesise) — reporting what happened at each with the actual numbers, plus anomalies, degraded/failed agents, or wasted effort to fix.
 Prospector→researcher utilization (run this check): the prospector named these venues:
 {{highValueSources}}
 Each lane in laneRecords carries the \`assignedVenues\` the brainer gave it; from that lane's summary + rabbitHoles, judge whether the researcher actually drew on those venues. Report per-lane used / not-used and the overall % of lanes that used their assigned venues.{{focusClause}}
@@ -16,8 +16,6 @@ Lane records (wave, keyword, assignedVenues, summary, rabbitHoles):
 {{laneRecords}}
 Per-wave log:
 {{waveLog}}
-Sentinel log:
-{{sentinelLog}}
 Per-wave result-so-far log (the brainer's running memory each wave):
 {{resultLog}}
 Return diagnosis (markdown).{{FINISH}}
@@ -28,7 +26,6 @@ export const buildDebugAnalyst = ({
   focus,
   metrics,
   waveLog,
-  sentinelLog,
   resultLog,
   highValueSources,
   laneRecords,
@@ -44,7 +41,6 @@ Then answer this run-specific question directly: ${focus}`
     metrics: plain(metrics),
     laneRecords: plain(laneRecords),
     waveLog: plain(waveLog),
-    sentinelLog: plain(sentinelLog),
     resultLog: plain(resultLog),
     FINISH,
   });

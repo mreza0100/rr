@@ -7,7 +7,6 @@ import type {
   RabbitHole,
   ResultSoFar,
   ScoreEntry,
-  SentinelLogEntry,
   Tier,
   Effort,
   Venue,
@@ -19,10 +18,11 @@ export interface RawArgs {
   query?: unknown;
   mode?: unknown;
   compute?: unknown;
-  computerNote?: unknown;
+  computeNote?: unknown;
   thinkerNote?: unknown;
   researcherNote?: unknown;
   maxWave?: unknown;
+  maxParallelBrainers?: unknown;
   parallelLaneResearchAgentsPerWave?: unknown;
   parallelSourcesPerLaneResearchAgent?: unknown;
   debug?: unknown;
@@ -60,7 +60,12 @@ export interface IoLogEntry {
 
 // why the crawl stopped (engine classification).
 export type StopReason =
-  'brainer-done' | 'collect-dry-plateau' | 'wave-cap' | 'rabbithole-dry' | 'rabbithole-empty';
+  | 'brainer-done'
+  | 'scheduler-starved'
+  | 'collect-dry-plateau'
+  | 'wave-cap'
+  | 'rabbithole-dry'
+  | 'rabbithole-empty';
 
 // the run's diagnostic metrics (logged + fed to the debug analyst + written to _rabbitHoles-adjacent files).
 export interface Metrics {
@@ -75,7 +80,6 @@ export interface Metrics {
   bestOpenScore: number;
   topScores: number[];
   done: boolean;
-  sentinelReopensForced: number;
   reportWritten: boolean;
   confidence: Confidence | null;
 }
@@ -88,6 +92,7 @@ export interface RabbitHoleOut {
   path: string[];
   score: number | null;
   scoreHistory: ScoreEntry[];
+  note?: string; // the brainer's per-lane directive (B8 observability) — present when the lane carried one
 }
 
 // the file bundle the workflow returns (the caller writes them).
@@ -110,7 +115,6 @@ export interface RunResult {
   highValueSources: Venue[];
   rabbitHoles: RabbitHoleOut[];
   resultSoFar: ResultSoFar | null;
-  sentinelLog: SentinelLogEntry[];
   waveLog: WaveLogEntry[];
   metrics: Metrics;
   files: Files;

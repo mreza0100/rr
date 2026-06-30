@@ -34,7 +34,9 @@ fs.mkdirSync(dir, { recursive: true })
 
 const written = []
 for (const [name, content] of Object.entries(files)) {
-  fs.writeFileSync(path.join(dir, name), typeof content === 'string' ? content : JSON.stringify(content, null, 2))
+  const filePath = path.join(dir, name)
+  fs.mkdirSync(path.dirname(filePath), { recursive: true }) // namespaced keys (multi-brainer: root/wave-0.md, b1-x/wave-1.md) need their subdir first
+  fs.writeFileSync(filePath, typeof content === 'string' ? content : JSON.stringify(content, null, 2))
   written.push(name)
 }
 

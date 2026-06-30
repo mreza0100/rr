@@ -142,6 +142,18 @@ describe('resolveLookupNext', () => {
     expect(picks.map((p) => p.keyword)).toEqual(['d', 'a']); // 50 > 10, capped to 2
     expect(picks.find((p) => p.id === 1)!.sources).toEqual(['arXiv']);
   });
+  it('attaches the brainer note + ref onto the resolved lane (rides to the scheduler/reader)', () => {
+    const st = newState();
+    addRabbitHole(st, { keyword: 'a', why: '', score: 10, wave: 0 }); // id 1
+    const picks = resolveLookupNext(
+      st,
+      { lookupNext: [{ id: 1, note: 'find ef/M tradeoffs; else recall curve', ref: '10.1/x' }] },
+      1,
+      5,
+    );
+    expect(picks[0].note).toBe('find ef/M tradeoffs; else recall curve');
+    expect(picks[0].ref).toBe('10.1/x');
+  });
 });
 
 describe('pursue', () => {
@@ -196,5 +208,13 @@ describe('reopenRabbitHole', () => {
     reopenRabbitHole(st, a); // re-opening an already-open lead just bumps the cap counter
     expect(a.failCount).toBe(2);
     expect(st.rabbitHoles.filter((r) => r === a).length).toBe(1); // not duplicated
+  });
+  it('clears the stale directive `note` so a dead-lane directive is not re-sent verbatim (A5)', () => {
+    const st = newState();
+    const a = addRabbitHole(st, { keyword: 'alpha', why: '', score: 40, wave: 0 })!;
+    a.note = 'find X; else Y'; // the directive that already produced a dead lane
+    pursue(st, [a]);
+    reopenRabbitHole(st, a);
+    expect(a.note).toBeUndefined(); // cleared → the next brainer re-authors a fresh directive
   });
 });

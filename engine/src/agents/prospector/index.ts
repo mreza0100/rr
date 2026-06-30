@@ -1,6 +1,7 @@
 // PROSPECTOR — runs after the scout, first agent of the Crawl phase. Names the high-value
 // AUTHORITATIVE source venues for THIS topic (domain-specific); output rides with the brainer, which
 // assigns the relevant subset to each lane. Tier: opus (cross-domain venue judgment). Effort: high.
+import { CONFIG } from '../../config.js';
 import { buildProspector } from './prompts.js';
 import type { Agent, ProspectorArgs, Schema } from '../../types/index.js';
 
@@ -46,8 +47,8 @@ export const SOURCES: Schema = {
 };
 
 export const prospector: Agent<ProspectorArgs> = {
-  tier: 'opus',
-  effort: 'high',
+  tier: CONFIG.TIER.prospector,
+  effort: CONFIG.EFFORT.prospector,
   schema: SOURCES,
   buildPrompt: buildProspector,
 };

@@ -22,7 +22,7 @@ openGaps:
   - mt
 working: cost=x
 Derive with rigor:
-- first fact-check your input numbers: verify each against a current primary source (WebSearch / WebFetch) and correct any that is stale, wrong, or imprecise before computing — a derivation is only as sound as its inputs;
+- first fact-check your input numbers: verify each against a current primary source (WebSearch / mcp__harvester__fetch) and correct any that is stale, wrong, or imprecise before computing — a derivation is only as sound as its inputs;
 - assemble the verified inputs with their units;
 - write and run a short script for any non-trivial arithmetic — load Bash + Write via ToolSearch if absent, run python (or node) — compute, do not estimate;
 - propagate the input uncertainties into an explicit ± error range;
@@ -34,7 +34,8 @@ The data above is enough to decide. You may consult a tool if it genuinely helps
 exports[`prompt builders > BRAINER_PROMPT/collect → full-string snapshot 1`] = `
 "You are the BRAINER — you make every decision in this research run and set its direction.
 
-How the run works: a scout seeded the first rabbit-holes and a prospector named the source venues; then you drive each wave. You hand rabbit-holes to parallel lane-researchers — fast workers that WebSearch + WebFetch the venues you assign, read the pages, and return findings + new rabbit-holes — then you update the running result, steer the next wave, and decide when to stop. On stop, a refinement stage adversarially checks your findings and writes the report.
+You are the ROOT brainer: you carry the whole run to a real answer — stop.lost is not yours to set.
+How the run works: a scout seeded the first rabbit-holes and a prospector named the source venues; then you drive each wave. For each lane you pick, a scheduler finds the highest-value sources and sequential readers read them in full (carrying a running answer across the sources), returning findings + new rabbit-holes; your per-lane \`note\` directs what the scheduler picks and what the readers extract. Then you update the running result, steer the next wave, and decide when to stop. On stop, a refinement stage hardens your findings, a judge stress-tests the answer, and a synthesiser writes the report.
 
 The engine keeps the open rabbit-holes as an id-keyed store and carries each one's score history natively — you never re-emit the whole set, you return deltas against it.
 
@@ -47,11 +48,11 @@ As you steer, hold three rules:
 • Surfacing is not verifying — finding a result does not verify it. If the answer's headline rests on a claim you have not stress-tested, the judge will reject the stop, so stress-test load-bearing claims before declaring done.
 • Promote serendipity — a surfaced, non-seeded candidate that out-evidences the seeded ones becomes first-class: deepen it like a seed rather than under-explore it for being off the seed list.
 
-Before you decide, hunt for coverage gaps — a candidate, sub-question, or angle the goal needs that no lane has touched — and probe them yourself with WebSearch / WebFetch (as many as you need) to fill them; fold what you find into resultSoFar and originate the missing rabbit-holes into \`lookupNext\`. Beyond gap-filling, leave the heavy digging to the lane-researchers.
+Before you decide, hunt for coverage gaps — a candidate, sub-question, or angle the goal needs that no lane has touched — and probe them yourself with WebSearch / mcp__harvester__fetch, as many as you need, to fill them; fold what you find into resultSoFar and originate the missing rabbit-holes into \`lookupNext\`. Beyond gap-filling, leave the heavy digging to the lane readers.
 
 Wave 2. Query: "best vector database for production RAG at scale". RUBRIC
 Scout landscape: L
-RABBIT-HOLE STORE — open rabbit-holes (\`#id [last score or "new"] keyword — why\`); re-score up or down, a low one can resurrect, score every "new" one:
+RABBIT-HOLE STORE — open rabbit-holes (\`#id [last score or "new"] keyword — why\`); re-score up or down, a low one can resurrect:
 - #1 [80] x — y
 ALREADY PURSUED — do not look up or re-originate these (research history):
 - a
@@ -86,7 +87,7 @@ For each headline / load-bearing finding, originate a lane to hunt failed replic
 Then return deltas against the store:
 (1) \`rescore\`: [{id, score}] — only the rabbit-holes whose 0-100 score changes this wave (score every "new" one at least once); unlisted ones keep their last score. Score honestly per the rubric; a marginal one scores low.
 (2) \`add\`: [{keyword, why, score}] — new rabbit-holes to park in the store for a later wave (the engine assigns each an id).
-(3) \`lookupNext\`: the rabbit-holes to research now — each either {id} (a stored one) or {keyword, why, score, sources} (one you originate and pursue now). None may be already pursued. Assign each its \`sources\` venue subset.
+(3) \`lookupNext\`: the rabbit-holes to research now — each either {id} (a stored one) or {keyword, why, score, sources, note} (one you originate and pursue now). None may be already pursued. Assign each its \`sources\` venue subset. For EVERY lookupNext lane author a \`note\`: the research directive — WHAT to find plus ranked fallbacks ("if not X, focus on Y; give both if available"). It steers both the scheduler's source pick and the reader's extraction; keep it distinct from \`why\` (your store/scoring rationale).
 (4) \`rename\`: [{id, keyword, why?}] — relabel a rabbit-hole, keeping its id + history (optional).
 (5) \`drop\`: [id, …] — eliminate a dead/duplicate rabbit-hole; a merge = drop the duplicate and rescore the survivor (optional).
 (6) \`stop\`: {done, reason}. STOP
@@ -96,7 +97,8 @@ The data above is enough to decide. You may consult a tool if it genuinely helps
 exports[`prompt builders > BRAINER_PROMPT/w0 → full-string snapshot 1`] = `
 "You are the BRAINER — you make every decision in this research run and set its direction.
 
-How the run works: a scout seeded the first rabbit-holes and a prospector named the source venues; then you drive each wave. You hand rabbit-holes to parallel lane-researchers — fast workers that WebSearch + WebFetch the venues you assign, read the pages, and return findings + new rabbit-holes — then you update the running result, steer the next wave, and decide when to stop. On stop, a refinement stage adversarially checks your findings and writes the report.
+You are the ROOT brainer: you carry the whole run to a real answer — stop.lost is not yours to set.
+How the run works: a scout seeded the first rabbit-holes and a prospector named the source venues; then you drive each wave. For each lane you pick, a scheduler finds the highest-value sources and sequential readers read them in full (carrying a running answer across the sources), returning findings + new rabbit-holes; your per-lane \`note\` directs what the scheduler picks and what the readers extract. Then you update the running result, steer the next wave, and decide when to stop. On stop, a refinement stage hardens your findings, a judge stress-tests the answer, and a synthesiser writes the report.
 
 The engine keeps the open rabbit-holes as an id-keyed store and carries each one's score history natively — you never re-emit the whole set, you return deltas against it.
 
@@ -109,11 +111,11 @@ As you steer, hold three rules:
 • Surfacing is not verifying — finding a result does not verify it. If the answer's headline rests on a claim you have not stress-tested, the judge will reject the stop, so stress-test load-bearing claims before declaring done.
 • Promote serendipity — a surfaced, non-seeded candidate that out-evidences the seeded ones becomes first-class: deepen it like a seed rather than under-explore it for being off the seed list.
 
-Before you decide, hunt for coverage gaps — a candidate, sub-question, or angle the goal needs that no lane has touched — and probe them yourself with WebSearch / WebFetch (as many as you need) to fill them; fold what you find into resultSoFar and originate the missing rabbit-holes into \`lookupNext\`. Beyond gap-filling, leave the heavy digging to the lane-researchers.
+Before you decide, hunt for coverage gaps — a candidate, sub-question, or angle the goal needs that no lane has touched — and probe them yourself with WebSearch / mcp__harvester__fetch, as many as you need, to fill them; fold what you find into resultSoFar and originate the missing rabbit-holes into \`lookupNext\`. Beyond gap-filling, leave the heavy digging to the lane readers.
 
 Wave 0. Query: "best vector database for production RAG at scale". RUBRIC
 Scout landscape: L
-RABBIT-HOLE STORE — open rabbit-holes (\`#id [last score or "new"] keyword — why\`); re-score up or down, a low one can resurrect, score every "new" one:
+RABBIT-HOLE STORE — open rabbit-holes (\`#id [last score or "new"] keyword — why\`); re-score up or down, a low one can resurrect:
 
 ALREADY PURSUED — do not look up or re-originate these (research history):
 
@@ -128,7 +130,7 @@ For each headline / load-bearing finding, originate a lane to hunt failed replic
 Then return deltas against the store:
 (1) \`rescore\`: [{id, score}] — only the rabbit-holes whose 0-100 score changes this wave (score every "new" one at least once); unlisted ones keep their last score. Score honestly per the rubric; a marginal one scores low.
 (2) \`add\`: [{keyword, why, score}] — new rabbit-holes to park in the store for a later wave (the engine assigns each an id).
-(3) \`lookupNext\`: the rabbit-holes to research now — each either {id} (a stored one) or {keyword, why, score, sources} (one you originate and pursue now). None may be already pursued.
+(3) \`lookupNext\`: the rabbit-holes to research now — each either {id} (a stored one) or {keyword, why, score, sources, note} (one you originate and pursue now). None may be already pursued. For EVERY lookupNext lane author a \`note\`: the research directive — WHAT to find plus ranked fallbacks ("if not X, focus on Y; give both if available"). It steers both the scheduler's source pick and the reader's extraction; keep it distinct from \`why\` (your store/scoring rationale).
 (4) \`rename\`: [{id, keyword, why?}] — relabel a rabbit-hole, keeping its id + history (optional).
 (5) \`drop\`: [id, …] — eliminate a dead/duplicate rabbit-hole; a merge = drop the duplicate and rescore the survivor (optional).
 (6) \`stop\`: {done, reason}. STOP
@@ -139,7 +141,8 @@ The data above is enough to decide. You may consult a tool if it genuinely helps
 exports[`prompt builders > BRAINER_PROMPT/wN → full-string snapshot 1`] = `
 "You are the BRAINER — you make every decision in this research run and set its direction.
 
-How the run works: a scout seeded the first rabbit-holes and a prospector named the source venues; then you drive each wave. You hand rabbit-holes to parallel lane-researchers — fast workers that WebSearch + WebFetch the venues you assign, read the pages, and return findings + new rabbit-holes — then you update the running result, steer the next wave, and decide when to stop. On stop, a refinement stage adversarially checks your findings and writes the report.
+You are the ROOT brainer: you carry the whole run to a real answer — stop.lost is not yours to set.
+How the run works: a scout seeded the first rabbit-holes and a prospector named the source venues; then you drive each wave. For each lane you pick, a scheduler finds the highest-value sources and sequential readers read them in full (carrying a running answer across the sources), returning findings + new rabbit-holes; your per-lane \`note\` directs what the scheduler picks and what the readers extract. Then you update the running result, steer the next wave, and decide when to stop. On stop, a refinement stage hardens your findings, a judge stress-tests the answer, and a synthesiser writes the report.
 
 The engine keeps the open rabbit-holes as an id-keyed store and carries each one's score history natively — you never re-emit the whole set, you return deltas against it.
 
@@ -152,11 +155,11 @@ As you steer, hold three rules:
 • Surfacing is not verifying — finding a result does not verify it. If the answer's headline rests on a claim you have not stress-tested, the judge will reject the stop, so stress-test load-bearing claims before declaring done.
 • Promote serendipity — a surfaced, non-seeded candidate that out-evidences the seeded ones becomes first-class: deepen it like a seed rather than under-explore it for being off the seed list.
 
-Before you decide, hunt for coverage gaps — a candidate, sub-question, or angle the goal needs that no lane has touched — and probe them yourself with WebSearch / WebFetch (as many as you need) to fill them; fold what you find into resultSoFar and originate the missing rabbit-holes into \`lookupNext\`. Beyond gap-filling, leave the heavy digging to the lane-researchers.
+Before you decide, hunt for coverage gaps — a candidate, sub-question, or angle the goal needs that no lane has touched — and probe them yourself with WebSearch / mcp__harvester__fetch, as many as you need, to fill them; fold what you find into resultSoFar and originate the missing rabbit-holes into \`lookupNext\`. Beyond gap-filling, leave the heavy digging to the lane readers.
 
 Wave 3. Query: "best vector database for production RAG at scale". RUBRIC
 Scout landscape: L
-RABBIT-HOLE STORE — open rabbit-holes (\`#id [last score or "new"] keyword — why\`); re-score up or down, a low one can resurrect, score every "new" one:
+RABBIT-HOLE STORE — open rabbit-holes (\`#id [last score or "new"] keyword — why\`); re-score up or down, a low one can resurrect:
 - #1 [80] x — y
 ALREADY PURSUED — do not look up or re-originate these (research history):
 - a
@@ -193,7 +196,7 @@ For each headline / load-bearing finding, originate a lane to hunt failed replic
 Then return deltas against the store:
 (1) \`rescore\`: [{id, score}] — only the rabbit-holes whose 0-100 score changes this wave (score every "new" one at least once); unlisted ones keep their last score. Score honestly per the rubric; a marginal one scores low.
 (2) \`add\`: [{keyword, why, score}] — new rabbit-holes to park in the store for a later wave (the engine assigns each an id).
-(3) \`lookupNext\`: the rabbit-holes to research now — each either {id} (a stored one) or {keyword, why, score, sources} (one you originate and pursue now). None may be already pursued. Assign each its \`sources\` venue subset.
+(3) \`lookupNext\`: the rabbit-holes to research now — each either {id} (a stored one) or {keyword, why, score, sources, note} (one you originate and pursue now). None may be already pursued. Assign each its \`sources\` venue subset. For EVERY lookupNext lane author a \`note\`: the research directive — WHAT to find plus ranked fallbacks ("if not X, focus on Y; give both if available"). It steers both the scheduler's source pick and the reader's extraction; keep it distinct from \`why\` (your store/scoring rationale).
 (4) \`rename\`: [{id, keyword, why?}] — relabel a rabbit-hole, keeping its id + history (optional).
 (5) \`drop\`: [id, …] — eliminate a dead/duplicate rabbit-hole; a merge = drop the duplicate and rescore the survivor (optional).
 (6) \`stop\`: {done, reason}. STOP
@@ -203,7 +206,7 @@ The data above is enough to decide. You may consult a tool if it genuinely helps
 
 exports[`prompt builders > DEBUG_PROMPT → full-string snapshot 1`] = `
 "Consolidate and analyze this RR run's diagnostics for an engineer debugging the pipeline. Goal: "best vector database for production RAG at scale".
-Walk it phase by phase — scout → prospector → each research wave → sentinel → finalize (initiate → refine → judge → synthesise) — reporting what happened at each with the actual numbers, plus anomalies, degraded/failed agents, or wasted effort to fix.
+Walk it phase by phase — scout → prospector → each research wave → finalize (initiate → refine → judge → synthesise) — reporting what happened at each with the actual numbers, plus anomalies, degraded/failed agents, or wasted effort to fix.
 Prospector→researcher utilization (run this check): the prospector named these venues:
 - source: arXiv (site:arxiv.org)
   goodFor: ANN indexes
@@ -212,7 +215,20 @@ Prospector→researcher utilization (run this check): the prospector named these
 Each lane in laneRecords carries the \`assignedVenues\` the brainer gave it; from that lane's summary + rabbitHoles, judge whether the researcher actually drew on those venues. Report per-lane used / not-used and the overall % of lanes that used their assigned venues.
 Then answer this run-specific question directly: why?
 Metrics:
-a: 1
+mode: goal
+dir: RR/x
+wavesRun: 1
+stopReason: brainer-done
+scoutRabbitHoles: 3
+prospectorVenues: 4
+pursuedTotal: 5
+rabbitHolesFinal: 2
+bestOpenScore: 80
+topScores:
+  - 80
+done: true
+reportWritten: true
+confidence: high
 Lane records (wave, keyword, assignedVenues, summary, rabbitHoles):
 
 Per-wave log:
@@ -220,8 +236,6 @@ Per-wave log:
   topScore: 0
   done: false
   reason: seed
-Sentinel log:
-
 Per-wave result-so-far log (the brainer's running memory each wave):
 
 Return diagnosis (markdown).
@@ -280,6 +294,8 @@ Hardened facts (each adversarially fact-checked + source-corrected by a refine p
   why: lb
   clean: 0.96 ± 0.02
 What the answer must deliver: lead with cost
+LEFTOVER OPEN RABBIT-HOLES — leads the crawl surfaced but never pursued (it stopped first). Decide whether any names a REAL gap the answer needs; if one does, set goalMet false and return it in reopenRabbitHoles to reopen the crawl on it — otherwise ignore them:
+- [70] multi-tenant isolation — unverified at scale
 Before upholding, actively try to disprove the load-bearing claim as hard as you can — \`verificationSound\` holds only when it survives every angle:
 - funding / conflict of interest — is the trial run or funded by the product's own seller?
 - independent replication — does a separate group confirm it, or does the headline rest on a single source?
@@ -307,7 +323,7 @@ Assess where this subject is most actively researched. When a non-English litera
 Where the same concept is indexed under other names (older or alternate terms, regional spellings), fold those synonyms into the venues' search guidance so English-indexed work filed under a different name is still found.
 For each venue: source (venue + how to reach/search it, e.g. "arXiv (site:arxiv.org)"), goodFor (the sub-questions it is best for — specific enough for the downstream brainer to match each research lane to the right venue), and lang (its language as an ISO-ish code like zh/ja/es/ru/ko — omit for English).
 Run WebSearch (one or more queries) to discover and verify the actual highest-value venues — confirm each exists and is authoritative (memory alone misses recent venues). Return highValueSources (6-8, lang-tagged when non-English), languageGuidance ("" when the topic is English-dominated), and a brief reasoning naming what you searched.
-Use the web only (WebSearch/WebFetch) to check sources — never read local files or this repo's own code; they are not evidence."
+Use the web only (WebSearch / mcp__harvester__fetch) to check sources — never read local files or this repo's own code; they are not evidence."
 `;
 
 exports[`prompt builders > REFINE_PROMPT → full-string snapshot 1`] = `
@@ -316,58 +332,45 @@ Fact: F
 Why it is load-bearing: W
 First verify it adversarially: hunt counter-evidence, newer information, and the real numbers — actively look for where it is false, outdated, or imprecise. Do not rubber-stamp a well-supported fact; do not manufacture doubt about one you cannot actually break. Then settle every doubt against the sources and return only the clean, corrected claim(s) — the right values, current and verified, dropping anything that does not hold. Cite sources inline.
 Return report (markdown): the hardened claim(s) for this fact.
-Use the web only (WebSearch/WebFetch) to check sources — never read local files or this repo's own code; they are not evidence."
+Use the web only (WebSearch / mcp__harvester__fetch) to check sources — never read local files or this repo's own code; they are not evidence."
 `;
 
 exports[`prompt builders > RESEARCHER_PROMPT → full-string snapshot 1`] = `
-"Pursue one rabbit-hole. NET-FRAGMENT
+"You are reader 2 of 3 on one research lane — read your assigned slice and digest it. You do NOT search the web: the sources are already chosen and fetched to the local cache. Tools (load any via ToolSearch): Bash (read the cache files); mcp__harvester__fetch + mcp__harvester__findWorks (resolve a wall to its open-access full text); mcp__harvester__fetchImage (to view an image, request it via mcp__harvester__fetchImage for a local path, then read it).
 TOP GOAL: "best vector database for production RAG at scale".
-TRAIL that led here (top goal → … → this rabbit-hole): goal  →  x.
-Now investigating: "x" (why it matters: w). Use the trail to judge which next source advances the top goal, not just this sub-topic.
-Search these high-value venues for this lane first: arXiv (site:arxiv.org) (ANN indexes); SemiAnalysis (cost).
-Run a targeted WebSearch, pick the best 3 sources, and WebFetch each in parallel. In each WebFetch prompt, first ask the key question about this rabbit-hole, then append: <<FOOTER-FRAGMENT>>
-If a source is dead, parked, or returns nothing (e.g. a 410 or an empty JS-rendered page), note it in deadEnds and move to another source. If every source is dead, that is still a valid result: return summary noting the dead ends, rabbitHoles [], and the dead sources in deadEnds.
-If a fetched source turns out off-goal — it does not advance the top goal even if it sits on the sub-topic — keep it and open one or more additional sources to reach goal-aligned data, returning both the off-goal find and the new ones. You may exceed the 3-source count for this — gather it and let the brainer decide relevance.
-For any trial or study you report, capture its funding source, conflicts of interest, sample size, and key limitations in the summary — the provenance the brainer needs to weight it.
-Return: summary (2-4 sentences of what you found); rabbitHoles (new gap searches from the footer, {keyword, why}); nextSources (up to 5 of the page's top outbound citations/links to follow, each {ref: exact URL or DOI, why}); deadEnds."
+TRAIL (top goal → … → this lane): goal  →  x.
+This lane: "x" (why it matters: w).
+DIRECTIVE — what to extract, with ranked fallbacks: extract the recall numbers; fallback to latency if recall is absent
+READ NOW — your assigned slice(s), from the local cache on disk (already fetched; never re-fetch). First confirm each file exists and is non-empty (e.g. wc -c PATH); then read each char window with code, e.g. python3 -c "print(open('PATH',encoding='utf-8',errors='replace').read()[OFFSET:OFFSET+LIMIT])" — if the output is truncated, read it in sub-parts (OFFSET, OFFSET+step, … to OFFSET+LIMIT) until the whole window is consumed:
+1. https://a.com — read /cache/a.txt chars [0, 2000) (open the file, slice [0:2000])
+HONEST READ — if an assigned file is MISSING, empty, or unreadable, do NOT invent its content: record it in deadEnds, leave the running answer unchanged (an honest gap, never a fabricated summary), and the engine will reopen the lane. A confident wrong summary is worse than an admitted empty read.
+Extract everything that serves the DIRECTIVE and the top goal — facts, numbers, and for any trial or study its funding source, conflicts of interest, sample size, and key limitations. You may read images to understand the content. If the content is in another language, translate your findings to English, keeping each cited source's original-language title alongside the translation.
+If your assigned content is a paywall, stub, or too thin for the directive, extract its DOI/identifier and call mcp__harvester__fetch — it resolves DOIs — or mcp__harvester__findWorks to fetch the open-access full text to the cache, then read THAT from disk; do not return an empty answer. This is scoped to resolving THIS source — do not open a general web search.
+Return: runningAnswer (extend the prior answer with what you found, kept a coherent whole — or begin it if you are reader 1); rabbitHoles (new gap searches the content raises, {keyword, why}); nextSources (up to 5 of the content's top outbound citations/links, each {ref: exact url or DOI, why}); deadEnds (any slice that was missing/empty/garbled/walled). <<FOOTER-FRAGMENT>>
+ANSWER SO FAR — the running answer from the earlier readers on this lane; extend and correct it, do not restate it wholesale:
+so far: pgvector recall ~0.96"
+`;
+
+exports[`prompt builders > SCHEDULER_PROMPT → full-string snapshot 1`] = `
+"You are the RESEARCH SCHEDULER — you own source discovery for this wave. For each lane below, find the HIGHEST-VALUE sources to read — as MANY as genuinely add value, no cap. The readers only read what you return; they do not search.
+TOP GOAL: "best vector database for production RAG at scale".
+Tools (load any missing via ToolSearch): WebSearch; mcp__harvester__search; mcp__harvester__findWorks — resolves a work/DOI to its open-access full text; mcp__harvester__fetch — fetches + caches a url/DOI. Built-in WebFetch is denied; fetch only through Harvester.
+LANES — each carries a rabbit-hole, the brainer's directive \`note\` (WHAT to find + ranked fallbacks), and the venues to prefer:
+#1 hnsw tuning — recall knobs
+  directive: find ef/M build-vs-query tradeoffs; if absent, the default recall/latency curve
+  venues: arXiv (site:arxiv.org) (ANN indexes); SemiAnalysis (cost)
+Work in TWO batched rounds — never one-source-at-a-time round-trips:
+1. DISCOVER — run ALL lanes' searches in ONE parallel batch (WebSearch / mcp__harvester__search / findWorks). Prefer each lane's assigned venues; let its \`note\` decide which results serve it. A lane carrying a concrete ref takes that ref as a source directly — no search needed for it.
+2. SIZE — call mcp__harvester__fetch with size_only:true on EVERY candidate across all lanes in ONE parallel batch. With size_only it fetches + caches the full text and returns {size in tokens, path to the cache file, chars} and NO body. Drop any candidate that failed or came back walled/thin and pick another from the same lane.
+For each lane, return its chosen sources as {source (the exact url or DOI), path (the cache path from size_only), size (tokens), chars}. Group them under the lane's id. A lane may return several sources; return an empty list for a lane only when every candidate failed.
+Return \`lanes\`: one entry per input lane id, each {id, sources:[{source, path, size, chars}]}. Use the sizes you measured — never invent them."
 `;
 
 exports[`prompt builders > SCOUT_PROMPT → full-string snapshot 1`] = `
 "Scout the web landscape for: "best vector database for production RAG at scale". NET-FRAGMENT
 Step 1 — run one broad WebSearch to map the landscape and collect candidate sources (URLs).
-Step 2 — pick the up-to-5 most relevant sources and WebFetch each. In every WebFetch prompt, first ask "What are the key facts on this page about: best vector database for production RAG at scale?", then append this exact instruction: <<FOOTER-FRAGMENT>>
+Step 2 — pick the up-to-5 most relevant sources and fetch each via mcp__harvester__fetch — built-in WebFetch is denied. For each fetched page, first surface the key facts about "best vector database for production RAG at scale", then apply this instruction: <<FOOTER-FRAGMENT>>
 Step 3 — return: landscape (one paragraph); pages[] (each: url, 2-3 sentence summary, rabbitHoles[] copied from the page's "Rabbit holes" section as {keyword, why}); deadEnds[] for any source that timed out, was parked, or was off-topic — do not invent rabbit-holes for those. If every source is dead/unreachable, still return a valid result: landscape from your search, pages [], the dead sources in deadEnds."
-`;
-
-exports[`prompt builders > SENTINEL_PROMPT → full-string snapshot 1`] = `
-"The brainer just declared the crawl done for: "best vector database for production RAG at scale". Contest it from the brainer's current answer + the open rabbit-holes: is stopping here solid, or did the brainer stop prematurely / miss a load-bearing gap?
-Brainer's result so far (its current answer + evidence + open gaps):
-answer: pgvector
-confidence: medium
-evidence:
-  - fact: recall
-    value: 0.98
-    source: arxiv
-    status: settled
-resolved:
-  - idx
-openGaps:
-  - mt
-working: cost=x
-Reason it called done: done
-Per-wave log (what each wave pursued + where the answer stood):
-- wave: 0
-  topScore: 0
-  done: false
-  reason: seed
-Open rabbit-holes not yet pursued (\`#id [score] keyword — why\`):
-- #1 [80] x — y
-Already pursued — do not propose any of these:
-- a
-High bar: uphold the brainer (solid=true) unless a load-bearing gap would materially change or undermine the answer — "more detail is possible" is not a reason to continue.
-If not solid: solid=false plus rabbitHoles (1-3 high-priority gap searches not already pursued, injected at the top of the store for the lane researchers). If solid: solid=true, empty rabbitHoles.
-Return solid (bool), reasoning, rabbitHoles.
-The data above is enough to decide. You may consult a tool if it genuinely helps, but keep it brief — the answer does not require it. Your one required action: return the complete StructuredOutput with every required field, never a partial object."
 `;
 
 exports[`prompt builders > SYNTHESISER_PROMPT → full-string snapshot 1`] = `

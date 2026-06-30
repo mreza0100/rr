@@ -43,6 +43,7 @@ export interface RabbitHole {
   scoreHistory: ScoreEntry[];
   path: string[];
   sources?: string[];
+  note?: string; // the brainer's research directive for this lane (what to find + ranked fallbacks); rides to the scheduler + reader as noteFromBrainer
   ref?: string; // a concrete fetch target (URL/DOI) this lane should fetch directly instead of WebSearching
   failCount?: number; // how many times the validator has reopened this lane after a failed/thin return (capped)
 }
@@ -97,6 +98,27 @@ export interface Finding {
   trail?: string;
 }
 
+// ── research scheduler / reader (B4/B5) ──
+// a sized source the scheduler discovered for a lane: the cache path + its token/char size, ready for bin-packing.
+export interface SchedulerSource {
+  source: string; // the exact url or DOI
+  path: string; // the local cache file path returned by the size_only fetch
+  size: number; // size in tokens (the over-count heuristic from size_only)
+  chars: number; // size in raw characters (drives the char windows)
+}
+// one scheduler-discovered lane: its rabbit-hole id + the sources chosen for it.
+export interface SchedulerLane {
+  id: number;
+  sources: SchedulerSource[];
+}
+// one packed read instruction handed to a reader: a char window [offset, offset+limit) of one cache file.
+export interface ReadSlice {
+  source: string; // the url/DOI this slice came from (a label for the reader)
+  cachePath: string; // the cache file to read from disk
+  offset: number; // char offset to start at
+  limit: number; // number of chars to read
+}
+
 // ── brainer deltas (its per-wave output, see agents.ts Coord) ──
 export interface RescoreItem {
   id: number;
@@ -114,11 +136,22 @@ export interface LookupItem {
   why?: string;
   score?: number;
   sources?: string[];
+  note?: string; // the research directive for this lane — what to find + ranked fallbacks; steers BOTH the scheduler (source pick) and the reader (extraction); distinct from `why`
   ref?: string; // a concrete fetch target (URL/DOI) the lane fetches directly instead of WebSearching
 }
 export interface Stop {
   done: boolean;
   reason: string;
+  lost?: boolean; // CHILD brainers only: the branch proved a dead end → abandon it (quiet death, no finalize). The root can never set this.
+}
+// a brainer's OPTIONAL, at-most-one-per-wave spawn directive: aim a focused child brainer at a branch worth a dedicated
+// brain. `id` hands off an open rabbit-hole; or `keyword`+`why` originate the branch. `mandate` is the parent-authored
+// directive that aims the child. Only emitted when the brainer is SURE the branch deserves the (expensive) spawn.
+export interface Spawn {
+  id?: number;
+  keyword?: string;
+  why?: string;
+  mandate: string;
 }
 
 // ── finalize ──
@@ -142,12 +175,6 @@ export interface WaveLogEntry {
   topScore: number;
   done: boolean;
   reason: string;
-}
-export interface SentinelLogEntry {
-  afterWave: number;
-  solid: boolean | null;
-  reasoning: string;
-  injected: string[];
 }
 export interface ValidatorLogEntry {
   wave: number;

@@ -5,8 +5,8 @@ import type { Schema } from '../src/types/index.js';
 import { SCOUT } from '../src/agents/scout/index.js';
 import { SOURCES } from '../src/agents/prospector/index.js';
 import { COORD, BRAIN_COMPUTE } from '../src/agents/brainer/index.js';
-import { SENTINEL } from '../src/agents/sentinel/index.js';
 import { VALIDATE } from '../src/agents/validator/index.js';
+import { SCHEDULE } from '../src/agents/researchScheduler/index.js';
 import { RESEARCH } from '../src/agents/researcher/index.js';
 import { INITIATOR } from '../src/agents/initiator/index.js';
 import { REFINE } from '../src/agents/refiner/index.js';
@@ -25,11 +25,11 @@ describe('schemas — shape', () => {
       PAGE,
       SCOUT,
       RESEARCH,
+      SCHEDULE,
       LOOKUP,
       RESULT_SO_FAR,
       BRAIN_COMPUTE,
       COORD,
-      SENTINEL,
       VALIDATE,
       SOURCES,
       INITIATOR,
@@ -46,8 +46,8 @@ describe('schemas — shape', () => {
     expect(SCORED.required).toEqual(['keyword', 'why', 'score']);
     expect(PAGE.required).toEqual(['url', 'summary', 'rabbitHoles']);
     expect(SCOUT.required).toEqual(['landscape', 'pages']);
-    expect(RESEARCH.required).toEqual(['summary', 'rabbitHoles']);
-    expect(SENTINEL.required).toEqual(['solid', 'reasoning']);
+    expect(RESEARCH.required).toEqual(['runningAnswer']); // the reader returns the accumulated running answer
+    expect(SCHEDULE.required).toEqual(['lanes']);
     expect(VALIDATE.required).toEqual(['checks', 'enough']);
     expect(SOURCES.required).toEqual(['highValueSources']);
     expect(JUDGE.required).toEqual([
@@ -111,6 +111,13 @@ describe('schemas — nesting', () => {
     expect(BRAIN_COMPUTE.required).toEqual(['resultSoFar']);
     expect(BRAIN_COMPUTE.properties!.resultSoFar).toBe(RESULT_SO_FAR);
     expect(COORD.properties!.computement).toBeUndefined(); // the brainer computes inline — no computement field on its output
+  });
+  it('SCHEDULE groups sized sources per lane id — each source carries source/path/size/chars', () => {
+    const src = SCHEDULE.properties!.lanes.items!.properties!.sources.items!;
+    expect(SCHEDULE.properties!.lanes.items!.required).toEqual(['id', 'sources']);
+    expect(src.required).toEqual(['source', 'path', 'size', 'chars']);
+    expect(src.properties!.size.type).toBe('number');
+    expect(src.properties!.chars.type).toBe('number');
   });
   it('VALIDATE is the per-wave coverage gate — checks{id,fulfilled} + enough required', () => {
     expect(VALIDATE.properties!.checks.items!.required).toEqual(['id', 'fulfilled']);

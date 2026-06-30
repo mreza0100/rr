@@ -5,6 +5,7 @@
 // Tier: opus — ALWAYS Opus (the global brain/reducer — measured: a Haiku brainer scored erratically +
 // drifted off-goal). Effort: xhigh — re-scores the store every wave AND sets direction AND maintains
 // resultSoFar; the one role where the extra reasoning budget pays back most.
+import { CONFIG } from '../../config.js';
 import { SCORED, LOOKUP, RESULT_SO_FAR } from '../shared.js';
 import { buildBrainer, buildBrainerCompute } from './prompts.js';
 import type { Agent, BrainerArgs, Schema } from '../../types/index.js';
@@ -57,11 +58,36 @@ export const COORD: Schema = {
       description:
         'ids of dead/duplicate rabbit-holes to eliminate (a MERGE = drop the duplicate, rescore the survivor)',
     },
+    spawn: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'number',
+          description:
+            'an OPEN rabbit-hole id to hand to the child (or omit and give keyword+why to originate the branch)',
+        },
+        keyword: { type: 'string' },
+        why: { type: 'string' },
+        mandate: {
+          type: 'string',
+          description:
+            'the directive that aims the child brainer — what this one branch must chase',
+        },
+      },
+      required: ['mandate'],
+      description:
+        'OPTIONAL, at most ONE per wave: spawn a focused child brainer onto a branch that deserves a dedicated brain. Only when you are SURE the branch is worth it — spawns are expensive. Omit when not spawning.',
+    },
     stop: {
       type: 'object',
       properties: {
         done: { type: 'boolean' },
         reason: { type: 'string', description: 'one line: why done, or what is still missing' },
+        lost: {
+          type: 'boolean',
+          description:
+            'CHILD brainers only: this branch is a dead end — abandon it (no answer expected). The root brainer must never set this.',
+        },
       },
       required: ['done', 'reason'],
     },
@@ -70,8 +96,8 @@ export const COORD: Schema = {
 };
 
 export const brainer: Agent<BrainerArgs> = {
-  tier: 'opus',
-  effort: 'xhigh',
+  tier: CONFIG.TIER.brainer,
+  effort: CONFIG.EFFORT.brainer,
   schema: COORD,
   buildPrompt: buildBrainer,
 };

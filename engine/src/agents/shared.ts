@@ -5,7 +5,7 @@
 // Two kinds live here:
 //   • static PROMPT fragments (FINISH, WEB_ONLY) — guard clauses appended to several agents'
 //     prompts. (The run-DERIVED fragments — NET, FOOTER, RUBRIC, STOP, THINKER_NOTE,
-//     RESEARCHER_NOTE, COMPUTER_NOTE — are built per run on the CONFIG singleton in ../config.js.)
+//     RESEARCHER_NOTE, COMPUTE_NOTE — are built per run on the CONFIG singleton in ../config.js.)
 //   • shared StructuredOutput SCHEMA bricks — the nested sub-schemas reused across more than one
 //     agent's output contract (RABBITHOLE), plus the single-source nested bricks the top-level
 //     contracts compose. Each agent's TOP-LEVEL schema is co-located in its own file; these
@@ -14,7 +14,7 @@
 import type { Schema } from '../types/index.js';
 
 // ── static prompt guard clauses ──
-// FINISH: the pure reducers (brainer, sentinel, initiator, synthesiser) already hold the data they
+// FINISH: the pure reducers (brainer, initiator, synthesiser) already hold the data they
 // need — they MAY use a tool if it genuinely helps, but the hard rule is they FINISH: emit the
 // COMPLETE StructuredOutput rather than getting lost (the wave-0 brainer once spent its whole turn
 // reading this repo's own files on a self-referential query and never emitted resultSoFar/lookupNext/stop).
@@ -22,7 +22,7 @@ export const FINISH = `
 The data above is enough to decide. You may consult a tool if it genuinely helps, but keep it brief — the answer does not require it. Your one required action: return the complete StructuredOutput with every required field, never a partial object.`;
 // WEB_ONLY: the refine pass checks claims on the web — the local repo code is never evidence.
 export const WEB_ONLY = `
-Use the web only (WebSearch/WebFetch) to check sources — never read local files or this repo's own code; they are not evidence.`;
+Use the web only (WebSearch / mcp__harvester__fetch) to check sources — never read local files or this repo's own code; they are not evidence.`;
 
 // ── shared schema bricks (declaration order respects nesting) ──
 export const RABBITHOLE: Schema = {
@@ -63,6 +63,11 @@ export const LOOKUP: Schema = {
       items: { type: 'string' },
       description:
         'subset of the prospector venue identifiers (their exact `source` strings) best suited to THIS rabbit-hole — its researcher will prefer these. Empty if none fit.',
+    },
+    note: {
+      type: 'string',
+      description:
+        'the research directive for THIS lane — WHAT to find plus ranked fallbacks ("if not X, focus on Y; give both if available"). Steers BOTH the scheduler (which sources to pick) and the reader (what to extract). Distinct from `why` (your store/scoring rationale).',
     },
     ref: {
       type: 'string',

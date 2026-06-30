@@ -1,6 +1,7 @@
 // INITIATOR — opens the Finalize phase. Reads the final resultSoFar and shapes the finish to the query:
 // names the load-bearing facts to harden and sets the report focus. Tier: opus (synthesis/planning).
 // Effort: xhigh.
+import { CONFIG } from '../../config.js';
 import { buildInitiator } from './prompts.js';
 import type { Agent, InitiatorArgs, Schema } from '../../types/index.js';
 
@@ -51,8 +52,8 @@ export const INITIATOR: Schema = {
 };
 
 export const initiator: Agent<InitiatorArgs> = {
-  tier: 'opus',
-  effort: 'xhigh',
+  tier: CONFIG.TIER.initiator,
+  effort: CONFIG.EFFORT.initiator,
   schema: INITIATOR,
   buildPrompt: buildInitiator,
 };

@@ -9,8 +9,8 @@
 export { scout } from './scout/index.js';
 export { prospector } from './prospector/index.js';
 export { brainer, BRAIN_COMPUTE, buildBrainerCompute } from './brainer/index.js';
-export { sentinel } from './sentinel/index.js';
 export { validator } from './validator/index.js';
+export { researchScheduler } from './researchScheduler/index.js';
 export { researcher } from './researcher/index.js';
 export { initiator } from './initiator/index.js';
 export { refiner } from './refiner/index.js';

@@ -1,13 +1,11 @@
 ---
 name: rr
-version: "2.1.0"
+version: "2.3.0"
 repo: "https://github.com/mreza0100/rr"
 description: Launches Research and Report (RR) — a deterministic background Workflow that runs an unbounded, best-first, brainer-steered web crawl, DERIVES an answer (computing it when the answer must be built), and writes a cited multi-section report with a verdict and plan. Use when the user wants a researched answer or a topic landscape ("research X", "look into X", "RR X", "rr fast X") and a single web search is not enough. Modes: goal (answer one question) and collect (inventory a topic); "rr fast X" answers inline now via one quick sub-agent instead of the background Workflow. Runs in the background, returns a completion notification, and persists to RR/{slug}/.
 ---
 
 # Research and Report (RR)
-
-A deterministic background Workflow that runs an unbounded, best-first, brainer-steered web-research crawl and **derives** a cited, multi-section answer.
 
 ## Purpose
 
@@ -21,19 +19,23 @@ One Opus **brainer** drives the whole run; everything else is its instrument.
 
 1. **Scout** (haiku) — one broad web sweep maps the landscape and seeds the first rabbit-holes.
 2. **Prospector** (opus) — names the high-value authoritative source venues, and when the topic is more active in another language, the native venues to search in (tagged by language).
-3. **Research waves** — the brainer scores the open rabbit-holes, pursues the leads worth following (assigning each its venues), and hands them to parallel **lane-researchers** (haiku) that WebSearch + WebFetch, capture each source's evidence quality (funding, conflicts, sample, limitations), and return findings + new rabbit-holes + the outbound links worth following. A per-wave **validator** (sonnet) checks the wave met its goal and reopens the failed or thin lanes. The brainer folds the findings into a running answer carried wave to wave, re-scores the leads, and decides when the answer is solid — deriving any steering calculation itself mid-wave (reasoning or running code).
-4. **Sentinel** (opus, goal mode) — when the brainer calls done, a terminal skeptic contests it and can force one more wave on a real gap.
-5. **Finalize** — an **initiator** shapes the finish, grouping the load-bearing facts → a **refine** pass adversarially hardens each fact group against the sources → an Opus **judge** stress-tests the hardened answer (goal met, verification sound, derivation valid) and steers a bounded remediation loop: the brain derives the answer when one is needed (running code, propagating error bars), refine re-checks a flagged fact, or the crawl reopens on a real gap → a **synthesiser** writes the report.
-6. **Debug** (opt-in) — a final analyst writes `_debug.md` with metrics + raw agent I/O.
+3. **Research waves** — the brainer scores the open rabbit-holes, picks the lanes worth pursuing (≤5 per wave), and authors a per-lane **`note`** — the research directive plus ranked fallbacks. A **researchScheduler** (sonnet) runs batched discovery for all lanes: every web-search in one parallel round, then `mcp__harvester__fetch size_only` on every candidate in a second parallel round, returning the highest-value sources grouped per lane (`{source, path, size}`). Code **bin-packs** each lane's sources into ≤130k-token reader-units — small sources combine into one reader, a large source splits across several — and spawns **one sequential reader thread per lane** (haiku), parallel across lanes. Each reader reads its assigned slices straight from the Harvester cache file (via code) and digests into a running answer handed to the next reader; it can resolve a walled source itself (DOI → `fetch`/`findWorks`) and view an image via `fetchImage`. A per-wave **validator** (sonnet) checks coverage and reopens thin lanes; the brainer folds the lane answers into its running answer and decides when the answer is solid.
+4. **Finalize** — an **initiator** groups the load-bearing facts → a **refine** pass hardens each group against the sources → an Opus **judge**, the sole terminal skeptic in both goal and collect modes, stress-tests the hardened answer and sees the leftover open rabbit-holes, steering a bounded remediation loop: the brain derives the answer when one is needed (running code, propagating error bars), refine re-checks a flagged fact, or the crawl reopens on a real gap → a **synthesiser** writes the report.
+5. **Debug** (opt-in) — a final analyst writes `_debug.md` with metrics + raw agent I/O.
 
 ## Launch
+
+**Preflight — the fetch MCP (Harvester) must be live.** RR fetches only through `mcp__harvester__fetch` (built-in WebFetch is hook-denied), so a missing or dead server makes every fetch error and yields a snippet-only run. Before launching, check for the `mcp__harvester__*` tools (via ToolSearch):
+
+- **Missing** — hold the launch and point the user to the Harvester MCP (`https://github.com/mreza0100/harvester-web-mcp`) to install, then `/mcp` to connect.
+- **Present** — smoke-test with one `mcp__harvester__fetch` on a stable URL (`https://example.com`); a clean fetch means go, an error means have the user reconnect (`/mcp`) or restart the server — hold until it passes.
 
 Call the **Workflow tool**. It runs in the background; a completion notification returns the result — do not block on it. Use the **absolute** path to `workflow.js` (the skill's base dir is printed when the skill loads) — the working directory may sit inside a child project, where a relative path resolves against the CWD and 404s the bundle.
 
 ```
 Workflow({
   scriptPath: "<skill-base-dir>/workflow.js",
-  args: { query, mode, compute, computerNote, thinkerNote, researcherNote, tag, debug, debugPrompt }
+  args: { query, mode, maxParallelBrainers, compute, computeNote, thinkerNote, researcherNote, tag, debug, debugPrompt }
 })
 ```
 
@@ -41,16 +43,17 @@ Workflow({
 
 - `query` (required) — the research question (goal) or collect-target. The crawl sees only this string.
 - `mode` — `'goal'` (default) or `'collect'`. See Modes.
-- `compute` — `true` (default) or `false`. The master switch for derivation: `false` runs no compute agents (no mid-wave compute, no finalize computement) for a faster, gather-and-reason-only run.
-- `computerNote` (optional) — extra run-specific guidance for the compute-aware agents (a method to use, a constraint to respect). Appends to the always-present note that the compute environment ships a scientific Python stack (scipy, sympy, uncertainties, pandas, statsmodels, scikit-learn, networkx, pint, rdkit).
+- `maxParallelBrainers` — `1` (default) … `5`. The brainer-tree width. `1` is the single global brainer. With `2`–`5`, a brainer may SPAWN a focused child onto a rich branch; the children run in parallel, the first whose answer the judge upholds wins (its report becomes `result.md`), and a child may abandon a dead-end branch. More brainers ≈ proportionally more cost — raise it only for a goal with several deep, separable branches.
+- `compute` — `true` (default) or `false`. The master switch for derivation: `false` runs no compute agents (no mid-wave compute, no finalize brain-derive) for a faster, gather-and-reason-only run.
+- `computeNote` (optional) — extra run-specific guidance for the compute-aware agents (a method to use, a constraint to respect). Appends to the always-present note that the compute environment ships a scientific Python stack (scipy, sympy, uncertainties, pandas, statsmodels, scikit-learn, networkx, pint, rdkit).
 - `thinkerNote` (optional) — operator run-steering for the Opus reasoning tier: priorities, framing, constraints, audience. Shapes HOW the run is approached and what the report emphasizes — not additional questions to research. Reaches the reasoning agents only, never the cheap workers.
-- `researcherNote` (optional) — a terse one-line note (≈6-7 words) to the web-research agents that run WebSearch/WebFetch: scout, prospector, lane-researcher, brainer, and sentinel. Steers HOW they search and fetch (which sources to favour, what to skip). Passthrough, injected verbatim.
+- `researcherNote` (optional) — a terse one-line note (≈6-7 words) to the web-research agents — scout, prospector, brainer, researchScheduler, and researcher. Steers HOW they search and fetch (which sources to favour, what to skip). Passthrough, injected verbatim.
 - `tag` (optional) — suffixes the output dir so parallel variants of one query write to distinct dirs.
 - `debug` (optional, default `true`) — writes `_debug.md` (run log + metrics + raw agent I/O); ON by default, pass `debug: false` to turn it off. Pair with `debugPrompt` (string) to focus it on a question.
 
 ## Modes
 
-- **goal** — satisficing. Answers ONE question and stops once it is answered; the sentinel guards against a premature stop. Pick for a decision or a direct answer.
+- **goal** — satisficing. Answers ONE question and stops once it is answered; the judge guards against a premature stop. Pick for a decision or a direct answer.
 - **collect** — exhaustive. Inventories breadth and runs until saturation. Pick for a landscape or a roster.
 
 ## Fast mode
@@ -83,6 +86,7 @@ This writes to `RR/{slug}/`:
 
 - `result.md` — the deliverable. Read this first; it opens with a compact **Run arguments** record (the complete launch args).
 - `_rabbitHoles.json`, `_tree.md` — the rabbit-holes (with the run's launch `args` at the top) + the crawl tree; diagnostics.
+- `_brainers.json`, `_brainers-tree.md`, `result-<name>.md` — only when `maxParallelBrainers > 1`: the brainer tree (who spawned whom, the winner) plus each non-winning brainer's preserved partial.
 - `_compute-*.md` / `_compute-*.py` — any derivations with their code, when compute ran.
 - `_debug.md` — when launched with `debug: true`.
 
@@ -120,7 +124,7 @@ npm run build                   # bundles engine/src/ → ../workflow.js, then v
 npm test                        # the vitest suite (unit + integration tests)
 ```
 
-Edit `engine/src/` (the modules + `prompts/*.prompt.md`), rebuild, and commit both the source and the regenerated `workflow.js`.
+Edit `engine/src/` (the modules + each agent's `prompts.ts`, plus the prompt fragments in `config.ts`), rebuild, and commit both the source and the regenerated `workflow.js`.
 
 ## Working with it
 

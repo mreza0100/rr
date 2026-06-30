@@ -3,8 +3,8 @@ import {
   scout,
   prospector,
   brainer,
-  sentinel,
   validator,
+  researchScheduler,
   researcher,
   initiator,
   refiner,
@@ -13,14 +13,14 @@ import {
   debugAnalyst,
 } from '../src/agents/index.js';
 
-// The model TIER + reasoning EFFORT that used to sit in config.js TIER/EFFORT maps now live co-located
-// on each agent object. This pins that policy (the engine reads <agent>.tier / <agent>.effort / <agent>.schema).
+// The model TIER + reasoning EFFORT live in the central config.js TIER/EFFORT maps; each agent object reads
+// its value from CONFIG. This pins that policy (the engine reads <agent>.tier / <agent>.effort / <agent>.schema).
 const AGENTS = {
   scout,
   prospector,
   brainer,
-  sentinel,
   validator,
+  researchScheduler,
   researcher,
   initiator,
   refiner,
@@ -42,15 +42,15 @@ describe('agents — shape', () => {
   });
 });
 
-describe('agents — tier policy (was config.TIER)', () => {
+describe('agents — tier policy (from config.TIER)', () => {
   it('workers are haiku; brainer/synthesis/adversarial are opus; refiner + validator are sonnet', () => {
     expect(scout.tier).toBe('haiku');
     expect(researcher.tier).toBe('haiku');
     expect(refiner.tier).toBe('sonnet');
     expect(validator.tier).toBe('sonnet');
+    expect(researchScheduler.tier).toBe('sonnet');
     expect(prospector.tier).toBe('opus');
     expect(brainer.tier).toBe('opus');
-    expect(sentinel.tier).toBe('opus');
     expect(initiator.tier).toBe('opus');
     expect(judge.tier).toBe('opus');
     expect(synthesiser.tier).toBe('opus');
@@ -58,16 +58,16 @@ describe('agents — tier policy (was config.TIER)', () => {
   });
 });
 
-describe('agents — effort policy (was config.EFFORT)', () => {
-  it('workers medium; prospector/refiner/debug high; brainer/sentinel/initiator/judge/synthesiser xhigh', () => {
+describe('agents — effort policy (from config.EFFORT)', () => {
+  it('workers medium; prospector/refiner/debug high; brainer/initiator/judge/synthesiser xhigh', () => {
     expect(scout.effort).toBe('medium');
     expect(researcher.effort).toBe('medium');
     expect(validator.effort).toBe('medium');
     expect(prospector.effort).toBe('high');
     expect(refiner.effort).toBe('high');
+    expect(researchScheduler.effort).toBe('high');
     expect(debugAnalyst.effort).toBe('high');
     expect(brainer.effort).toBe('xhigh');
-    expect(sentinel.effort).toBe('xhigh');
     expect(initiator.effort).toBe('xhigh');
     expect(judge.effort).toBe('xhigh');
     expect(synthesiser.effort).toBe('xhigh');

@@ -7,7 +7,6 @@ import type {
   Confidence,
   CleanReport,
   Effort,
-  Evidence,
   FactToHarden,
   Finding,
   LaneRecord,
@@ -16,12 +15,14 @@ import type {
   NextSource,
   Page,
   RabbitHoleSeed,
+  ReadSlice,
   RenameItem,
   RescoreItem,
   ResultLogEntry,
   ResultSoFar,
+  SchedulerLane,
   ScoredLead,
-  SentinelLogEntry,
+  Spawn,
   Stop,
   Tier,
   Venue,
@@ -79,12 +80,18 @@ export interface BrainerArgs {
   mode: Mode;
   venues: Venue[];
   languageGuidance?: string; // non-empty ⇒ route some lanes to the non-English venues
-  lastSentinelReason?: string; // a prior crawl-sentinel rejection, 1 line — raises the brainer's bar before it declares done again; '' when none
   lastValidatorMissing?: string; // the last wave's validator gaps (reopened lanes + capped known-gaps), 1 line; '' when none
   compute?: boolean;
-  computerNote?: string;
+  computeNote?: string;
   thinkerNote?: string;
   researcherNote?: string;
+  // ── brainer-tree context (multi-brainer; all absent/false in a single-brainer run) ──
+  isChild?: boolean; // a spawned CHILD brainer — knows its parent + branch, and MAY declare stop.lost
+  parentName?: string; // the brainer it spawned from
+  mandate?: string; // the parent-authored directive aiming this child at its branch
+  trail?: string; // the branch path this child came from
+  canSpawn?: boolean; // spawning is still permitted this wave (caps not yet hit) — only then may it emit spawn
+  lastWave?: boolean; // last wave: wrap up the answer, request no new research
 }
 export interface Coord {
   resultSoFar: ResultSoFar;
@@ -93,6 +100,7 @@ export interface Coord {
   lookupNext: LookupItem[];
   rename?: RenameItem[];
   drop?: number[];
+  spawn?: Spawn; // OPTIONAL, ≤1 per wave: spawn a focused child brainer onto a branch (engine honors the maxParallelBrainers / depth / 1-per-wave caps)
   stop: Stop;
 }
 
@@ -103,43 +111,53 @@ export interface BrainerComputeArgs {
   hardenedFacts: CleanReport[];
   directive: string; // the judge's precise derivation directive
   reason: string; // the judge's reasoning, fed forward
-  computerNote?: string;
+  computeNote?: string;
   thinkerNote?: string;
 }
 export interface BrainComputeOut {
   resultSoFar: ResultSoFar; // the updated memory with the derivation folded into `working`
 }
 
-// ── sentinel ──
-export interface SentinelArgs {
+// ── researchScheduler — discovery: picks + sizes the highest-value sources per lane ──
+export interface SchedulerLaneInput {
+  id: number; // the rabbit-hole id (the scheduler echoes it back so the engine maps sources → lane)
+  keyword: string;
+  why: string;
+  note: string; // the brainer's research directive (what to find + ranked fallbacks)
+  venues: Venue[]; // the prospector venues the brainer assigned this lane (prefer these)
+  ref?: string; // a concrete url/DOI to take directly instead of searching (a followed citation)
+}
+export interface ResearchSchedulerArgs {
   query: string;
-  resultSoFar: ResultSoFar | null;
-  reason: string;
-  waveLog: WaveLogEntry[];
-  rabbitHoles: string[];
-  pursuedList: string[];
-  thinkerNote?: string;
+  lanes: SchedulerLaneInput[];
   researcherNote?: string;
 }
-export interface SentinelOut {
-  solid: boolean;
-  reasoning: string;
-  rabbitHoles?: RabbitHoleSeed[];
+export interface SchedulerOut {
+  lanes: SchedulerLane[]; // the chosen, sized sources grouped per lane id
 }
 
-// ── researcher ──
+// ── researcher (a lane READER: reads its assigned cache slice(s) from disk via code, then digests) ──
 export interface ResearcherArgs {
-  net: string;
   query: string;
   trail: string;
   keyword: string;
   why: string;
+  note: string; // the brainer's directive (noteFromBrainer) — what to extract + ranked fallbacks
   footer: string;
-  venues: Venue[];
-  parallelSourcesPerLaneResearchAgent: number;
+  reads: ReadSlice[]; // the char window(s) of the cache file(s) this reader-unit covers
+  readerIndex: number; // 1-based: reader i of N on this lane
+  readerCount: number; // N — total readers on this lane
+  priorAnswer: string; // the running answer handed forward from the earlier readers ('' for reader 1) — renders LAST
   researcherNote?: string;
-  ref?: string; // a concrete URL/DOI this lane fetches directly (a followed citation) instead of WebSearching
 }
+// one reader's StructuredOutput: the updated running answer + the leads the slice surfaced.
+export interface ReaderOut {
+  runningAnswer: string; // the accumulated lane answer after merging this slice into the prior one
+  rabbitHoles?: RabbitHoleSeed[];
+  nextSources?: NextSource[];
+  deadEnds?: string[];
+}
+// the lane thread's aggregated return (final running answer as `summary` + the collected leads) — what runResearchers yields.
 export interface ResearchOut {
   summary: string;
   rabbitHoles?: RabbitHoleSeed[];
@@ -154,6 +172,7 @@ export interface InitiatorArgs {
   waveLog: WaveLogEntry[];
   landscape: string;
   openRabbitHoles: string[];
+  mode?: Mode; // collect ⇒ harden breadth/coverage, not the shape of a single answer
   thinkerNote?: string;
 }
 export interface InitiatorOut {
@@ -173,14 +192,16 @@ export interface RefineOut {
   report: string;
 }
 
-// ── judge — the FINALIZE-phase terminal skeptic (mirrors the crawl sentinel) ──
+// ── judge — the sole terminal skeptic (FINALIZE phase) ──
 export interface JudgeArgs {
   query: string;
   resultSoFar: ResultSoFar | null;
   cleanReports: CleanReport[];
   focus: string; // the deliverable spec the answer must meet (the initiator's report focus)
+  openRabbitHoles: string[]; // the leftover/unpursued open rabbit-holes — the judge weighs whether a real gap remains and may reopen the crawl on it
   compute: boolean; // false ⇒ no derivation path; the judge sets needsCompute false
-  computerNote?: string;
+  mode?: Mode; // collect ⇒ gate goalMet on inventory-completeness + per-item verification, not a single-answer goal
+  computeNote?: string;
   thinkerNote?: string;
 }
 export interface JudgeOut {
@@ -191,13 +212,23 @@ export interface JudgeOut {
   reasoning: string;
   directive?: string; // the precise fix/derivation to perform when not satisfied; '' when satisfied
   reopenRabbitHoles?: RabbitHoleSeed[]; // only for a genuine evidence/coverage gap that needs the crawl; else empty
+  computeLimitation?: string; // engine-applied (not from the model): the compute-off stated limitation runJudge returns for the engine to fold into openGaps
 }
 
 // ── validator — the per-wave crawl coverage gate (distinct from the terminal judge) ──
+export interface ValidatorRequest {
+  id: number;
+  keyword: string;
+  why: string;
+}
+export interface ValidatorFinding {
+  keyword: string;
+  intro: string;
+}
 export interface ValidatorArgs {
   query: string;
-  requests: { id: number; keyword: string; why: string }[]; // the wave's lookupNext picks
-  findings: { keyword: string; intro: string }[]; // each lane's return, intro only — kept cheap
+  requests: ValidatorRequest[]; // the wave's lookupNext picks
+  findings: ValidatorFinding[]; // each lane's return, intro only — kept cheap
   nullLanes: string[]; // keywords of lanes that returned nothing
 }
 export interface ValidatorCheck {
@@ -221,6 +252,7 @@ export interface SynthesiserArgs {
   cleanReports: CleanReport[];
   focus: string;
   openRabbitHoles: string[];
+  compute?: boolean; // false ⇒ no derivation was run; never present a `working` derivation even if one leaked into resultSoFar
   thinkerNote?: string;
 }
 export interface ReportOut {
@@ -235,10 +267,8 @@ export interface ReportOut {
 export interface DebugAnalystArgs {
   query: string;
   focus: string;
-  // the run Metrics in production; the prompt test passes a minimal object — both render via plain().
-  metrics: Metrics | Record<string, unknown>;
+  metrics: Metrics; // the run's diagnostic metrics, rendered via plain()
   waveLog: WaveLogEntry[];
-  sentinelLog: SentinelLogEntry[];
   resultLog: ResultLogEntry[];
   highValueSources: Venue[];
   laneRecords: LaneRecord[];

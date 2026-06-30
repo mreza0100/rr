@@ -1,3 +1,4 @@
+import { CONFIG } from './config.js';
 import { norm, normRef } from './utils/index.js';
 import type {
   AddRabbitHoleArgs,
@@ -24,9 +25,8 @@ type DeltaInput = {
   add?: ScoredLead[];
 };
 
-// light near-duplicate check — Jaccard token-set overlap ≥ this counts as "the same lead, reworded" (catches
-// re-orderings the exact norm() match misses); kept high so genuinely distinct leads are never merged away.
-const NEAR_DUP = 0.85;
+// light near-duplicate check — Jaccard token-set overlap ≥ CONFIG.NEAR_DUP counts as "the same lead, reworded"
+// (catches re-orderings the exact norm() match misses); the threshold is kept high so distinct leads are never merged.
 const tokenSet = (s: string): Set<string> => new Set(norm(s).split(' ').filter(Boolean));
 const nearDup = (a: string, b: string): boolean => {
   const A = tokenSet(a);
@@ -34,7 +34,7 @@ const nearDup = (a: string, b: string): boolean => {
   if (!A.size || !B.size) return false;
   let inter = 0;
   for (const t of A) if (B.has(t)) inter++;
-  return inter / (A.size + B.size - inter) >= NEAR_DUP;
+  return inter / (A.size + B.size - inter) >= CONFIG.NEAR_DUP;
 };
 
 // add-or-find an OPEN rabbit-hole. Dedup by norm(keyword), a near-duplicate keyword, AND normRef(ref) against the
@@ -118,6 +118,7 @@ export function resolveLookupNext(
       });
     if (!rh || state.pursuedKeys.has(norm(rh.keyword))) continue;
     if (item.sources) rh.sources = item.sources;
+    if (item.note) rh.note = item.note; // the brainer's per-lane directive → rides to the scheduler + reader as noteFromBrainer
     if (item.ref && !rh.ref) rh.ref = item.ref;
     if (!picks.some((p) => p.id === rh.id)) picks.push(rh);
   }
@@ -134,6 +135,9 @@ export function reopenRabbitHole(state: StoreState, rh: RabbitHole): RabbitHole 
   const li = state.pursuedList.indexOf(rh.keyword);
   if (li >= 0) state.pursuedList.splice(li, 1);
   rh.failCount = (rh.failCount || 0) + 1;
+  // clear the stale directive: the `note` that already produced a dead lane must NOT be re-sent verbatim — the
+  // next brainer re-authors a fresh directive (or the scheduler/reader fall back to the rabbit-hole + goal).
+  delete rh.note;
   if (!state.rabbitHoles.some((x) => x.id === rh.id)) state.rabbitHoles.push(rh);
   return rh;
 }

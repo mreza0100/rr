@@ -33,13 +33,32 @@ const PROSPECT_OUT = {
   ],
   reasoning: 'searched',
 };
+// a lane READER's output (the new researcher shape): the accumulated running answer + the leads it surfaced.
 const LANE_OUT = {
-  summary: 'found knobs',
+  runningAnswer: 'found knobs',
   rabbitHoles: [{ keyword: 'ef tuning', why: 'recall' }],
   deadEnds: [],
 };
 // the per-wave validator's neutral verdict — nothing failed, nothing to reopen.
 const VALIDATE_OUT = { checks: [], enough: true, missing: [] };
+// the SCHEDULER stub — echoes one sized source per lane id it sees in the prompt (each lane renders `#id`),
+// so every pursued lane bin-packs to exactly ONE reader-unit (size 1000 ≤ budget). Keeps reader labels at `-r1of1`.
+function schedulerStub(prompt: string) {
+  const ids = [...new Set([...prompt.matchAll(/#(\d+)/g)].map((m) => Number(m[1])))];
+  return {
+    lanes: ids.map((id) => ({
+      id,
+      sources: [
+        {
+          source: 'https://s' + id + '.com',
+          path: '/cache/' + id + '.txt',
+          size: 1000,
+          chars: 2000,
+        },
+      ],
+    })),
+  };
+}
 
 // load the engine fresh with the given ambient args + agent (config/CONFIG are built at import).
 async function loadEngine(
@@ -78,7 +97,7 @@ async function loadEngine(
 }
 const keys = (r: RunResult) => Object.keys(r.files);
 
-// ── (a) GOAL mode — compute ON + a sentinel reopen→uphold path ──────────────
+// ── (a) GOAL mode — compute ON, brainer-driven stop, finalize brain-compute ──
 function goalAgent(prompt: string, opts: AgentOpts) {
   const L = opts.label;
   if (L === 'scout') return SCOUT_OUT;
@@ -106,23 +125,7 @@ function goalAgent(prompt: string, opts: AgentOpts) {
       drop: [],
       stop: { done: true, reason: 'goal answered' },
     };
-  if (L === 'brainer-w2')
-    return {
-      resultSoFar: RSF,
-      rescore: [],
-      add: [],
-      lookupNext: [],
-      rename: [],
-      drop: [],
-      stop: { done: true, reason: 'gap closed' },
-    };
-  if (L === 'sentinel-w2')
-    return {
-      solid: false,
-      reasoning: 'missed multi-tenant isolation',
-      rabbitHoles: [{ keyword: 'multi-tenant isolation', why: 'load-bearing gap' }],
-    };
-  if (L === 'sentinel-w3') return { solid: true, reasoning: 'solid now', rabbitHoles: [] };
+  if (L.startsWith('scheduler-')) return schedulerStub(prompt);
   if (L.startsWith('validator-')) return VALIDATE_OUT;
   if (L.startsWith('lane-')) return LANE_OUT;
   if (L === 'initiator')
@@ -165,7 +168,7 @@ function goalAgent(prompt: string, opts: AgentOpts) {
   throw new Error('goalAgent: unexpected label ' + L);
 }
 
-describe('ResearchReport.run — goal mode (compute on, sentinel reopen→uphold)', () => {
+describe('ResearchReport.run — goal mode (compute on, brainer-driven stop)', () => {
   it('completes the full pipeline and writes the expected files', async () => {
     const RR = await loadEngine(
       { query: 'best vector database for production RAG at scale', mode: 'goal' },
@@ -175,7 +178,6 @@ describe('ResearchReport.run — goal mode (compute on, sentinel reopen→uphold
 
     expect(result.stopReason).toBe('brainer-done');
     expect(result.done).toBe(true);
-    expect(result.metrics.sentinelReopensForced).toBe(1);
     expect(result.metrics.mode).toBe('goal');
     expect(result.metrics.reportWritten).toBe(true);
     expect(result.verdict).toBe('pgvector wins');
@@ -187,8 +189,9 @@ describe('ResearchReport.run — goal mode (compute on, sentinel reopen→uphold
     expect(keys(result)).toContain('03-wave-0.md');
     expect(keys(result).some((k) => k.endsWith('-initiator.md'))).toBe(true);
     expect(keys(result).some((k) => k.endsWith('-refinement.md'))).toBe(true);
-    expect(keys(result).some((k) => k.endsWith('-sentinel.md'))).toBe(true);
     expect(keys(result).some((k) => k.endsWith('-judge.md'))).toBe(true);
+    // the judge is now the sole terminal skeptic — no crawl-phase sentinel file
+    expect(keys(result).some((k) => k.endsWith('-sentinel.md'))).toBe(false);
     // the judge routed needsCompute → the brain derived the answer (folded into resultSoFar.working)
     expect(keys(result)).toContain('_finalize-compute.md');
     expect(result.files['_finalize-compute.md']).toContain('blended cost = $0.0003/q ± 10%');
@@ -200,8 +203,6 @@ describe('ResearchReport.run — goal mode (compute on, sentinel reopen→uphold
       query: 'best vector database for production RAG at scale',
       mode: 'goal',
     });
-    // the sentinel-injected gap became a pursued lane
-    expect(result.pursued).toContain('multi-tenant isolation');
   });
 });
 
@@ -212,7 +213,9 @@ function collectAgent(prompt: string, opts: AgentOpts) {
   if (L === 'prospector') return PROSPECT_OUT;
   if (L.startsWith('brainer-w')) {
     const w = Number(L.slice('brainer-w'.length));
-    const score = w === 0 ? 100 : 50; // peak 100 then plateau at 50 (≤ 0.7×peak) for 2 waves → dry
+    // research-wave peak at w1=100, then plateau at 50 (≤ 0.7×peak) for w2,w3 → dry. The wave-0 SEED score (100)
+    // is EXCLUDED from the plateau math (B9), so the plateau is judged on the research waves' own trajectory.
+    const score = w <= 1 ? 100 : 50;
     return {
       resultSoFar: RSF,
       rescore: [],
@@ -223,6 +226,7 @@ function collectAgent(prompt: string, opts: AgentOpts) {
       stop: { done: false, reason: 'still collecting' },
     };
   }
+  if (L.startsWith('scheduler-')) return schedulerStub(prompt);
   if (L.startsWith('validator-')) return VALIDATE_OUT;
   if (L.startsWith('lane-')) return LANE_OUT;
   if (L === 'initiator')
@@ -259,7 +263,6 @@ describe('ResearchReport.run — collect mode (dry plateau)', () => {
     const result = await new RR().run();
     expect(result.stopReason).toBe('collect-dry-plateau');
     expect(result.metrics.mode).toBe('collect');
-    expect(result.metrics.sentinelReopensForced).toBe(0);
     expect(result.files['result.md']).toContain('# Inventory\n\nbody');
     // the judge upheld first pass → no derivation; refinement file records "no facts to harden"
     expect(keys(result)).not.toContain('_finalize-compute.md');
@@ -314,7 +317,7 @@ function degradedAgent(prompt: string, opts: AgentOpts) {
       drop: [],
       stop: { done: true, reason: 'done' },
     };
-  if (L === 'sentinel-w2') return { solid: true, reasoning: 'fine', rabbitHoles: [] };
+  if (L.startsWith('scheduler-')) return schedulerStub(prompt);
   // the validator flags the dead lane → the engine reopens it (also reached via the null-lane path)
   if (L.startsWith('validator-'))
     return {
@@ -375,6 +378,7 @@ function brainerDiesMidAgent(prompt: string, opts: AgentOpts) {
       stop: { done: false, reason: 'go' },
     };
   if (L === 'brainer-w1') return null; // dies mid-crawl
+  if (L.startsWith('scheduler-')) return schedulerStub(prompt);
   if (L.startsWith('validator-')) return VALIDATE_OUT;
   if (L.startsWith('lane-')) return LANE_OUT;
   if (L === 'initiator')
@@ -525,9 +529,9 @@ function richAgent(prompt: string, opts: AgentOpts) {
       drop: [],
       stop: { done: true, reason: 'answered' },
     };
-  if (L === 'sentinel-w2') return null; // ch null → '(sentinel failed)' + uphold-without-reasoning branches
+  if (L.startsWith('scheduler-')) return schedulerStub(prompt);
   if (L.startsWith('validator-')) return VALIDATE_OUT; // null lane still reopens via the null-lane path
-  if (L === 'lane-w1:hnsw-tuning') return LANE_OUT;
+  if (L.startsWith('lane-w1:hnsw-tuning')) return LANE_OUT;
   if (L.startsWith('lane-')) return null; // the unknown-venue lane fails → null-researcher branches
   if (L === 'initiator')
     return {
@@ -577,7 +581,7 @@ describe('ResearchReport.run — rich goal run (defensive defaults)', () => {
     expect(keys(result)).toContain('_finalize-compute.md');
     expect(result.files['_finalize-compute.md']).toContain('derived 42 ± 3');
     expect(result.files['_debug.md']).toContain('_(debug analyst failed'); // null analyst narrative
-    expect(result.files['_tree.md']).toContain('…'); // long keyword + query truncation
+    expect(result.files['_tree.md']).toContain('enterprise scale and operating cost'); // tree-viz renders the goal line FULL in the file — no clip (the tail used to be truncated at 80 chars)
     expect(result.metrics.reportWritten).toBe(true);
   });
 });
@@ -601,8 +605,6 @@ function dryAgent(drop: boolean) {
         drop: drop ? [1, 2] : [],
         stop: { done: false, reason: 'no good leads' },
       };
-    if (L === 'sentinel-w1')
-      return { solid: true, reasoning: 'nothing worth chasing', rabbitHoles: [] };
     if (L === 'initiator')
       return {
         refinement: { facts: [] },
@@ -671,7 +673,6 @@ function captureBrainerType(captured: Array<string | undefined>) {
         drop: [],
         stop: { done: true, reason: 'answered' },
       };
-    if (L === 'sentinel-w1') return { solid: true, reasoning: 'solid', rabbitHoles: [] };
     if (L === 'initiator')
       return {
         refinement: { facts: [] },
@@ -734,6 +735,87 @@ describe('ResearchReport.run — compute flag off', () => {
     expect(result.stopReason).toBe('brainer-done');
     expect(keys(result).some((k) => k.startsWith('_compute-'))).toBe(false); // NO compute files at all
     expect(result.files['result.md']).toContain('# Report\n\nbody'); // still finalizes normally
+    // A1c — the judge asked for a derivation (needsCompute:true); with compute off it is surfaced as an HONEST
+    // limitation (open gap → Open questions), never rubber-stamped away into a fabricated-derivation pass
+    expect(
+      (result.resultSoFar!.openGaps || []).some((g) =>
+        /Quantitative derivation unavailable/.test(g),
+      ),
+    ).toBe(true);
+  });
+});
+
+// ── (j2) finalize crawl-reopen carries the judge directive as the lane note (A5) ──
+function reopenAgent(prompt: string, opts: AgentOpts) {
+  const L = opts.label;
+  if (L === 'scout') return SCOUT_OUT;
+  if (L === 'prospector') return PROSPECT_OUT;
+  if (L === 'brainer-w0')
+    return {
+      resultSoFar: RSF,
+      rescore: [{ id: 1, score: 80 }],
+      add: [],
+      lookupNext: [{ id: 1 }],
+      rename: [],
+      drop: [],
+      stop: { done: false, reason: 'go' },
+    };
+  if (L === 'brainer-w1')
+    return {
+      resultSoFar: RSF,
+      rescore: [],
+      add: [],
+      lookupNext: [],
+      rename: [],
+      drop: [],
+      stop: { done: true, reason: 'answered' },
+    };
+  if (L.startsWith('brainer-'))
+    return {
+      resultSoFar: RSF,
+      rescore: [],
+      add: [],
+      lookupNext: [],
+      stop: { done: true, reason: 'folded' },
+    }; // the reopen-fold coordinate
+  if (L.startsWith('scheduler-')) return schedulerStub(prompt);
+  if (L.startsWith('validator-')) return VALIDATE_OUT;
+  if (L.startsWith('lane-')) return LANE_OUT;
+  if (L === 'initiator')
+    return { refinement: { facts: [{ fact: 'F', why: 'W' }] }, synthesiser: { focus: '' } };
+  if (L.startsWith('refine-')) return { report: 'r' };
+  if (L === 'judge-0')
+    return {
+      goalMet: false, // a real coverage gap → reopen the crawl
+      verificationSound: true,
+      needsCompute: false,
+      computeSound: true,
+      reasoning: 'a real evidence gap remains',
+      directive: 'DIG INTO THE GAP',
+      reopenRabbitHoles: [{ keyword: 'evidence gap', why: 'needed for the headline' }],
+    };
+  if (L.startsWith('judge-'))
+    return {
+      goalMet: true,
+      verificationSound: true,
+      needsCompute: false,
+      computeSound: true,
+      reasoning: 'gap closed',
+      directive: '',
+    };
+  if (L === 'synthesiser')
+    return { report: '# R', verdict: 'v', confidence: 'medium', plan: [], openQuestions: [] };
+  throw new Error('reopenAgent: unexpected label ' + L);
+}
+
+describe('ResearchReport.run — finalize crawl-reopen steers with the judge directive', () => {
+  it('passes the judge directive as the reopened lane note (A5)', async () => {
+    const RR = await loadEngine({ query: 'q', mode: 'goal' }, reopenAgent);
+    const result = await new RR().run();
+    const reopened = result.pursuedArchive.find((r) => r.keyword === 'evidence gap');
+    expect(reopened).toBeTruthy();
+    expect(reopened!.note).toBe('DIG INTO THE GAP'); // the directive steered the finalize lane
+    expect(reopened!.path).toContain('⚖ judge');
   });
 });
 
@@ -815,6 +897,7 @@ function refailAgent(prompt: string, opts: AgentOpts) {
       drop: [],
       stop: { done: true, reason: 'gave up on the dead lane' },
     };
+  if (L.startsWith('scheduler-')) return schedulerStub(prompt);
   if (L.startsWith('lane-')) return null; // every lane fails outright
   if (L.startsWith('validator-'))
     return {
@@ -822,7 +905,6 @@ function refailAgent(prompt: string, opts: AgentOpts) {
       enough: false,
       missing: ['hnsw depth'],
     };
-  if (L === 'sentinel-w4') return { solid: true, reasoning: 'ok', rabbitHoles: [] };
   if (L === 'initiator') return { refinement: { facts: [] }, synthesiser: { focus: '' } };
   if (L.startsWith('judge-'))
     return {
@@ -879,8 +961,9 @@ function skipValidatorAgent(prompt: string, opts: AgentOpts) {
       drop: [],
       stop: { done: true, reason: 'answered' },
     };
-  if (L === 'sentinel-w2') return { solid: true, reasoning: 'ok', rabbitHoles: [] };
-  if (L === 'lane-w1:hnsw-tuning') return { summary: THICK, rabbitHoles: [], deadEnds: [] };
+  if (L.startsWith('scheduler-')) return schedulerStub(prompt);
+  if (L.startsWith('lane-w1:hnsw-tuning'))
+    return { runningAnswer: THICK, rabbitHoles: [], deadEnds: [] };
   if (L === 'initiator') return { refinement: { facts: [] }, synthesiser: { focus: '' } };
   if (L.startsWith('judge-'))
     return {
@@ -903,5 +986,283 @@ describe('ResearchReport.run — validator gate skips when findings are substant
     const result = await new RR().run();
     expect(result.stopReason).toBe('brainer-done');
     expect(keys(result).some((k) => k.endsWith('-validator.md'))).toBe(false);
+  });
+});
+
+// ── (n) B6 — scheduler-death starvation: an empty schedule N waves running → stopReason scheduler-starved ──
+function starveAgent(prompt: string, opts: AgentOpts) {
+  const L = opts.label;
+  if (L === 'scout') return SCOUT_OUT;
+  if (L === 'prospector') return PROSPECT_OUT;
+  if (L.startsWith('brainer-w')) {
+    const w = Number(L.slice('brainer-w'.length));
+    // originate a FRESH pursuable lane every wave, so the crawl keeps trying (only the scheduler is starving it)
+    return {
+      resultSoFar: RSF,
+      rescore: [],
+      add: [],
+      lookupNext: [{ keyword: 'fresh lead ' + w, why: 'breadth', score: 80 }],
+      rename: [],
+      drop: [],
+      stop: { done: false, reason: 'still going' },
+    };
+  }
+  if (L.startsWith('scheduler-')) {
+    // the scheduler echoes the lane ids but discovers NO usable sources (every candidate walled/dead)
+    const ids = [...new Set([...prompt.matchAll(/#(\d+)/g)].map((m) => Number(m[1])))];
+    return { lanes: ids.map((id) => ({ id, sources: [] })) };
+  }
+  if (L.startsWith('validator-')) return VALIDATE_OUT;
+  if (L.startsWith('lane-')) return LANE_OUT; // never reached — empty source lists spawn no readers
+  if (L === 'initiator') return { refinement: { facts: [] }, synthesiser: { focus: '' } };
+  if (L.startsWith('judge-'))
+    return {
+      goalMet: true,
+      verificationSound: true,
+      needsCompute: false,
+      computeSound: true,
+      reasoning: 'ok',
+      directive: '',
+    };
+  if (L === 'synthesiser')
+    return { report: '# R', verdict: 'v', confidence: 'low', plan: [], openQuestions: [] };
+  throw new Error('starveAgent: unexpected label ' + L);
+}
+
+describe('ResearchReport.run — scheduler-death starvation guard (B6)', () => {
+  it('breaks the crawl with stopReason scheduler-starved after MAX_STARVED_WAVES empty schedules', async () => {
+    const RR = await loadEngine({ query: 'q', mode: 'goal' }, starveAgent);
+    const result = await new RR().run();
+    expect(result.stopReason).toBe('scheduler-starved');
+    expect(result.metrics.wavesRun).toBeLessThan(15); // did NOT grind to HARD_CAP
+    expect(result.files['result.md']).toContain('# R'); // still finalizes
+  });
+});
+
+// ── (n2) B6 — scheduleSources drops hallucinated ids + duplicate-id last-wins ──
+describe('ResearchReport.scheduleSources — id discipline (B6)', () => {
+  it('keeps only real pick ids and resolves a duplicate id last-wins', async () => {
+    const agent = (_p: string, o: AgentOpts) => {
+      if (o.label.startsWith('scheduler-'))
+        return {
+          lanes: [
+            { id: 1, sources: [{ source: 'a', path: '/c/a', size: 1, chars: 2 }] },
+            { id: 999, sources: [{ source: 'b', path: '/c/b', size: 1, chars: 2 }] }, // hallucinated id → dropped
+            { id: 1, sources: [{ source: 'c', path: '/c/c', size: 1, chars: 2 }] }, // duplicate id → last wins
+          ],
+        };
+      return {};
+    };
+    const RR = await loadEngine({ query: 'q' }, agent);
+    const rr = new RR();
+    const picks = [{ id: 1, keyword: 'k', why: 'w', score: 50, scoreHistory: [], path: [] }] as any;
+    const map = await rr.scheduleSources(
+      { highValueSources: [] } as any,
+      picks,
+      'test',
+      'Research',
+    );
+    expect([...map.keys()]).toEqual([1]); // 999 dropped
+    expect(map.get(1)![0].source).toBe('c'); // last-wins
+  });
+});
+
+// ── (o) B3 — a partial reader failure (one of N readers null) fails the WHOLE lane (gate reopens it) ──
+function bigSchedulerStub(prompt: string) {
+  const ids = [...new Set([...prompt.matchAll(/#(\d+)/g)].map((m) => Number(m[1])))];
+  // a big source (size > budget) → packReaders splits it into 2 reader-units (labels -r1of2 / -r2of2)
+  return {
+    lanes: ids.map((id) => ({
+      id,
+      sources: [
+        {
+          source: 'https://big' + id,
+          path: '/cache/big' + id + '.txt',
+          size: 260000,
+          chars: 520000,
+        },
+      ],
+    })),
+  };
+}
+function partialFailAgent(prompt: string, opts: AgentOpts) {
+  const L = opts.label;
+  if (L === 'scout') return SCOUT_OUT;
+  if (L === 'prospector') return PROSPECT_OUT;
+  if (L === 'brainer-w0')
+    return {
+      resultSoFar: RSF,
+      rescore: [{ id: 1, score: 80 }],
+      add: [],
+      lookupNext: [{ id: 1 }],
+      rename: [],
+      drop: [],
+      stop: { done: false, reason: 'go' },
+    };
+  if (L === 'brainer-w1')
+    return {
+      resultSoFar: RSF,
+      rescore: [],
+      add: [],
+      lookupNext: [],
+      rename: [],
+      drop: [],
+      stop: { done: true, reason: 'answered' },
+    };
+  if (L.startsWith('scheduler-')) return bigSchedulerStub(prompt);
+  if (L.includes('-r2of')) return null; // the SECOND reader-unit fails → a dropped chunk
+  if (L.startsWith('lane-')) return LANE_OUT; // the first reader-unit succeeds
+  if (L.startsWith('validator-'))
+    return {
+      checks: [{ id: 1, fulfilled: false, reason: 'partial' }],
+      enough: false,
+      missing: ['rest'],
+    };
+  if (L === 'initiator') return { refinement: { facts: [] }, synthesiser: { focus: '' } };
+  if (L.startsWith('judge-'))
+    return {
+      goalMet: true,
+      verificationSound: true,
+      needsCompute: false,
+      computeSound: true,
+      reasoning: 'ok',
+      directive: '',
+    };
+  if (L === 'synthesiser')
+    return { report: '# R', verdict: 'v', confidence: 'low', plan: [], openQuestions: [] };
+  throw new Error('partialFailAgent: unexpected label ' + L);
+}
+
+describe('ResearchReport.run — a dropped chunk fails the lane (B3 coverage gate)', () => {
+  it('reopens a lane when one of its reader-units failed (never masks the drop behind survivors)', async () => {
+    const RR = await loadEngine({ query: 'q', mode: 'goal' }, partialFailAgent);
+    const result = await new RR().run();
+    // the lane returned null despite reader-1 succeeding → the validator gate fired and reopened it
+    const vKey = keys(result).find((k) => k.endsWith('-validator.md'));
+    expect(vKey).toBeTruthy();
+    expect(result.files[vKey!]).toContain('Reopened');
+    expect(result.files[vKey!]).toContain('hnsw tuning');
+  });
+});
+
+// ── (p) B8 — the per-lane note is surfaced in waveMd + _rabbitHoles.json + _tree.md (no debug mode needed) ──
+function noteAgent(prompt: string, opts: AgentOpts) {
+  const L = opts.label;
+  if (L === 'brainer-w0')
+    return {
+      resultSoFar: RSF,
+      rescore: [{ id: 1, score: 80 }],
+      add: [],
+      lookupNext: [{ id: 1, note: 'DIG-NOTE', sources: ['arXiv (site:arxiv.org)'] }],
+      rename: [],
+      drop: [],
+      stop: { done: false, reason: 'go' },
+    };
+  return goalAgent(prompt, opts);
+}
+
+describe('ResearchReport.run — per-lane note observability (B8)', () => {
+  it('surfaces the lane note in the wave file, _rabbitHoles.json, and _tree.md', async () => {
+    const RR = await loadEngine({ query: 'q', mode: 'goal' }, noteAgent);
+    const result = await new RR().run();
+    expect(result.files['03-wave-0.md']).toContain('note: DIG-NOTE');
+    expect(
+      JSON.parse(result.files['_rabbitHoles.json']).pursued.some(
+        (r: { note?: string }) => r.note === 'DIG-NOTE',
+      ),
+    ).toBe(true);
+    expect(result.files['_tree.md']).toContain('DIG-NOTE');
+  });
+});
+
+// ── (q) MULTI-BRAINER (maxParallelBrainers > 1) — fork-and-branch: spawn a child, child declares LOST, root wins the gate ──
+describe('ResearchReport.run — multi-brainer fork-and-branch (B>1)', () => {
+  // root: w0 score seeds → w1 SPAWN a child onto the sharding branch (still active) → w2 declare done (→ gate → winner).
+  // child b1-sharding: pick a lane → w2 declare its branch LOST. Asserts: tree has 2 nodes, winner=root, loser file written.
+  function multiAgent(prompt: string, opts: AgentOpts) {
+    const L = opts.label;
+    const coord = (over: Record<string, unknown>) => ({
+      resultSoFar: RSF,
+      rescore: [],
+      add: [],
+      lookupNext: [],
+      rename: [],
+      drop: [],
+      stop: { done: false, reason: 'x' },
+      ...over,
+    });
+    if (L === 'scout') return SCOUT_OUT;
+    if (L === 'prospector') return PROSPECT_OUT;
+    // ROOT
+    if (L === 'brainer-w0')
+      return coord({
+        rescore: [
+          { id: 1, score: 80 },
+          { id: 2, score: 78 },
+        ],
+        lookupNext: [{ id: 1, sources: ['arXiv (site:arxiv.org)'] }],
+      });
+    if (L === 'brainer-w1')
+      return coord({
+        spawn: { id: 2, mandate: 'sharding' }, // fork a child onto the sharding branch
+        lookupNext: [{ keyword: 'root next lane', why: 'more', score: 75 }],
+      });
+    if (L === 'brainer-w2') return coord({ stop: { done: true, reason: 'root answered' } });
+    // CHILD  b1-sharding
+    if (L === 'brainer-b1-sharding-w1')
+      return coord({ lookupNext: [{ keyword: 'shard internals', why: 'deep', score: 70 }] });
+    if (L === 'brainer-b1-sharding-w2')
+      return coord({ stop: { done: false, lost: true, reason: 'sharding was a dead end' } });
+    // shared sub-agents
+    if (L.startsWith('scheduler-')) return schedulerStub(prompt);
+    if (L.startsWith('validator-')) return VALIDATE_OUT;
+    if (L.startsWith('lane-')) return LANE_OUT;
+    if (L === 'initiator')
+      return { refinement: { facts: [{ fact: 'f', why: 'w' }] }, synthesiser: { focus: 'lead' } };
+    if (L.startsWith('refine-')) return { report: 'hardened fact' };
+    if (L.startsWith('judge-'))
+      return {
+        goalMet: true,
+        verificationSound: true,
+        needsCompute: false,
+        computeSound: true,
+        reasoning: 'solid',
+        directive: '',
+        reopenRabbitHoles: [],
+      };
+    if (L === 'synthesiser')
+      return {
+        report: '# Winner report\n\nbody',
+        verdict: 'root wins',
+        confidence: 'high',
+        plan: ['ship'],
+        openQuestions: [],
+      };
+    if (L === 'debug-analyst') return { diagnosis: '# Debug\n\nok' };
+    throw new Error('multiAgent: unexpected label ' + L);
+  }
+
+  it('forks a child, abandons a lost branch, and the root wins the gate', async () => {
+    const RR = await loadEngine(
+      { query: 'q', mode: 'goal', maxParallelBrainers: 2, debug: false },
+      multiAgent,
+    );
+    const rr = new RR();
+    const result = await rr.run();
+    // two brainers in the tree: the root + the spawned child
+    expect(rr.liveBrainers.length).toBe(2);
+    const names = rr.liveBrainers.map((b: { name: string }) => b.name).sort();
+    expect(names).toEqual(['b1-sharding', 'root']);
+    // the root won its gate → canonical report
+    expect(rr.winner!.name).toBe('root');
+    expect(result.files['result.md']).toContain('Winner report');
+    // the child abandoned its branch
+    const child = rr.liveBrainers.find((b: { name: string }) => b.name === 'b1-sharding')!;
+    expect(child.status).toBe('lost');
+    // outputs: brainer tree + the loser's preserved partial
+    expect(result.files['_brainers-tree.md']).toContain('b1-sharding');
+    expect(result.files['_brainers-tree.md']).toContain('⚑WINNER');
+    expect(JSON.parse(result.files['_brainers.json']).winner).toBe('root');
+    expect(result.files['result-b1-sharding.md']).toContain('LOST');
   });
 });

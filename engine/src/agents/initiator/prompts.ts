@@ -5,7 +5,7 @@ import { FINISH } from '../shared.js';
 import type { InitiatorArgs } from '../../types/index.js';
 
 const INITIATOR_TPL = `{{! initiator — plans the finalize pipeline, shaping the finish to this query }}
-You direct the FINALIZE phase for: "{{query}}". The research is done; below is everything it gathered. Shape the finishing pipeline to fit this query, then return the plan.
+You direct the FINALIZE phase for: "{{query}}". The research is done; below is everything it gathered. Shape the finishing pipeline to fit this query, then return the plan.{{modeClause}}
 The finish runs in two parts, and you set how each starts:
 1. REFINEMENT — one refine agent per item adversarially fact-checks that group of load-bearing facts and returns them corrected and hardened. You decide the grouping. (A judge then evaluates the hardened answer and may trigger a derivation or a re-check; you do not plan that.)
 2. SYNTHESIS — writes the final report from the hardened, judged answer. You give it a focus note.
@@ -27,15 +27,22 @@ export const buildInitiator = ({
   waveLog,
   landscape,
   openRabbitHoles,
+  mode,
   thinkerNote,
 }: InitiatorArgs) => {
   const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
+  // collect mode ⇒ harden the BREADTH (coverage of the landscape), not the shape of a single answer.
+  const modeClause =
+    mode === 'collect'
+      ? ' This run was a COLLECT inventory, not a single-answer goal — harden BREADTH: the key claims and the major sub-areas that span the landscape, and set the report focus to completeness of the catalogue rather than the shape of one answer.'
+      : '';
   return render(INITIATOR_TPL, {
     query,
     resultSoFar: plain(resultSoFar),
     waveLog: plain(waveLog),
     landscape,
     openRabbitHoles: plain(openRabbitHoles),
+    modeClause,
     thinkerClause,
     FINISH,
   });

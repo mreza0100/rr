@@ -29,10 +29,15 @@ export const buildSynthesiser = ({
   cleanReports,
   focus,
   openRabbitHoles,
+  compute,
   thinkerNote,
 }: SynthesiserArgs) => {
   // the brain folds any finalize derivation into resultSoFar.working — present that as the quantitative result.
-  const hasCompute = !!(resultSoFar && resultSoFar.working && resultSoFar.working.trim());
+  // Key this on CONFIG.compute, NOT merely on a non-empty `working`: with compute OFF a derivation must NEVER be
+  // presented even if one leaked into resultSoFar (only an EXPLICIT compute:false suppresses it, so prompt-only
+  // callers that omit compute keep the present-when-derived default).
+  const hasCompute =
+    compute !== false && !!(resultSoFar && resultSoFar.working && resultSoFar.working.trim());
   const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
   const focusClause = focus
     ? `

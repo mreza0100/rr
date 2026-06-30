@@ -54,10 +54,6 @@ describe('Configs canonicalization', () => {
     expect(t.slug).toBe('hello-world-v2');
     expect(t.DIR).toBe('RR/hello-world-v2');
   });
-  it('sets MAX_SENTINEL_REOPENS by mode (goal 2 / collect 0)', () => {
-    expect(new Configs({ query: 'q', mode: 'goal' }).MAX_SENTINEL_REOPENS).toBe(2);
-    expect(new Configs({ query: 'q', mode: 'collect' }).MAX_SENTINEL_REOPENS).toBe(0);
-  });
   it('reads booleans + strings with type-guarded defaults', () => {
     expect(new Configs({ query: 'q' }).debug).toBe(true); // debug is ON by default
     expect(new Configs({ query: 'q', debug: false }).debug).toBe(false); // only debug:false turns it off
@@ -66,12 +62,10 @@ describe('Configs canonicalization', () => {
     expect(new Configs({ query: 'q', debugPrompt: 'why?' }).debugPrompt).toBe('why?');
     expect(new Configs({ query: 'q' }).debugPrompt).toBe('');
   });
-  it('reads computerNote and folds it into COMPUTER_NOTE', () => {
-    expect(new Configs({ query: 'q', computerNote: 'use sympy' }).computerNote).toBe('use sympy');
-    expect(new Configs({ query: 'q' }).computerNote).toBe('');
-    expect(new Configs({ query: 'q', computerNote: 'use sympy' }).COMPUTER_NOTE).toMatch(
-      /use sympy/,
-    );
+  it('reads computeNote and folds it into COMPUTE_NOTE', () => {
+    expect(new Configs({ query: 'q', computeNote: 'use sympy' }).computeNote).toBe('use sympy');
+    expect(new Configs({ query: 'q' }).computeNote).toBe('');
+    expect(new Configs({ query: 'q', computeNote: 'use sympy' }).COMPUTE_NOTE).toMatch(/use sympy/);
   });
   it('captures the COMPLETE launch args verbatim on rawArgs', () => {
     const a = { query: 'q', mode: 'collect', tag: 'v2', computerNote: 'use scipy', debug: false };
@@ -86,7 +80,62 @@ describe('Configs canonicalization', () => {
     expect(c.MAX_JUDGE_PASSES).toBe(2); // finalize: max remediation passes the judge may drive (judge runs ≤ MAX+1)
     expect(c.MAX_LANE_REFAILS).toBe(2); // crawl: max validator re-opens of one lane before it becomes a known gap
     expect(c.VALIDATOR_THIN).toBe(120); // crawl: finding length under which the validator gate fires
-    expect(c.PHASE.crawl).toBe('Research'); // model TIER + reasoning EFFORT now live per-agent in src/agents/* (asserted in agents.test.js)
+    expect(c.PHASE.crawl).toBe('Research');
+  });
+  it('centralizes the scattered caps + char budgets (single source of truth)', () => {
+    const c = new Configs({ query: 'q' });
+    expect(c.AUTO_CAP).toBe(5); // the auto-mode lanes/wave + sources/lane cap
+    expect(c.AUTO_SOURCE_DEFAULT).toBe(2);
+    expect(c.NEAR_DUP).toBe(0.85);
+    expect(c.FINALIZE_TOP_OPEN).toBe(6);
+    expect(c.VALIDATOR_INTRO_CHARS).toBe(240);
+    expect(c.VALIDATOR_MISSING_CHARS).toBe(300);
+    expect(c.PLATEAU_MIN_WAVES).toBe(3);
+    expect(c.PLATEAU_WINDOW).toBe(2);
+    expect(c.GENERAL_PURPOSE).toBe('general-purpose');
+  });
+  it('defines the forward knobs for the scheduler/researcher redesign', () => {
+    const c = new Configs({ query: 'q' });
+    expect(c.RESEARCHER_TOKEN_BUDGET).toBe(130000);
+    expect(c.BRAINER_LANE_CAP).toBe(5);
+    expect(c.CHUNK_OVERLAP_CHARS).toBe(2000);
+  });
+  it('anchors the reader budget + holds the scheduler/reader/starvation caps (B7/B10)', () => {
+    const c = new Configs({ query: 'q' });
+    expect(c.CHARS_PER_TOKEN).toBe(2);
+    expect(c.MAX_SLICES_PER_READER).toBe(8);
+    expect(c.MAX_SOURCES_PER_LANE).toBe(12);
+    expect(c.HANDOFF_CHARS).toBe(16000);
+    expect(c.MAX_STARVED_WAVES).toBe(2);
+    // B10 — the budget fits the researcher tier's context window, and (in chars) exceeds the overlap re-read
+    expect(c.RESEARCHER_TOKEN_BUDGET).toBeLessThanOrEqual(c.CONTEXT[c.TIER.researcher]);
+    expect(c.RESEARCHER_TOKEN_BUDGET * c.CHARS_PER_TOKEN).toBeGreaterThan(c.CHUNK_OVERLAP_CHARS);
+  });
+  it('coerces the compute arg STRICTLY — falsy strings/numbers never default to true (B8)', () => {
+    expect(new Configs({ query: 'q' }).compute).toBe(true); // unset → default true
+    expect(new Configs({ query: 'q', compute: false }).compute).toBe(false);
+    expect(new Configs({ query: 'q', compute: 'false' }).compute).toBe(false);
+    expect(new Configs({ query: 'q', compute: 'no' }).compute).toBe(false);
+    expect(new Configs({ query: 'q', compute: 0 }).compute).toBe(false);
+    expect(new Configs({ query: 'q', compute: 'true' }).compute).toBe(true);
+    expect(new Configs({ query: 'q', compute: 1 }).compute).toBe(true);
+    expect(() => new Configs({ query: 'q', compute: 'maybe' })).toThrow(/boolean/);
+    expect(() => new Configs({ query: 'q', compute: 2 })).toThrow(/boolean/);
+  });
+  it('normalizes mode case-insensitively + trims, unrecognized → goal (B8)', () => {
+    expect(new Configs({ query: 'q', mode: 'COLLECT' }).mode).toBe('collect');
+    expect(new Configs({ query: 'q', mode: '  Collect ' }).mode).toBe('collect');
+    expect(new Configs({ query: 'q', mode: 'GOAL' }).mode).toBe('goal');
+    expect(new Configs({ query: 'q', mode: 'weird' }).mode).toBe('goal'); // unrecognized → goal (warns, never throws)
+  });
+  it('holds the central TIER + EFFORT maps (incl. the forthcoming researchScheduler)', () => {
+    const c = new Configs({ query: 'q' });
+    expect(c.TIER.brainer).toBe('opus');
+    expect(c.TIER.scout).toBe('haiku');
+    expect(c.TIER.researchScheduler).toBe('sonnet');
+    expect(c.EFFORT.brainer).toBe('xhigh');
+    expect(c.EFFORT.scout).toBe('medium');
+    expect(c.EFFORT.researchScheduler).toBe('high');
   });
 });
 

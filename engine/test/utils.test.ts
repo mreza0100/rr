@@ -9,8 +9,9 @@ import {
   resultSoFarMd,
   waveMd,
   render,
+  packReaders,
 } from '../src/utils/index.js';
-import type { ResultSoFar } from '../src/types/index.js';
+import type { ResultSoFar, SchedulerSource } from '../src/types/index.js';
 
 describe('plain', () => {
   it('renders a string as-is', () => expect(plain('hello')).toBe('hello'));
@@ -189,5 +190,106 @@ describe('render', () => {
   });
   it('substitutes a placeholder whose value carries a newline', () => {
     expect(render('a{{c}}\n', { c: '\nmore' })).toBe('a\nmore');
+  });
+});
+
+describe('packReaders — the mechanical splitter (B5)', () => {
+  const BUDGET = 130000;
+  const OVERLAP = 2000;
+  const CPT = 2; // charsPerToken these cases assume (= CONFIG.CHARS_PER_TOKEN), passed explicitly now that the param is required
+  const src = (size: number, chars: number, n = 1): SchedulerSource => ({
+    source: 'https://s' + n + '.com',
+    path: '/cache/' + n + '.txt',
+    size,
+    chars,
+  });
+
+  it('COMBINES many small sources that fit the budget into ONE reader-unit', () => {
+    const sources = Array.from({ length: 8 }, (_, i) => src(1000, 2000, i)); // 8×1000 = 8000 ≤ budget
+    const readers = packReaders(sources, BUDGET, OVERLAP, Infinity, CPT);
+    expect(readers.length).toBe(1); // one reader holds all 8 whole files
+    expect(readers[0].length).toBe(8);
+    expect(readers[0].every((r) => r.offset === 0 && r.limit === 2000)).toBe(true);
+  });
+
+  it('SPLITS an oversized source across ceil(size/budget) readers with overlap at each boundary', () => {
+    const readers = packReaders([src(260000, 520000)], BUDGET, OVERLAP, Infinity, CPT); // 2× budget → 2 readers
+    expect(readers.length).toBe(2);
+    expect(readers[0]).toEqual([
+      { source: 'https://s1.com', cachePath: '/cache/1.txt', offset: 0, limit: 260000 },
+    ]);
+    // second window starts OVERLAP chars early (258000) and runs to the end (520000)
+    expect(readers[1]).toEqual([
+      { source: 'https://s1.com', cachePath: '/cache/1.txt', offset: 258000, limit: 262000 },
+    ]);
+  });
+
+  it('one protocol for "1 big + 2 small": the big splits, the smalls combine → 3 readers', () => {
+    const readers = packReaders(
+      [src(260000, 520000, 0), src(1000, 2000, 1), src(1000, 2000, 2)],
+      BUDGET,
+      OVERLAP,
+      Infinity,
+      CPT,
+    );
+    expect(readers.length).toBe(3);
+    expect(readers[0].length).toBe(1); // big, part 1
+    expect(readers[1].length).toBe(1); // big, part 2
+    expect(readers[2].length).toBe(2); // the two smalls combined into the trailing reader
+  });
+
+  it('flushes the current pack before a small source that would overflow the budget', () => {
+    const readers = packReaders(
+      [src(120000, 240000, 0), src(120000, 240000, 1)],
+      BUDGET,
+      OVERLAP,
+      Infinity,
+      CPT,
+    );
+    expect(readers.length).toBe(2); // 120k + 120k > budget → cannot share a reader
+    expect(readers[0].length).toBe(1);
+    expect(readers[1].length).toBe(1);
+  });
+
+  it('guards junk: missing chars are derived from size, and pathless/empty sources are dropped', () => {
+    const readers = packReaders(
+      [
+        { source: 'a', path: '/c/a.txt', size: 1000, chars: 0 } as SchedulerSource, // chars 0 → derive ~2000 from size
+        { source: 'b', path: '', size: 1000, chars: 2000 } as SchedulerSource, // no path → dropped
+      ],
+      BUDGET,
+      OVERLAP,
+      Infinity,
+      CPT,
+    );
+    expect(readers.length).toBe(1);
+    expect(readers[0].length).toBe(1);
+    expect(readers[0][0].limit).toBe(2000); // chars derived as size×2
+  });
+
+  it('returns no readers for an empty source list', () => {
+    expect(packReaders([], BUDGET, OVERLAP, Infinity, CPT)).toEqual([]);
+  });
+
+  it('splits on the CHAR ceiling even when the token size says it fits (B2 unit consistency)', () => {
+    // size 1000 ≤ budget, but chars 600000 ≫ budgetChars (260000) → must split by the char dimension
+    const readers = packReaders([src(1000, 600000)], BUDGET, OVERLAP, Infinity, CPT);
+    expect(readers.length).toBe(3); // ceil(600000 / 260000)
+    expect(readers.every((r) => r.length === 1)).toBe(true);
+    expect(readers.every((r) => r[0].limit <= 260000 + OVERLAP)).toBe(true); // no window exceeds the char ceiling + overlap
+  });
+
+  it('caps the slices combined into ONE reader at maxSlices (B7)', () => {
+    const sources = Array.from({ length: 10 }, (_, i) => src(1000, 2000, i)); // 1 reader uncapped
+    const readers = packReaders(sources, BUDGET, OVERLAP, 3, CPT); // cap 3 whole sources per reader
+    expect(readers.length).toBe(4); // ceil(10 / 3)
+    expect(readers[0].length).toBe(3);
+    expect(readers[3].length).toBe(1);
+  });
+
+  it('honors a custom charsPerToken for the char ceiling', () => {
+    // charsPerToken 1 → budgetChars = budget (130000); chars 200000 > 130000 → must split
+    const readers = packReaders([src(1000, 200000)], BUDGET, OVERLAP, Infinity, 1);
+    expect(readers.length).toBeGreaterThan(1);
   });
 });

@@ -1,27 +1,15 @@
 export const meta = {
   name: 'Research and Report',
   description:
-    'Research and Report — unbounded best-first web crawl steered by a BRAINER over a persistent id-keyed rabbit-hole store. haiku scout seeds rabbit-holes → opus PROSPECTOR names the high-value authoritative source venues → [the brainer looks up OR originates the rabbit-holes worth pursuing AND assigns each its relevant venue subset → parallel haiku lane-researchers pursue (preferring their assigned venues) → the brainer returns delta updates (rescore / add / lookupNext / rename / drop), maintains a running resultSoFar, decides done; in goal mode a sentinel may reopen a premature done and force one more wave] until done / rabbithole-dry / wave hard-cap (15) → FINALIZE: an opus INITIATOR names the load-bearing facts + report focus → a sonnet refine pass fact-checks + hardens those facts against the sources → an opus JUDGE judges the hardened answer (goal met, verification real, derivation valid) and steers a bounded remediation loop — the brain derives the answer (writing + running code, propagating error bars) when one is needed, refine re-checks a mis-hardened fact, or the crawl reopens on a real gap → an opus synthesiser writes the 7-section report. Pursued-archive (no delete-on-pursue) + pursued memory; scoreHistory rides natively on each rabbit-hole id. Two modes: goal (satisficing) / collect (exhaustive). Returns per-wave markdown + refinement + report + _rabbitHoles.json.',
+    'Research and Report — unbounded best-first web crawl steered by a BRAINER over a persistent id-keyed rabbit-hole store. haiku scout seeds rabbit-holes → opus PROSPECTOR names the high-value authoritative source venues → [the brainer looks up OR originates the rabbit-holes worth pursuing, assigning each its venue subset + a steering `note` (what to find + ranked fallbacks) → a sonnet SCHEDULER discovers + sizes the highest-value sources per lane (batched search, then mcp__harvester size_only → {size, path}) → code bin-packs each lane into 130k-token reader-units and runs ONE sequential haiku reader thread per lane (each reads its assigned cache slice off disk, carrying a running answer across all the lane sources) → the brainer returns delta updates (rescore / add / lookupNext / rename / drop), maintains a running resultSoFar, decides done] until done / rabbithole-dry / wave hard-cap (15) → FINALIZE: an opus INITIATOR names the load-bearing facts + report focus → a sonnet refine pass fact-checks + hardens those facts against the sources → an opus JUDGE — the sole terminal skeptic, also handed the leftover open rabbit-holes — judges the hardened answer (goal met, verification real, derivation valid) and steers a bounded remediation loop — the brain derives the answer (writing + running code, propagating error bars) when one is needed, refine re-checks a mis-hardened fact, or the crawl reopens on a real gap → an opus synthesiser writes the 8-section report. Pursued-archive (no delete-on-pursue) + pursued memory; scoreHistory rides natively on each rabbit-hole id. Two modes: goal (satisficing) / collect (exhaustive). Returns per-wave markdown + refinement + report + _rabbitHoles.json.',
+  // ONLY the always-first phase is declared; everything after Scout is driven dynamically by phase() calls in run
+  // order — each crawl wave its own phase (Research wN), then Finalize ONLY when a brainer declares done, then Debug
+  // only at the very end. Declaring Finalize/Debug statically would pin them ahead of the dynamic wave phases.
   phases: [
     {
       title: 'Scout',
       detail:
-        'the seed: haiku scout maps the landscape (fetch sources with the rabbit-hole footer) → opus prospector names the high-value authoritative source venues → the brainer scores the scout rabbit-holes, assigns each its venue subset, and looks up the first wave',
-    },
-    {
-      title: 'Research',
-      detail:
-        'each wave: the brainer looks up OR originates the rabbit-holes worth pursuing + assigns each its venue subset → parallel haiku lane-researchers pursue (preferring assigned venues) → the brainer returns delta updates (rescore / add / lookupNext), maintains the running resultSoFar (knows pursued + score trajectory), decides done; goal-mode sentinel can force one more wave on a real gap',
-    },
-    {
-      title: 'Finalize',
-      detail:
-        'an opus INITIATOR names the load-bearing facts + report focus → refinement (a sonnet refine agent fact-checks + hardens each fact against the sources) → an opus JUDGE judges the hardened answer and drives a bounded remediation loop — the brain DERIVES the answer (writing + running code, propagating error bars) when one is needed, refine re-checks a mis-hardened fact, or the crawl reopens on a real gap → an opus synthesiser writes the report',
-    },
-    {
-      title: 'Debug',
-      detail:
-        'opt-in (arg.debug): a final Debug & Analysis agent consolidates metrics + run log + raw agent I/O into one _debug.md — incl. prospector→researcher venue-utilization and any arg.debugPrompt question',
+        'the seed: haiku scout maps the landscape (fetch sources with the rabbit-hole footer) → opus prospector names the high-value authoritative source venues → the brainer (wave 0) scores the scout rabbit-holes, assigns each its venue subset, and looks up the first wave',
     },
   ],
 };
@@ -33,7 +21,7 @@ export const meta = {
 // Two kinds live here:
 //   • static PROMPT fragments (FINISH, WEB_ONLY) — guard clauses appended to several agents'
 //     prompts. (The run-DERIVED fragments — NET, FOOTER, RUBRIC, STOP, THINKER_NOTE,
-//     RESEARCHER_NOTE, COMPUTER_NOTE — are built per run on the CONFIG singleton in ../config.js.)
+//     RESEARCHER_NOTE, COMPUTE_NOTE — are built per run on the CONFIG singleton in ../config.js.)
 //   • shared StructuredOutput SCHEMA bricks — the nested sub-schemas reused across more than one
 //     agent's output contract (RABBITHOLE), plus the single-source nested bricks the top-level
 //     contracts compose. Each agent's TOP-LEVEL schema is co-located in its own file; these
@@ -42,7 +30,7 @@ export const meta = {
                                                 
 
 // ── static prompt guard clauses ──
-// FINISH: the pure reducers (brainer, sentinel, initiator, synthesiser) already hold the data they
+// FINISH: the pure reducers (brainer, initiator, synthesiser) already hold the data they
 // need — they MAY use a tool if it genuinely helps, but the hard rule is they FINISH: emit the
 // COMPLETE StructuredOutput rather than getting lost (the wave-0 brainer once spent its whole turn
 // reading this repo's own files on a self-referential query and never emitted resultSoFar/lookupNext/stop).
@@ -50,7 +38,7 @@ const FINISH = `
 The data above is enough to decide. You may consult a tool if it genuinely helps, but keep it brief — the answer does not require it. Your one required action: return the complete StructuredOutput with every required field, never a partial object.`;
 // WEB_ONLY: the refine pass checks claims on the web — the local repo code is never evidence.
 const WEB_ONLY = `
-Use the web only (WebSearch/WebFetch) to check sources — never read local files or this repo's own code; they are not evidence.`;
+Use the web only (WebSearch / mcp__harvester__fetch) to check sources — never read local files or this repo's own code; they are not evidence.`;
 
 // ── shared schema bricks (declaration order respects nesting) ──
 const RABBITHOLE         = {
@@ -91,6 +79,11 @@ const LOOKUP         = {
       items: { type: 'string' },
       description:
         'subset of the prospector venue identifiers (their exact `source` strings) best suited to THIS rabbit-hole — its researcher will prefer these. Empty if none fit.',
+    },
+    note: {
+      type: 'string',
+      description:
+        'the research directive for THIS lane — WHAT to find plus ranked fallbacks ("if not X, focus on Y; give both if available"). Steers BOTH the scheduler (which sources to pick) and the reader (what to extract). Distinct from `why` (your store/scoring rationale).',
     },
     ref: {
       type: 'string',
@@ -155,12 +148,19 @@ const RESULT_SO_FAR         = {
 };
 // ╔══ module: src/config.ts ═══════════════════════════════════════════════
 // ─────────────────────────────────────────────────────────────────────────────
-// Configs — validates the injected JSON args (which can be ANYTHING) and fills
-// safe defaults in the constructor. One immutable CONFIG singleton holds the run.
-// (Per-agent tier/effort/schema/prompt-builder live in src/agents/<agent>/; the
-// shared prompt fragments + schema bricks live in src/agents/shared.ts.)
+// Configs — THE single source of truth for the whole engine. ALL configuration
+// lives here: tunable knobs, caps, char budgets, the per-agent model TIER + reasoning
+// EFFORT maps, and the run-derived prompt fragments. Nothing is hardcoded elsewhere —
+// engine.ts / utils / store / the agent modules READ every number and policy off the
+// CONFIG singleton. Change a value here and it changes everywhere; never re-introduce a
+// literal in another module.
+//
+// Configs also validates the injected JSON args (which can be ANYTHING) and fills safe
+// defaults in the constructor. One immutable CONFIG singleton holds the run. (Each agent's
+// schema + prompt-builder still live in src/agents/<agent>/; its tier/effort value lives
+// ONLY in the TIER/EFFORT maps below — the agent module reads it from CONFIG.)
 // ─────────────────────────────────────────────────────────────────────────────
-                                                                
+                                                                              
 
 class Configs {
   // run config (validated + defaulted)
@@ -168,18 +168,40 @@ class Configs {
   mode      ;
   maxWave                 ;
   HARD_CAP        ;
+  maxParallelBrainers        ; // max LIVE brainers in the brainer tree (1 = today's single-brainer behavior; clamps to a hard ceiling of 5)
+  MAX_BRAINER_DEPTH        ; // safety cap on spawn-chain depth (a child of a child of … )
   parallelLaneResearchAgentsPerWave                 ;
   parallelSourcesPerLaneResearchAgent                 ;
   PHASE          ;
-  MAX_SENTINEL_REOPENS        ;
   MAX_JUDGE_PASSES        ;
   MAX_LANE_REFAILS        ;
   VALIDATOR_THIN        ;
+  VALIDATOR_INTRO_CHARS        ;
+  VALIDATOR_MISSING_CHARS        ;
   QUERY_PLATEAU        ;
+  PLATEAU_MIN_WAVES        ;
+  PLATEAU_WINDOW        ;
   AGENT_RETRIES        ;
   INJECT_SCORE        ;
+  AUTO_CAP        ;
+  AUTO_SOURCE_DEFAULT        ;
+  NEAR_DUP        ;
+  FINALIZE_TOP_OPEN        ;
+  RESEARCHER_TOKEN_BUDGET        ;
+  BRAINER_LANE_CAP        ;
+  CHUNK_OVERLAP_CHARS        ;
+  CHARS_PER_TOKEN        ;
+  CONTEXT                      ;
+  MAX_SLICES_PER_READER        ;
+  MAX_SOURCES_PER_LANE        ;
+  HANDOFF_CHARS        ;
+  MAX_STARVED_WAVES        ;
+  TREE_LOG_WIDTH        ;
+  GENERAL_PURPOSE        ;
+  TIER                      ;
+  EFFORT                        ;
   compute         ;
-  computerNote        ;
+  computeNote        ;
   thinkerNote        ;
   researcherNote        ;
   debug         ;
@@ -191,7 +213,7 @@ class Configs {
   // derived prompt fragments woven into the agent builders
   FOOTER        ;
   NET        ;
-  COMPUTER_NOTE        ;
+  COMPUTE_NOTE        ;
   THINKER_NOTE        ;
   RESEARCHER_NOTE        ;
   RUBRIC        ;
@@ -215,9 +237,26 @@ class Configs {
     this.rawArgs = arg; // capture the COMPLETE launch args verbatim — persisted into the output files
     // typed readers — keep the supplied value only when it is the right type, else fall back to the default
     const str = (v         , d        )         => (typeof v === 'string' && v.length ? v : d);
-    const posInt = (v         , d        )         =>
-      Number.isInteger(v) && (v          ) > 0 ? (v          ) : d;
     const bool = (v         , d         )          => (typeof v === 'boolean' ? v : d);
+    // coerceBool — a STRICT boolean reader (B8): a real boolean passes; the common string/number truthy/falsy
+    // spellings coerce explicitly; absent ⇒ the default; ANYTHING else throws LOUDLY rather than silently
+    // defaulting. (A bare `bool()` would default "false"/0/"no" back to true — a foot-gun for `compute:false`.)
+    const coerceBool = (v         , d         )          => {
+      if (v === undefined || v === null) return d;
+      if (typeof v === 'boolean') return v;
+      if (typeof v === 'number') {
+        if (v === 1) return true;
+        if (v === 0) return false;
+        throw new Error('RR: expected a boolean, got number ' + v);
+      }
+      if (typeof v === 'string') {
+        const s = v.trim().toLowerCase();
+        if (s === 'true' || s === '1' || s === 'yes' || s === 'on') return true;
+        if (s === 'false' || s === '0' || s === 'no' || s === 'off') return false;
+        throw new Error('RR: expected a boolean-ish value, got string "' + v + '"');
+      }
+      throw new Error('RR: expected a boolean, got ' + typeof v);
+    };
     const autoInt = (v         , lo        , hi        , d                 )                  =>
       v === 'auto'
         ? 'auto'
@@ -225,29 +264,110 @@ class Configs {
           ? Math.min(hi, Math.max(lo, v          ))
           : d;
 
+    // ---- centralized constants (the single source of truth — no literal of these lives anywhere else) ----
+    this.AUTO_CAP = 5; // auto-mode hard cap on lanes/wave AND sources/lane (the brainer is never told the number); read by the lane+source autoInt bounds, utils laneCount, and the engine srcCount
+    this.AUTO_SOURCE_DEFAULT = 2; // auto-mode sources/lane when the brainer assigns none to a lane
+    this.NEAR_DUP = 0.85; // store dedup: Jaccard token-set overlap ≥ this counts as "the same lead, reworded"; kept high so distinct leads are never merged
+    this.FINALIZE_TOP_OPEN = 6; // finalize: how many top open rabbit-holes feed the initiator + synthesiser (Open questions)
+    this.VALIDATOR_INTRO_CHARS = 240; // crawl: char budget for each finding's intro handed to the validator gate
+    this.VALIDATOR_MISSING_CHARS = 300; // crawl: char budget for the validator's `missing` gaps threaded into the next brainer
+    this.PLATEAU_MIN_WAVES = 3; // collect DRY: minimum waves before the novelty-plateau stop can fire
+    this.PLATEAU_WINDOW = 2; // collect DRY: how many trailing top-scores must all sit ≤ QUERY_PLATEAU×peak to call it dry
+    // scheduler/reader knobs (B4/B5) — read by utils.packReaders + the engine lane threads
+    this.RESEARCHER_TOKEN_BUDGET = 130000; // one reader-unit budget: the calibrated safe ceiling a single reader may carry (the bin-pack unit)
+    this.BRAINER_LANE_CAP = 5; // lanes/wave — the wave bound (≥ this many lanes never run in one wave)
+    this.CHUNK_OVERLAP_CHARS = 2000; // overlap re-read at each split boundary when one source is packed across multiple reader-units
+    // CHARS_PER_TOKEN — inverts Harvester's size_only token heuristic (tokens ≈ chars/2 for prose, A6) so the
+    // engine's CHAR windows agree with the scheduler's TOKEN sizes: budget(tokens) × CHARS_PER_TOKEN = the char
+    // ceiling a reader-unit may span. The heuristic deliberately OVER-counts tokens (real prose is ~chars/4), so
+    // 130k heuristic-tokens ≈ ~65k real tokens — comfortably inside the worker context window with headroom.
+    this.CHARS_PER_TOKEN = 2;
+    // CONTEXT — each tier's real context window (Claude models, tokens). The reader budget is ANCHORED against the
+    // researcher tier's window below (a reader-unit can never be asked to ingest more than the model can hold).
+    this.CONTEXT = { haiku: 200000, sonnet: 200000, opus: 200000 };
+    this.MAX_SLICES_PER_READER = 8; // B7: max whole sources combined into ONE reader-unit (a lane of 40 tiny files never packs 40 into one turn)
+    this.MAX_SOURCES_PER_LANE = 12; // B7: max sources packed per lane per wave (caps a runaway scheduler lane before bin-packing)
+    this.HANDOFF_CHARS = 16000; // B7: cap the running-answer handoff carried between sequential readers (keeps read + handoff inside context)
+    this.MAX_STARVED_WAVES = 2; // B6: consecutive all-null / empty-schedule waves before the crawl breaks with stopReason scheduler-starved
+    this.MAX_BRAINER_DEPTH = 3; // safety cap on the spawn-chain depth (root=0); spawning past this depth is refused
+    this.TREE_LOG_WIDTH = 120; // crawl-tree render: per-line clip width for the LIVE TERMINAL log ONLY — the persisted _tree.md + returned tree keep full, unclipped lines
+    this.GENERAL_PURPOSE = 'general-purpose'; // the harness agentType handed to code-capable / tool-using sub-agents
+    // Per-agent model TIER + reasoning EFFORT — keyed by agent name; each src/agents/<agent>/ module reads its value
+    // here (the tiering rationale travels in each agent's own comment). Brainer = ALWAYS Opus + xhigh (the global
+    // brain/reducer); scout + researcher = Haiku (bounded summarize + extract — the page reading is the fixed
+    // Haiku reader's job); escalate only on measured failure.
+    this.TIER = {
+      scout: 'haiku',
+      prospector: 'opus',
+      brainer: 'opus',
+      validator: 'sonnet',
+      researcher: 'haiku',
+      researchScheduler: 'sonnet',
+      initiator: 'opus',
+      refiner: 'sonnet',
+      judge: 'opus',
+      synthesiser: 'opus',
+      debugAnalyst: 'opus',
+    };
+    this.EFFORT = {
+      scout: 'medium',
+      prospector: 'high',
+      brainer: 'xhigh',
+      validator: 'medium',
+      researcher: 'medium',
+      researchScheduler: 'high',
+      initiator: 'xhigh',
+      refiner: 'high',
+      judge: 'xhigh',
+      synthesiser: 'xhigh',
+      debugAnalyst: 'high',
+    };
+    // ANCHOR the reader budget (B10) — now that TIER is set: a reader-unit must FIT the researcher tier's context
+    // window, and (in chars) EXCEED the overlap re-read so every split makes forward progress. Fail loudly otherwise.
+    if (this.RESEARCHER_TOKEN_BUDGET > this.CONTEXT[this.TIER.researcher])
+      throw new Error(
+        'RR config: RESEARCHER_TOKEN_BUDGET exceeds the researcher tier context window',
+      );
+    if (this.RESEARCHER_TOKEN_BUDGET * this.CHARS_PER_TOKEN <= this.CHUNK_OVERLAP_CHARS)
+      throw new Error(
+        'RR config: RESEARCHER_TOKEN_BUDGET (in chars) must exceed CHUNK_OVERLAP_CHARS',
+      );
+
     // ---- run config (validated + defaulted) ----
     this.query = arg.query;
-    this.mode = arg.mode === 'collect' ? 'collect' : 'goal'; // canonical mode; anything not 'collect' → 'goal'
+    // normalize mode (B8): trim + lowercase BEFORE the 'collect' test (so 'Collect'/' COLLECT ' canonicalize),
+    // and warn LOUDLY when a non-empty mode fails to match either canonical value instead of silently → goal.
+    const rawMode = arg.mode == null ? '' : String(arg.mode).trim().toLowerCase();
+    this.mode = rawMode === 'collect' ? 'collect' : 'goal'; // canonical mode; anything not 'collect' → 'goal'
+    if (rawMode && rawMode !== 'collect' && rawMode !== 'goal') {
+      try {
+        if (typeof log === 'function')
+          log('⚠ RR: unrecognized mode "' + String(arg.mode) + '" → defaulting to goal');
+      } catch (e) {
+        /* log not available at construction (unit test) → skip the warning */
+      }
+    }
     this.maxWave = autoInt(arg.maxWave, 5, 15, 'auto'); // 'auto' (brainer-stopped, capped at HARD_CAP) or a clamped [5,15] override
     this.HARD_CAP = 15; // absolute ceiling on waves — no run ever exceeds this
+    // maxParallelBrainers: max LIVE brainers in the brainer tree. A positive integer clamps to [1,5];
+    // anything else (absent / 'auto' / junk) defaults to 1 — today's single-brainer behavior, so the tree is strictly opt-in.
+    this.maxParallelBrainers =
+      Number.isInteger(arg.maxParallelBrainers) && (arg.maxParallelBrainers          ) > 0
+        ? Math.min(5, Math.max(1, arg.maxParallelBrainers          ))
+        : 1;
     this.parallelLaneResearchAgentsPerWave = autoInt(
       arg.parallelLaneResearchAgentsPerWave,
       1,
-      5,
+      this.AUTO_CAP,
       'auto',
-    ); // lanes/wave: 'auto' (brainer-assigned, hidden cap 5) or clamped [1,5]
+    ); // lanes/wave: 'auto' (brainer-assigned, hidden cap AUTO_CAP) or clamped [1,AUTO_CAP]
     this.parallelSourcesPerLaneResearchAgent = autoInt(
       arg.parallelSourcesPerLaneResearchAgent,
       1,
-      5,
+      this.AUTO_CAP,
       'auto',
-    ); // sources/lane: 'auto' (brainer-assigned, hidden cap 5) or clamped [1,5]
-    // Per-agent model TIER + reasoning EFFORT now live co-located in each src/agents/<agent>/ module
-    // (the engine reads <agent>.tier / <agent>.effort). The tiering rationale travels with each agent: brainer
-    // = ALWAYS Opus + xhigh (the global brain/reducer); scout + lane-researcher = Haiku (bounded summarize +
-    // extract — the page reading is the fixed Haiku WebFetch digester's job); escalate only on measured failure.
+    ); // sources/lane: 'auto' (brainer-assigned, hidden cap AUTO_CAP) or clamped [1,AUTO_CAP]
     this.PHASE = { scout: 'Scout', crawl: 'Research', finalize: 'Finalize', debug: 'Debug' };
-    this.MAX_SENTINEL_REOPENS = this.mode === 'goal' ? 2 : 0; // L4: max extra waves the goal-mode sentinel may force (collect mode never reopens → 0)
     this.MAX_JUDGE_PASSES = 2; // finalize: max remediation passes the judge may drive (brain-compute / re-refine / crawl-reopen) before the report is written — the judge runs at most MAX+1 times
     this.MAX_LANE_REFAILS = 2; // crawl: max times the per-wave validator re-opens one lane after a null/thin return; after that it surfaces as a known gap (no infinite loop)
     this.VALIDATOR_THIN = 120; // crawl: a finding shorter than this (chars) is "thin" → it (or any null lane) gates the validator to run that wave
@@ -256,11 +376,11 @@ class Configs {
     // retry-cap exceeded on a JS-rendered page) often clears on a clean re-run; only after the retries are exhausted does it degrade to null
     // (handled by the existing null-guards) instead of throwing and crashing the WHOLE workflow.
     this.AGENT_RETRIES = 2;
-    this.INJECT_SCORE = 90; // L4: score for sentinel-injected gap rabbit-holes — high, so they top the store
-    this.compute = bool(arg.compute, true); // master switch for ALL derivation: false → the brainer runs as a plain subagent (no code) + no finalize derivation (the brainer/judge are told it is off)
-    this.computerNote = str(arg.computerNote, ''); // optional run-specific compute guidance; appended after the baked stack note (COMPUTER_NOTE) the compute-aware agents receive
+    this.INJECT_SCORE = 90; // score for judge-reopened gap rabbit-holes (finalize crawl-reopen) — high, so they top the store
+    this.compute = coerceBool(arg.compute, true); // master switch for ALL derivation: false → the brainer runs as a plain subagent (no code) + no finalize derivation (the brainer/judge are told it is off). STRICT: "false"/0/"no" coerce to false, never silently default to true
+    this.computeNote = str(arg.computeNote, ''); // optional run-specific compute guidance; appended after the baked stack note (COMPUTE_NOTE) the compute-aware agents receive
     this.thinkerNote = str(arg.thinkerNote, ''); // optional operator run-steering (priorities/framing/constraints/audience); reaches the Opus reasoning tier ONLY (THINKER_NOTE), pure passthrough
-    this.researcherNote = str(arg.researcherNote, ''); // optional operator note to the web-research/probe agents (RESEARCHER_NOTE); terse passthrough, reaches scout/prospector/researcher/brainer/sentinel
+    this.researcherNote = str(arg.researcherNote, ''); // optional operator note to the web-research/probe agents (RESEARCHER_NOTE); terse passthrough, reaches scout/prospector/researcher/brainer
     this.debug = bool(arg.debug, true); // last-phase Debug & Analysis agent → one _debug.md (raw agent I/O + run log + metrics); ON by default, pass debug:false to turn it off
     this.debugPrompt = str(arg.debugPrompt, ''); // optional run-specific analysis question handed to the debug agent
     this.tag = str(arg.tag, ''); // optional slug suffix so parallel variants of one query write to distinct dirs
@@ -275,14 +395,13 @@ class Configs {
     // ---- shared prompt fragments (woven into the builders below) ----
     this.FOOTER = `Then append a section titled "Rabbit holes": 0-5 rabbit-holes worth a researcher's time, prioritizing the biggest gaps the page raises but does not explain. Each rabbit-hole: a concrete next web-search query and one line on why it matters. If the page is a dead end or self-contained, give 1 or none — do not pad. Skip anything the page already explains.
 Then append a section titled "Next sources": up to 5 of the page's highest-value outbound citations or links as concrete fetch targets — each the exact URL or DOI the page points to, plus one line on why following it matters. Give none when the page cites nothing worth following.`;
-    // L3 (directive A): primary tools are WebSearch + WebFetch, but agents MAY reach for any other tool that genuinely helps the rabbit-hole.
-    this.NET = `Primary tools: WebSearch + WebFetch — load them via ToolSearch "select:WebSearch,WebFetch" if absent. You may also load any other tool that genuinely helps THIS rabbit-hole (e.g. context7 for library/API docs) via ToolSearch — pick the best tool for the question, not only web search. Prefer primary, recent sources; stay on-rabbit-hole.
-PDF sources: WebFetch garbles PDFs. When a source is a PDF (its URL ends in .pdf, or WebFetch returns binary/garbled text), do not keep retrying it — load Bash via ToolSearch and read the PDF on disk with pypdf (already installed). Fetch then extract: f=$(mktemp --suffix=.pdf); curl -sL "<url>" -o "$f"; python3 -c "import pypdf; print(chr(10).join((p.extract_text() or '') for p in pypdf.PdfReader('$f').pages))" — then work from the printed text.`;
-    // COMPUTER_NOTE — capability fragment for the compute-aware agents (mirrors NET). Names the scientific Python stack the compute
-    // environment ships so they reach for it over hand-rolled math; the optional computerNote arg appends per-run guidance after it.
-    this.COMPUTER_NOTE =
+    // L3 (directive A): primary tools are WebSearch + mcp__harvester__fetch, but agents MAY reach for any other tool that genuinely helps the rabbit-hole.
+    this.NET = `Primary tools: WebSearch + mcp__harvester__fetch — load WebSearch via ToolSearch "select:WebSearch" if absent (built-in WebFetch is hook-denied; fetch only through Harvester). You may also load any other tool that genuinely helps THIS rabbit-hole (e.g. context7 for library/API docs) via ToolSearch — pick the best tool for the question, not only web search. Prefer primary, recent sources; stay on-rabbit-hole.`;
+    // COMPUTE_NOTE — capability fragment for the compute-aware agents (mirrors NET). Names the scientific Python stack the compute
+    // environment ships so they reach for it over hand-rolled math; the optional computeNote arg appends per-run guidance after it.
+    this.COMPUTE_NOTE =
       `The compute environment's python3 ships a scientific stack — prefer it over hand-rolled math: scipy (integration/ODEs, optimization, stats, linear algebra), sympy (symbolic math + dimensional/algebra checks), uncertainties or a numpy Monte-Carlo for error-bar propagation, pint for unit consistency, pandas + statsmodels + scikit-learn for data and statistics, networkx for graph/path reasoning, rdkit for molecular similarity. Import what fits the derivation instead of coding the method yourself.` +
-      (this.computerNote ? '\n' + this.computerNote : '');
+      (this.computeNote ? '\n' + this.computeNote : '');
     // THINKER_NOTE — the operator's run-steering, labeled so the reasoning tier treats it as HOW to approach the run (priorities,
     // framing, constraints, audience) rather than WHAT to research. Pure passthrough of the thinkerNote arg; empty ⇒ nothing renders.
     this.THINKER_NOTE = this.thinkerNote
@@ -290,7 +409,7 @@ PDF sources: WebFetch garbles PDFs. When a source is a PDF (its URL ends in .pdf
         this.thinkerNote
       : '';
     // RESEARCHER_NOTE — the operator's terse one-line note to the agents that DO web research/fetching (scout, prospector,
-    // lane-researcher, brainer, sentinel). Minimal framing — a short prefix then the note. Pure passthrough; empty ⇒ nothing renders.
+    // researcher, brainer). Minimal framing — a short prefix then the note. Pure passthrough; empty ⇒ nothing renders.
     this.RESEARCHER_NOTE = this.researcherNote ? 'Research note: ' + this.researcherNote : '';
     this.RUBRIC =
       this.mode === 'collect'
@@ -305,7 +424,16 @@ PDF sources: WebFetch garbles PDFs. When a source is a PDF (its URL ends in .pdf
 const CONFIG = new Configs(args);
 // ╔══ module: src/utils/index.ts ══════════════════════════════════════════
 
-                                                                                          
+             
+           
+          
+            
+              
+                  
+             
+       
+        
+                           
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pure helpers — stateless transforms + the file/markdown renderers.
@@ -327,9 +455,11 @@ const normRef = (s                           )         =>
     .replace(/\/+$/, '');
 const lab = (s        )         => norm(s).replace(/ /g, '-').slice(0, 24);
 const padIdx = (n        )         => String(n).padStart(2, '0');
+// clip — when s exceeds n chars, keep the first n-3 and append '…'; shorter strings pass through unchanged.
+const clip = (s        , n        )         => (s.length > n ? s.slice(0, n - 3) + '…' : s);
 const lastScore = (r                                )                =>
   r.scoreHistory.length ? r.scoreHistory[r.scoreHistory.length - 1].score : null;
-// one-line render of an open store entry for the brainer / sentinel: `#id [last score or "new"] keyword — why`
+// one-line render of an open store entry for the brainer: `#id [last score or "new"] keyword — why`
 // (a ` ↪ ref` suffix flags a lead that carries a concrete URL/DOI to fetch directly).
 const openLine = (r   
              
@@ -389,15 +519,98 @@ function plain(value         , opts                      )         {
   return lines.join('\n');
 }
 
-// the HIDDEN lane cap: the brainer is never told a count — JS clamps to laneCount (5 in auto) here.
+// the HIDDEN lane cap: the brainer is never told a count — JS clamps to laneCount (AUTO_CAP in auto) here.
 const laneCount         =
   CONFIG.parallelLaneResearchAgentsPerWave === 'auto'
-    ? 5
+    ? CONFIG.AUTO_CAP
     : CONFIG.parallelLaneResearchAgentsPerWave;
 const trailOf = (path          , keyword         )         =>
-  [CONFIG.query.length > 60 ? CONFIG.query.slice(0, 57) + '…' : CONFIG.query]
-    .concat(path || [], keyword ? [keyword] : [])
-    .join('  →  ');
+  [clip(CONFIG.query, 60)].concat(path || [], keyword ? [keyword] : []).join('  →  ');
+
+// map the brainer's assigned source-identifier strings back to the full {source, goodFor} venue objects (for the
+// researcher prompt) — looked up against the prospector's high-value venue set on rr; an unknown id renders bare.
+const venuesFor = (rr                               , sources           )          => {
+  if (!sources || !sources.length) return [];
+  return sources.map(
+    (s) => rr.highValueSources.find((v) => v.source === s) || { source: s, goodFor: '' },
+  );
+};
+
+// packReaders — the MECHANICAL splitter (B5/B2/B7). Bin-pack a lane's sized sources into reader-units, each ≤
+// `budget` tokens AND ≤ budget×charsPerToken CHARS. The UNIT is the budget, not the source: small sources that
+// fit together COMBINE into one reader (its `reads` list holds several whole files); a source bigger than the
+// budget SPLITS across enough readers, with `overlap` chars re-read at each split boundary.
+//
+// B2 — UNIT CONSISTENCY: the read window is in CHARS but the budget is in TOKENS, so `budget` is converted to a
+//   char ceiling (`budgetChars = budget × charsPerToken`, the SAME over-count heuristic the scheduler sizes with)
+//   and BOTH dimensions gate every pack: a source is split when size > budget OR chars > budgetChars, and the
+//   split count is the MAX of both estimates — so a source the scheduler under-counts in tokens but is huge in
+//   chars still splits. The scheduler's `size`/`chars` are treated as HINTS only (re-confirmed here defensively).
+//   (The true byte-length / file-existence check lives in the reader — the workflow VM has no fs; see B3.)
+// B7 — bounded packing: at most `maxSlices` whole sources combine into one reader (a lane of 40 tiny files never
+//   packs 40 into one turn). Caller also caps sources-per-lane before this.
+// A path-less / zero-char source is DROPPED (never emit a doomed reader). Returns one ReadSlice[] per reader.
+function packReaders(
+  sources                   ,
+  budget        ,
+  overlap        ,
+  maxSlices         = Infinity,
+  charsPerToken        ,
+)                {
+  const budgetChars = Math.max(1, Math.floor(budget * charsPerToken));
+  const readers                = [];
+  let cur              = [];
+  let curTokens = 0;
+  let curChars = 0;
+  const flush = () => {
+    if (cur.length) {
+      readers.push(cur);
+      cur = [];
+      curTokens = 0;
+      curChars = 0;
+    }
+  };
+  for (const s of sources || []) {
+    if (!s || !s.path) continue; // a path-less source is dropped (the reader has nothing on disk to read)
+    // mechanical guard: derive chars + size defensively (inverse heuristic when one is missing), never trust junk.
+    const chars =
+      Number.isFinite(s.chars) && s.chars > 0
+        ? Math.floor(s.chars)
+        : Math.max(0, Math.round((Number(s.size) || 0) * charsPerToken));
+    if (chars <= 0) continue;
+    const size =
+      Number.isFinite(s.size) && s.size > 0
+        ? Math.floor(s.size)
+        : Math.max(1, Math.round(chars / charsPerToken));
+    // a source must split when it overflows EITHER the token budget OR the char ceiling (units kept consistent).
+    if (size <= budget && chars <= budgetChars) {
+      // whole source fits a reader-unit; flush first if combining it would overflow tokens/chars OR the slice cap.
+      if (
+        cur.length &&
+        (curTokens + size > budget || curChars + chars > budgetChars || cur.length >= maxSlices)
+      )
+        flush();
+      cur.push({ source: s.source, cachePath: s.path, offset: 0, limit: chars });
+      curTokens += size;
+      curChars += chars;
+    } else {
+      // oversized source — flush the current pack, then split it across enough readers (by BOTH dimensions) with overlap.
+      flush();
+      const parts = Math.max(Math.ceil(size / budget), Math.ceil(chars / budgetChars));
+      const per = Math.ceil(chars / parts); // ≤ budgetChars by construction (forward progress past the overlap)
+      for (let p = 0; p < parts; p++) {
+        const start = Math.max(0, p * per - (p > 0 ? overlap : 0));
+        const end = Math.min(chars, (p + 1) * per); // capped by the real remaining chars
+        if (end > start)
+          readers.push([
+            { source: s.source, cachePath: s.path, offset: start, limit: end - start },
+          ]);
+      }
+    }
+  }
+  flush();
+  return readers;
+}
 
 // PROMPT_LOG — the exact prompt sent for EVERY agent call, keyed by label (always populated, not just in debug). The numbered phase files
 // prepend their own prompt (Change E): the prompt lives in the phase file, not a separate _io.md.
@@ -466,6 +679,7 @@ function resultSoFarMd(r                    )         {
                        
                  
                      
+                                                                                                                  
   
                                                                                   
 function waveMd(
@@ -510,6 +724,7 @@ function waveMd(
           '\n   - trail: ' +
           trailOf(p.path) +
           (p.sources && p.sources.length ? '\n   - venues: ' + p.sources.join(', ') : '') +
+          (p.note ? '\n   - note: ' + p.note : '') +
           '\n   - ' +
           p.why,
       )
@@ -539,7 +754,7 @@ function waveMd(
 const SCOUT_TPL = `{{! scout — one broad sweep that maps the web landscape and seeds the first rabbit-holes }}
 Scout the web landscape for: "{{query}}". {{net}}
 Step 1 — run one broad WebSearch to map the landscape and collect candidate sources (URLs).
-Step 2 — pick the up-to-5 most relevant sources and WebFetch each. In every WebFetch prompt, first ask "What are the key facts on this page about: {{query}}?", then append this exact instruction: <<{{footer}}>>
+Step 2 — pick the up-to-5 most relevant sources and fetch each via mcp__harvester__fetch — built-in WebFetch is denied. For each fetched page, first surface the key facts about "{{query}}", then apply this instruction: <<{{footer}}>>
 Step 3 — return: landscape (one paragraph); pages[] (each: url, 2-3 sentence summary, rabbitHoles[] copied from the page's "Rabbit holes" section as {keyword, why}); deadEnds[] for any source that timed out, was parked, or was off-topic — do not invent rabbit-holes for those. If every source is dead/unreachable, still return a valid result: landscape from your search, pages [], the dead sources in deadEnds.{{researcherClause}}
 `;
 
@@ -548,10 +763,11 @@ const buildScout = ({ query, net, footer, researcherNote }           ) => {
   return render(SCOUT_TPL, { query, net, footer, researcherClause });
 };
 // ╔══ module: src/agents/scout/index.ts ═══════════════════════════════════
-// SCOUT — wave-0 seed. One broad WebSearch maps the landscape, then up-to-5 WebFetches seed the
-// first rabbit-holes. Tier: haiku — the page reading is the FIXED haiku WebFetch digester's job, leaving
+// SCOUT — wave-0 seed. One broad WebSearch maps the landscape, then up-to-5 Harvester fetches seed the
+// first rabbit-holes. Tier: haiku — the page reading is the FIXED haiku reader's job, leaving
 // the scout a bounded "map + extract rabbit-holes" task (user directive + measured: haiku summaries
 // were accurate + specific). Effort: medium (worker load). Escalate only on measured failure.
+
 
 
                                                                      
@@ -567,8 +783,8 @@ const SCOUT         = {
 };
 
 const scout                   = {
-  tier: 'haiku',
-  effort: 'medium',
+  tier: CONFIG.TIER.scout,
+  effort: CONFIG.EFFORT.scout,
   schema: SCOUT,
   buildPrompt: buildScout,
 };
@@ -614,6 +830,7 @@ const buildProspector = ({
 // AUTHORITATIVE source venues for THIS topic (domain-specific); output rides with the brainer, which
 // assigns the relevant subset to each lane. Tier: opus (cross-domain venue judgment). Effort: high.
 
+
                                                                           
 
 // PROSPECTOR schema — names the high-value AUTHORITATIVE source venues for THIS topic (domain-specific); output rides with the brainer.
@@ -658,8 +875,8 @@ const SOURCES         = {
 };
 
 const prospector                        = {
-  tier: 'opus',
-  effort: 'high',
+  tier: CONFIG.TIER.prospector,
+  effort: CONFIG.EFFORT.prospector,
   schema: SOURCES,
   buildPrompt: buildProspector,
 };
@@ -672,8 +889,8 @@ const prospector                        = {
 
 const BRAINER_TPL = `{{! brainer — the brain: scores and steers rabbit-holes, keeps resultSoFar, decides done }}
 You are the BRAINER — you make every decision in this research run and set its direction.
-
-How the run works: a scout seeded the first rabbit-holes and a prospector named the source venues; then you drive each wave. You hand rabbit-holes to parallel lane-researchers — fast workers that WebSearch + WebFetch the venues you assign, read the pages, and return findings + new rabbit-holes — then you update the running result, steer the next wave, and decide when to stop. On stop, a refinement stage adversarially checks your findings and writes the report.
+{{roleClause}}{{lastWaveClause}}
+How the run works: a scout seeded the first rabbit-holes and a prospector named the source venues; then you drive each wave. For each lane you pick, a scheduler finds the highest-value sources and sequential readers read them in full (carrying a running answer across the sources), returning findings + new rabbit-holes; your per-lane \`note\` directs what the scheduler picks and what the readers extract. Then you update the running result, steer the next wave, and decide when to stop. On stop, a refinement stage hardens your findings, a judge stress-tests the answer, and a synthesiser writes the report.
 
 The engine keeps the open rabbit-holes as an id-keyed store and carries each one's score history natively — you never re-emit the whole set, you return deltas against it.
 
@@ -690,7 +907,7 @@ As you steer, hold three rules:
 
 Wave {{wave}}. Query: "{{query}}". {{rubric}}
 Scout landscape: {{landscape}}
-RABBIT-HOLE STORE — open rabbit-holes (\`#id [last score or "new"] keyword — why\`); re-score up or down, a low one can resurrect, score every "new" one:
+RABBIT-HOLE STORE — open rabbit-holes (\`#id [last score or "new"] keyword — why\`); re-score up or down, a low one can resurrect:
 {{open}}
 ALREADY PURSUED — do not look up or re-originate these (research history):
 {{pursuedList}}
@@ -698,17 +915,17 @@ Findings this wave (from the researchers' page-reading):
 {{findings}}{{trajectory}}{{venuesClause}}{{languageClause}}
 
 {{memoryClause}}
-Update and return \`resultSoFar\` as the run's memory: refine \`answer\`; append load-bearing \`evidence\` only (each {fact, value, source, status: settled|tentative|contested} — facts the answer rests on, not a transcript); record the working \`assumptions\` the answer leans on (each {claim, basis}) and revise or retire them as evidence lands; move closed parts into \`resolved\`; keep \`openGaps\` current; record any \`tensions\` (conflicting sources); for build-the-answer / estimate questions grow the \`working\` derivation chain (else ''); set \`confidence\`.
+Update and return \`resultSoFar\` as the run's memory: refine \`answer\`; append load-bearing \`evidence\` only (each {fact, value, source, status: settled|tentative|contested} — facts the answer rests on, not a transcript); record the working \`assumptions\` the answer leans on (each {claim, basis}) and revise or retire them as evidence lands; move closed parts into \`resolved\`; keep \`openGaps\` current; record any \`tensions\` (conflicting sources); {{workingClause}}; set \`confidence\`.
 Weight findings by evidence quality — funding independence, sample size, replication, stated limitations — not mere existence; let it drive both your scores and \`confidence\`.
 For each headline / load-bearing finding, originate a lane to hunt failed replications, null trials, or refutations. Keep such a claim at status \`tentative\` (single source) until an independent source — a different group and funder — corroborates it; only then mark it \`settled\`.{{computeField}}
 
 Then return deltas against the store:
 (1) \`rescore\`: [{id, score}] — only the rabbit-holes whose 0-100 score changes this wave (score every "new" one at least once); unlisted ones keep their last score. Score honestly per the rubric; a marginal one scores low.
 (2) \`add\`: [{keyword, why, score}] — new rabbit-holes to park in the store for a later wave (the engine assigns each an id).
-(3) \`lookupNext\`: the rabbit-holes to research now — each either {id} (a stored one) or {keyword, why, score{{scoreFields}}} (one you originate and pursue now). None may be already pursued.{{assignClause}}
+(3) \`lookupNext\`: the rabbit-holes to research now — each either {id} (a stored one) or {keyword, why, score{{scoreFields}}} (one you originate and pursue now). None may be already pursued.{{assignClause}} For EVERY lookupNext lane author a \`note\`: the research directive — WHAT to find plus ranked fallbacks ("if not X, focus on Y; give both if available"). It steers both the scheduler's source pick and the reader's extraction; keep it distinct from \`why\` (your store/scoring rationale).
 (4) \`rename\`: [{id, keyword, why?}] — relabel a rabbit-hole, keeping its id + history (optional).
-(5) \`drop\`: [id, …] — eliminate a dead/duplicate rabbit-hole; a merge = drop the duplicate and rescore the survivor (optional).
-(6) \`stop\`: {done, reason}. {{stop}}{{goalClause}}{{sentinelClause}}{{validatorClause}}{{FINISH}}
+(5) \`drop\`: [id, …] — eliminate a dead/duplicate rabbit-hole; a merge = drop the duplicate and rescore the survivor (optional).{{spawnClause}}
+(6) \`stop\`: {done, reason}. {{stop}}{{goalClause}}{{validatorClause}}{{FINISH}}
 `;
 
 const buildBrainer = ({
@@ -725,17 +942,30 @@ const buildBrainer = ({
   mode,
   venues,
   languageGuidance,
-  lastSentinelReason,
   lastValidatorMissing,
   compute,
-  computerNote,
+  computeNote,
   thinkerNote,
   researcherNote,
+  isChild,
+  parentName,
+  mandate,
+  trail,
+  canSpawn,
+  lastWave,
 }             ) => {
-  const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
-  const sentinelClause = lastSentinelReason
-    ? `\nPRIOR SENTINEL REJECTION — clear this before declaring done: ${lastSentinelReason}`
+  // brainer-tree role: a CHILD drives ONE branch and may abandon it; the ROOT carries the whole run and never can.
+  const roleClause = isChild
+    ? `\nYou are a CHILD brainer: ${parentName || 'a parent'} spawned you to drive ONE branch — ${mandate || 'your mandate'} — split from the path ${trail || '(root)'}. Pursue that branch deep on the store + memory you inherited. If it proves a dead end, abandon it: set stop.lost=true with a one-line reason and you are done (no answer expected). You carry only this branch, not the whole run.`
+    : `\nYou are the ROOT brainer: you carry the whole run to a real answer — stop.lost is not yours to set.`;
+  const lastWaveClause = lastWave
+    ? `\nLAST WAVE — the run is wrapping up: consolidate your answer into resultSoFar and set stop.done=true. Request no new lookupNext; research is closing.`
     : '';
+  // spawn is offered ONLY while spawning is still permitted (caps not hit) — don't tempt a capped-out brainer.
+  const spawnClause = canSpawn
+    ? `\n(5b) \`spawn\` (at most ONE this wave): when the goal holds two or more INDEPENDENT investigations — separate evidence bases, sub-questions that do not inform each other — hand one to a focused child brainer THIS wave instead of carrying both in your single line: emit \`spawn\` {id (or keyword+why), mandate}. The child inherits a clean copy of your store + memory, aimed by the mandate; you drop that branch and steer the rest. Reserve a spawn for a branch substantial enough to run on its own — not a single lane — but when the run genuinely splits in two, spawn rather than interleave.`
+    : '';
+  const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
   const validatorClause = lastValidatorMissing
     ? `\nVALIDATOR — last wave left these unfilled; re-pursue the reopened lanes or originate new ones to close them: ${lastValidatorMissing}`
     : '';
@@ -766,15 +996,25 @@ ${plain(resultSoFar)}`;
       ? `
 Some of this topic's strongest literature is non-English. Guidance: ${languageGuidance}. Deliberately route some lanes to the non-English venues above, giving each its native venue(s) in \`sources\` — rather than defaulting every lane to English.`
       : '';
-  const probeClause = `Before you decide, hunt for coverage gaps — a candidate, sub-question, or angle the goal needs that no lane has touched — and probe them yourself with WebSearch / WebFetch (as many as you need) to fill them; fold what you find into resultSoFar and originate the missing rabbit-holes into \`lookupNext\`. Beyond gap-filling, leave the heavy digging to the lane-researchers.`;
-  const scoreFields = ', sources';
+  const probeClause = `Before you decide, hunt for coverage gaps — a candidate, sub-question, or angle the goal needs that no lane has touched — and probe them yourself with WebSearch / mcp__harvester__fetch, as many as you need, to fill them; fold what you find into resultSoFar and originate the missing rabbit-holes into \`lookupNext\`. Beyond gap-filling, leave the heavy digging to the lane readers.`;
+  const scoreFields = ', sources, note';
   const assignClause = venues && venues.length ? ' Assign each its `sources` venue subset.' : '';
+  // workingClause — gated on compute exactly as computeField is. compute OFF ⇒ the brainer must NOT hand-roll a
+  // derivation: leave `working` empty and treat unknowns as STATED UNCERTAINTY (only an EXPLICIT compute:false
+  // turns it off, so the prompt-only callers — which omit compute — keep the derive-when-needed default).
+  const workingClause =
+    compute === false
+      ? `leave \`working\` empty and treat any value you cannot source as STATED UNCERTAINTY in the answer — never hand-roll a derivation`
+      : `for build-the-answer / estimate questions grow the \`working\` derivation chain (else '')`;
   const computeField = compute
     ? `
 
-COMPUTE TO STEER: when a calculation would change your next move — a number the answer is being built toward, or an estimate of which gap matters most — derive it yourself this wave (reason it out, or write and run a short Python/Node script when the arithmetic needs it) and fold the result into \`working\`. Keep it light; you are steering, not writing the final derivation.${computerNote ? '\n\n' + computerNote : ''}`
+COMPUTE TO STEER: when a calculation would change your next move — a number the answer is being built toward, or an estimate of which gap matters most — derive it yourself this wave (reason it out, or write and run a short Python/Node script when the arithmetic needs it) and fold the result into \`working\`. Keep it light; you are steering, not writing the final derivation.${computeNote ? '\n\n' + computeNote : ''}`
     : '';
   return render(BRAINER_TPL, {
+    roleClause,
+    lastWaveClause,
+    spawnClause,
     probeClause,
     thinkerClause,
     researcherClause,
@@ -791,9 +1031,9 @@ COMPUTE TO STEER: when a calculation would change your next move — a number th
     memoryClause,
     scoreFields,
     assignClause,
+    workingClause,
     stop,
     goalClause,
-    sentinelClause,
     validatorClause,
     computeField,
     FINISH,
@@ -812,7 +1052,7 @@ Hardened facts (adversarially fact-checked + source-corrected — your input num
 The run's accumulated RESULT (your answer + the half-built \`working\` derivation to finish):
 {{resultSoFar}}
 Derive with rigor:
-- first fact-check your input numbers: verify each against a current primary source (WebSearch / WebFetch) and correct any that is stale, wrong, or imprecise before computing — a derivation is only as sound as its inputs;
+- first fact-check your input numbers: verify each against a current primary source (WebSearch / mcp__harvester__fetch) and correct any that is stale, wrong, or imprecise before computing — a derivation is only as sound as its inputs;
 - assemble the verified inputs with their units;
 - write and run a short script for any non-trivial arithmetic — load Bash + Write via ToolSearch if absent, run python (or node) — compute, do not estimate;
 - propagate the input uncertainties into an explicit ± error range;
@@ -826,10 +1066,10 @@ const buildBrainerCompute = ({
   hardenedFacts,
   directive,
   reason,
-  computerNote,
+  computeNote,
   thinkerNote,
 }                    ) => {
-  const noteClause = computerNote ? '\n' + computerNote : '';
+  const noteClause = computeNote ? '\n' + computeNote : '';
   const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
   return render(BRAIN_COMPUTE_TPL, {
     query,
@@ -850,6 +1090,7 @@ const buildBrainerCompute = ({
 // Tier: opus — ALWAYS Opus (the global brain/reducer — measured: a Haiku brainer scored erratically +
 // drifted off-goal). Effort: xhigh — re-scores the store every wave AND sets direction AND maintains
 // resultSoFar; the one role where the extra reasoning budget pays back most.
+
 
 
                                                                        
@@ -902,11 +1143,36 @@ const COORD         = {
       description:
         'ids of dead/duplicate rabbit-holes to eliminate (a MERGE = drop the duplicate, rescore the survivor)',
     },
+    spawn: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'number',
+          description:
+            'an OPEN rabbit-hole id to hand to the child (or omit and give keyword+why to originate the branch)',
+        },
+        keyword: { type: 'string' },
+        why: { type: 'string' },
+        mandate: {
+          type: 'string',
+          description:
+            'the directive that aims the child brainer — what this one branch must chase',
+        },
+      },
+      required: ['mandate'],
+      description:
+        'OPTIONAL, at most ONE per wave: spawn a focused child brainer onto a branch that deserves a dedicated brain. Only when you are SURE the branch is worth it — spawns are expensive. Omit when not spawning.',
+    },
     stop: {
       type: 'object',
       properties: {
         done: { type: 'boolean' },
         reason: { type: 'string', description: 'one line: why done, or what is still missing' },
+        lost: {
+          type: 'boolean',
+          description:
+            'CHILD brainers only: this branch is a dead end — abandon it (no answer expected). The root brainer must never set this.',
+        },
       },
       required: ['done', 'reason'],
     },
@@ -915,8 +1181,8 @@ const COORD         = {
 };
 
 const brainer                     = {
-  tier: 'opus',
-  effort: 'xhigh',
+  tier: CONFIG.TIER.brainer,
+  effort: CONFIG.EFFORT.brainer,
   schema: COORD,
   buildPrompt: buildBrainer,
 };
@@ -926,96 +1192,6 @@ const BRAIN_COMPUTE         = {
   type: 'object',
   properties: { resultSoFar: RESULT_SO_FAR },
   required: ['resultSoFar'],
-};
-// ╔══ module: src/agents/sentinel/prompts.ts ══════════════════════════════
-// SENTINEL prompts — the terminal-skeptic template + its assembly function. Template strings are
-// module-level consts; buildSentinel only assembles/substitutes.
-
-
-                                                         
-
-const SENTINEL_TPL = `{{! sentinel — goal-mode guard that contests a premature done and can force one more wave }}
-The brainer just declared the crawl done for: "{{query}}". Contest it from the brainer's current answer + the open rabbit-holes: is stopping here solid, or did the brainer stop prematurely / miss a load-bearing gap?
-Brainer's result so far (its current answer + evidence + open gaps):
-{{resultSoFar}}
-Reason it called done: {{reason}}
-Per-wave log (what each wave pursued + where the answer stood):
-{{waveLog}}
-Open rabbit-holes not yet pursued (\`#id [score] keyword — why\`):
-{{rabbitHoles}}
-Already pursued — do not propose any of these:
-{{pursuedList}}
-High bar: uphold the brainer (solid=true) unless a load-bearing gap would materially change or undermine the answer — "more detail is possible" is not a reason to continue.
-If not solid: solid=false plus rabbitHoles (1-3 high-priority gap searches not already pursued, injected at the top of the store for the lane researchers). If solid: solid=true, empty rabbitHoles.
-Return solid (bool), reasoning, rabbitHoles.{{thinkerClause}}{{researcherClause}}{{FINISH}}
-`;
-
-const buildSentinel = ({
-  query,
-  resultSoFar,
-  reason,
-  waveLog,
-  rabbitHoles,
-  pursuedList,
-  thinkerNote,
-  researcherNote,
-}              ) => {
-  const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
-  const researcherClause = researcherNote ? '\n' + researcherNote : '';
-  return render(SENTINEL_TPL, {
-    query,
-    resultSoFar: plain(resultSoFar),
-    reason: plain(reason),
-    waveLog: plain(waveLog),
-    rabbitHoles: plain(rabbitHoles),
-    pursuedList: plain(pursuedList),
-    thinkerClause,
-    researcherClause,
-    FINISH,
-  });
-};
-// ╔══ module: src/agents/sentinel/index.ts ════════════════════════════════
-// SENTINEL — the goal-mode TERMINAL skeptic of the crawl phase, the inverse of verify. Runs ONCE when the
-// brainer declares done: sees the open store + the brainer's running answer; if the stop isn't solid it
-// injects high-score gap objects at the store top and the crawl resumes. Bounded by MAX_SENTINEL_REOPENS.
-// Tier: opus (adversarial judgment). Effort: xhigh.
-
-                                                                        
-
-// the goal-mode SENTINEL schema — the TERMINAL skeptic of the crawl phase, the inverse of verify. It runs ONCE when the brainer declares
-// done: it sees the open store + the brainer's running answer and decides whether stopping is SOLID. If not, it injects high-score gap objects
-// at the TOP of the store and hands them back to the lane researchers — the crawl resumes. Bounded by MAX_SENTINEL_REOPENS.
-const SENTINEL         = {
-  type: 'object',
-  properties: {
-    solid: {
-      type: 'boolean',
-      description:
-        "true = the brainer's decision to stop is SOLID (uphold it, end the crawl); false = the brainer stopped prematurely / left a load-bearing gap",
-    },
-    reasoning: {
-      type: 'string',
-      description: 'why the stop is solid, or what load-bearing gap was missed',
-    },
-    rabbitHoles: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: { keyword: { type: 'string' }, why: { type: 'string' } },
-        required: ['keyword', 'why'],
-      },
-      description:
-        'when solid=false: 1-3 concrete high-priority gap searches to inject at the store top (NONE already pursued); empty when solid=true',
-    },
-  },
-  required: ['solid', 'reasoning'],
-};
-
-const sentinel                      = {
-  tier: 'opus',
-  effort: 'xhigh',
-  schema: SENTINEL,
-  buildPrompt: buildSentinel,
 };
 // ╔══ module: src/agents/validator/prompts.ts ═════════════════════════════
 // VALIDATOR prompts — the per-wave coverage-gate template + its assembly function. Template strings are
@@ -1053,6 +1229,7 @@ const buildValidator = ({ query, requests, findings, nullLanes }               )
 // returned null or fulfilled:false (bounded by a per-lane failCount) so the next brainer can re-pursue it.
 // Tier: sonnet (a bounded, cheap per-wave check). Effort: medium.
 
+
                                                                          
 
 const VALIDATE         = {
@@ -1089,83 +1266,208 @@ const VALIDATE         = {
 };
 
 const validator                       = {
-  tier: 'sonnet',
-  effort: 'medium',
+  tier: CONFIG.TIER.validator,
+  effort: CONFIG.EFFORT.validator,
   schema: VALIDATE,
   buildPrompt: buildValidator,
 };
-// ╔══ module: src/agents/researcher/prompts.ts ════════════════════════════
-// RESEARCHER prompts — the lane-researcher template + its assembly function. Template strings are
-// module-level consts; buildResearcher only assembles/substitutes.
+// ╔══ module: src/agents/researchScheduler/prompts.ts ═════════════════════
+// RESEARCH SCHEDULER prompts — the discovery template + its assembly function. Template strings are
+// module-level consts; buildResearchScheduler only assembles/substitutes the per-wave clauses.
 
-                                                           
+                                                                                      
 
-const RESEARCHER_TPL = `{{! researcher — a lane researcher pursuing ONE rabbit-hole over its assigned venues }}
-Pursue one rabbit-hole. {{net}}
+const SCHEDULER_TPL = `{{! researchScheduler — discovery: per lane, find + size the highest-value sources, grouped per lane }}
+You are the RESEARCH SCHEDULER — you own source discovery for this wave. For each lane below, find the HIGHEST-VALUE sources to read — as MANY as genuinely add value, no cap. The readers only read what you return; they do not search.
 TOP GOAL: "{{query}}".
-TRAIL that led here (top goal → … → this rabbit-hole): {{trail}}.
-Now investigating: "{{keyword}}" (why it matters: {{why}}). Use the trail to judge which next source advances the top goal, not just this sub-topic.{{refClause}}{{venuesClause}}{{translateClause}}
-Run a targeted WebSearch, pick the best {{srcCount}} sources, and WebFetch each in parallel. In each WebFetch prompt, first ask the key question about this rabbit-hole, then append: <<{{footer}}>>
-If a source is dead, parked, or returns nothing (e.g. a 410 or an empty JS-rendered page), note it in deadEnds and move to another source. If every source is dead, that is still a valid result: return summary noting the dead ends, rabbitHoles [], and the dead sources in deadEnds.
-If a fetched source turns out off-goal — it does not advance the top goal even if it sits on the sub-topic — keep it and open one or more additional sources to reach goal-aligned data, returning both the off-goal find and the new ones. You may exceed the {{srcCount}}-source count for this — gather it and let the brainer decide relevance.
-For any trial or study you report, capture its funding source, conflicts of interest, sample size, and key limitations in the summary — the provenance the brainer needs to weight it.
-Return: summary (2-4 sentences of what you found); rabbitHoles (new gap searches from the footer, {keyword, why}); nextSources (up to 5 of the page's top outbound citations/links to follow, each {ref: exact URL or DOI, why}); deadEnds.{{researcherClause}}
+Tools (load any missing via ToolSearch): WebSearch; mcp__harvester__search; mcp__harvester__findWorks — resolves a work/DOI to its open-access full text; mcp__harvester__fetch — fetches + caches a url/DOI. Built-in WebFetch is denied; fetch only through Harvester.
+LANES — each carries a rabbit-hole, the brainer's directive \`note\` (WHAT to find + ranked fallbacks), and the venues to prefer:
+{{lanes}}
+Work in TWO batched rounds — never one-source-at-a-time round-trips:
+1. DISCOVER — run ALL lanes' searches in ONE parallel batch (WebSearch / mcp__harvester__search / findWorks). Prefer each lane's assigned venues; let its \`note\` decide which results serve it. A lane carrying a concrete ref takes that ref as a source directly — no search needed for it.
+2. SIZE — call mcp__harvester__fetch with size_only:true on EVERY candidate across all lanes in ONE parallel batch. With size_only it fetches + caches the full text and returns {size in tokens, path to the cache file, chars} and NO body. Drop any candidate that failed or came back walled/thin and pick another from the same lane.
+For each lane, return its chosen sources as {source (the exact url or DOI), path (the cache path from size_only), size (tokens), chars}. Group them under the lane's id. A lane may return several sources; return an empty list for a lane only when every candidate failed.{{translateClause}}{{researcherClause}}
+Return \`lanes\`: one entry per input lane id, each {id, sources:[{source, path, size, chars}]}. Use the sizes you measured — never invent them.
 `;
 
+const laneLine = (l                    )         =>
+  '#' +
+  l.id +
+  ' ' +
+  l.keyword +
+  ' — ' +
+  l.why +
+  '\n  directive: ' +
+  (l.note && l.note.trim() ? l.note : '(none — use the rabbit-hole + goal)') +
+  '\n  venues: ' +
+  ((l.venues || [])
+    .map(
+      (v) =>
+        v.source + (v.lang ? ' [' + v.lang + ']' : '') + (v.goodFor ? ' (' + v.goodFor + ')' : ''),
+    )
+    .join('; ') || '(none — general search)') +
+  (l.ref ? '\n  ref (fetch directly): ' + l.ref : '');
+
+const buildResearchScheduler = ({ query, lanes, researcherNote }                       ) => {
+  const anyLang = lanes.some((l) => (l.venues || []).some((v) => v.lang));
+  const translateClause = anyLang
+    ? `
+For a lane routed to a non-English venue (tagged [zh], [ja], …), translate its query terms into that language, search the native venue, and choose the native-language sources — the readers translate the content back to English.`
+    : '';
+  const researcherClause = researcherNote ? '\n' + researcherNote : '';
+  return render(SCHEDULER_TPL, {
+    query,
+    lanes: lanes.map(laneLine).join('\n') || '(no lanes)',
+    translateClause,
+    researcherClause,
+  });
+};
+// ╔══ module: src/agents/researchScheduler/index.ts ═══════════════════════
+// RESEARCH SCHEDULER — inserted AFTER the brainer picks the wave's lanes (resolveLookupNext), BEFORE the
+// readers spawn. It owns discovery: per brainer lane (the rabbit-hole + its steering `note`), it picks the
+// HIGHEST-VALUE sources — MULTIPLE per lane, no cap — by batching ALL lane searches in one parallel round,
+// then sizing every candidate via mcp__harvester__fetch size_only (returns {size, path, chars}) in a second
+// parallel round; it returns the chosen sources grouped per lane id. Code (engine.ts) then bin-packs each
+// lane's content into RESEARCHER_TOKEN_BUDGET reader-units and spawns the sequential per-lane reader threads.
+// Tier: sonnet — judging source value + driving batched tool I/O is a mid-weight job, above a worker but below
+// the Opus brain. Effort: high. (Both read from the central CONFIG.TIER/EFFORT maps.)
+
+
+                                                                                 
+
+// SCHEDULE — the scheduler's output: the chosen, sized sources grouped per lane id. The engine re-confirms
+// each `size` against the budget and computes the char windows itself (the Sonnet's numbers are not trusted).
+const SCHEDULE         = {
+  type: 'object',
+  properties: {
+    lanes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'the input lane id these sources belong to' },
+          sources: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                source: {
+                  type: 'string',
+                  description: 'the exact url or DOI of the chosen source',
+                },
+                path: {
+                  type: 'string',
+                  description: 'the local cache file path returned by the size_only fetch',
+                },
+                size: {
+                  type: 'number',
+                  description: 'the source size in tokens (the size_only count)',
+                },
+                chars: { type: 'number', description: 'the source size in raw characters' },
+              },
+              required: ['source', 'path', 'size', 'chars'],
+            },
+            description:
+              'the highest-value sources chosen for this lane (multiple, no cap); empty only when every candidate failed',
+          },
+        },
+        required: ['id', 'sources'],
+      },
+    },
+  },
+  required: ['lanes'],
+};
+
+const researchScheduler                               = {
+  tier: CONFIG.TIER.researchScheduler,
+  effort: CONFIG.EFFORT.researchScheduler,
+  schema: SCHEDULE,
+  buildPrompt: buildResearchScheduler,
+};
+// ╔══ module: src/agents/researcher/prompts.ts ════════════════════════════
+// RESEARCHER prompts — the lane-READER template + its assembly function. Template strings are module-level
+// consts; buildResearcher only assembles/substitutes. The reader reads its assigned char window(s) from the
+// cache files on disk (via code) and digests them into the running answer — it does NOT search the web
+// (the scheduler owns discovery). Prompt order: task + which slice to read FIRST; the "answer so far"
+// handoff LAST; "reader i of N" stated once.
+
+                                                                      
+
+const RESEARCHER_TPL = `{{! researcher — a lane reader: reads its assigned cache slice(s) from disk via code, then digests into the running answer }}
+You are reader {{readerIndex}} of {{readerCount}} on one research lane — read your assigned slice and digest it. You do NOT search the web: the sources are already chosen and fetched to the local cache. Tools (load any via ToolSearch): Bash (read the cache files); mcp__harvester__fetch + mcp__harvester__findWorks (resolve a wall to its open-access full text); mcp__harvester__fetchImage (to view an image, request it via mcp__harvester__fetchImage for a local path, then read it).
+TOP GOAL: "{{query}}".
+TRAIL (top goal → … → this lane): {{trail}}.
+This lane: "{{keyword}}" (why it matters: {{why}}).
+DIRECTIVE — what to extract, with ranked fallbacks: {{note}}
+READ NOW — your assigned slice(s), from the local cache on disk (already fetched; never re-fetch). First confirm each file exists and is non-empty (e.g. wc -c PATH); then read each char window with code, e.g. python3 -c "print(open('PATH',encoding='utf-8',errors='replace').read()[OFFSET:OFFSET+LIMIT])" — if the output is truncated, read it in sub-parts (OFFSET, OFFSET+step, … to OFFSET+LIMIT) until the whole window is consumed:
+{{reads}}
+HONEST READ — if an assigned file is MISSING, empty, or unreadable, do NOT invent its content: record it in deadEnds, leave the running answer unchanged (an honest gap, never a fabricated summary), and the engine will reopen the lane. A confident wrong summary is worse than an admitted empty read.
+Extract everything that serves the DIRECTIVE and the top goal — facts, numbers, and for any trial or study its funding source, conflicts of interest, sample size, and key limitations. You may read images to understand the content. If the content is in another language, translate your findings to English, keeping each cited source's original-language title alongside the translation.{{wallClause}}
+Return: runningAnswer (extend the prior answer with what you found, kept a coherent whole — or begin it if you are reader 1); rabbitHoles (new gap searches the content raises, {keyword, why}); nextSources (up to 5 of the content's top outbound citations/links, each {ref: exact url or DOI, why}); deadEnds (any slice that was missing/empty/garbled/walled). <<{{footer}}>>{{researcherClause}}{{priorClause}}
+`;
+
+const readLine = (r           , i        )         =>
+  i +
+  1 +
+  '. ' +
+  r.source +
+  ' — read ' +
+  r.cachePath +
+  ' chars [' +
+  r.offset +
+  ', ' +
+  (r.offset + r.limit) +
+  ') (open the file, slice [' +
+  r.offset +
+  ':' +
+  (r.offset + r.limit) +
+  '])';
+
 const buildResearcher = ({
-  net,
   query,
   trail,
   keyword,
   why,
+  note,
   footer,
-  venues,
-  parallelSourcesPerLaneResearchAgent,
+  reads,
+  readerIndex,
+  readerCount,
+  priorAnswer,
   researcherNote,
-  ref,
 }                ) => {
-  const refClause = ref
-    ? `
-This lane carries a concrete source: fetch ${ref} directly (the fetch tool resolves DOIs) and read it first; widen to WebSearch only if it is unreachable or thin.`
-    : '';
-  const venuesClause =
-    venues && venues.length
-      ? `
-Search these high-value venues for this lane first: ${venues
-          .map(
-            (v) =>
-              v.source +
-              (v.lang ? ' [' + v.lang + ']' : '') +
-              (v.goodFor ? ' (' + v.goodFor + ')' : ''),
-          )
-          .join('; ')}.`
-      : '';
-  const translateClause =
-    venues && venues.some((v) => v.lang)
-      ? `
-A venue tagged with a non-English language (e.g. [zh]) holds its literature in that language: translate the query terms into it, WebSearch the native venue, read the native-language results, and translate the findings back to English. Carry provenance — give each cited source its original-language title alongside the English translation.`
-      : '';
+  const wallClause = `
+If your assigned content is a paywall, stub, or too thin for the directive, extract its DOI/identifier and call mcp__harvester__fetch — it resolves DOIs — or mcp__harvester__findWorks to fetch the open-access full text to the cache, then read THAT from disk; do not return an empty answer. This is scoped to resolving THIS source — do not open a general web search.`;
   const researcherClause = researcherNote ? '\n' + researcherNote : '';
+  const priorClause = priorAnswer
+    ? `
+ANSWER SO FAR — the running answer from the earlier readers on this lane; extend and correct it, do not restate it wholesale:
+${priorAnswer}`
+    : '';
   return render(RESEARCHER_TPL, {
-    net,
+    readerIndex,
+    readerCount,
     query,
     trail,
     keyword,
     why,
-    refClause,
-    venuesClause,
-    translateClause,
-    srcCount: parallelSourcesPerLaneResearchAgent,
+    note: note || '(no directive — extract what best serves the lane + goal)',
+    reads: (reads || []).map(readLine).join('\n') || '(no slice assigned)',
+    wallClause,
     footer,
     researcherClause,
+    priorClause,
   });
 };
 // ╔══ module: src/agents/researcher/index.ts ══════════════════════════════
-// RESEARCHER — a lane researcher pursuing ONE rabbit-hole over its assigned venues, parallel one per
-// pursued lead. Tier: haiku — the page reading is done by the FIXED haiku WebFetch digester, leaving each
-// worker a BOUNDED "summarize 1-2 already-digested pages + extract rabbit-holes" task (user directive +
-// measured: haiku researcher summaries were accurate + specific; a SONNET researcher crashed the
-// vector-DB run). Effort: medium (worker load). Escalate only on measured failure.
+// RESEARCHER — a lane READER: it reads its ASSIGNED cache slice(s) from disk (via code) and digests them
+// into the lane's running answer. The scheduler owns discovery (which sources, sized to disk); code bin-packs
+// each lane's content into RESEARCHER_TOKEN_BUDGET reader-units and runs ONE sequential thread per lane,
+// handing the running answer forward across all its reads. Tier: haiku — the read-from-disk + digest is a
+// BOUNDED worker task (the scheduler already chose + fetched the sources; a SONNET researcher crashed the
+// vector-DB run). Effort: medium. (Both read from the central CONFIG.TIER/EFFORT maps.) The reader runs as a
+// code-capable general-purpose agent so it can read its char window off disk + resolve a wall.
+
 
 
                                                                           
@@ -1173,7 +1475,11 @@ A venue tagged with a non-English language (e.g. [zh]) holds its literature in t
 const RESEARCH         = {
   type: 'object',
   properties: {
-    summary: { type: 'string' },
+    runningAnswer: {
+      type: 'string',
+      description:
+        'the accumulated answer for this lane: merge what you found in your slice INTO the prior answer (or begin it if you are reader 1), kept a coherent whole — the next reader continues it and the brainer reads the final one',
+    },
     rabbitHoles: { type: 'array', items: RABBITHOLE },
     nextSources: {
       type: 'array',
@@ -1183,23 +1489,23 @@ const RESEARCH         = {
         properties: {
           ref: {
             type: 'string',
-            description: 'an exact URL or DOI the page points to, worth fetching directly',
+            description: 'an exact url or DOI the content points to, worth fetching directly',
           },
           why: { type: 'string', description: 'one line on why following it advances the goal' },
         },
         required: ['ref', 'why'],
       },
       description:
-        "up to 5 of the page's highest-value outbound citations/links as concrete fetch targets — the next lane fetches each directly",
+        "up to 5 of the content's highest-value outbound citations/links as concrete fetch targets — a later lane fetches each directly",
     },
     deadEnds: { type: 'array', items: { type: 'string' } },
   },
-  required: ['summary', 'rabbitHoles'],
+  required: ['runningAnswer'],
 };
 
 const researcher                        = {
-  tier: 'haiku',
-  effort: 'medium',
+  tier: CONFIG.TIER.researcher,
+  effort: CONFIG.EFFORT.researcher,
   schema: RESEARCH,
   buildPrompt: buildResearcher,
 };
@@ -1211,7 +1517,7 @@ const researcher                        = {
                                                           
 
 const INITIATOR_TPL = `{{! initiator — plans the finalize pipeline, shaping the finish to this query }}
-You direct the FINALIZE phase for: "{{query}}". The research is done; below is everything it gathered. Shape the finishing pipeline to fit this query, then return the plan.
+You direct the FINALIZE phase for: "{{query}}". The research is done; below is everything it gathered. Shape the finishing pipeline to fit this query, then return the plan.{{modeClause}}
 The finish runs in two parts, and you set how each starts:
 1. REFINEMENT — one refine agent per item adversarially fact-checks that group of load-bearing facts and returns them corrected and hardened. You decide the grouping. (A judge then evaluates the hardened answer and may trigger a derivation or a re-check; you do not plan that.)
 2. SYNTHESIS — writes the final report from the hardened, judged answer. You give it a focus note.
@@ -1233,15 +1539,22 @@ const buildInitiator = ({
   waveLog,
   landscape,
   openRabbitHoles,
+  mode,
   thinkerNote,
 }               ) => {
   const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
+  // collect mode ⇒ harden the BREADTH (coverage of the landscape), not the shape of a single answer.
+  const modeClause =
+    mode === 'collect'
+      ? ' This run was a COLLECT inventory, not a single-answer goal — harden BREADTH: the key claims and the major sub-areas that span the landscape, and set the report focus to completeness of the catalogue rather than the shape of one answer.'
+      : '';
   return render(INITIATOR_TPL, {
     query,
     resultSoFar: plain(resultSoFar),
     waveLog: plain(waveLog),
     landscape,
     openRabbitHoles: plain(openRabbitHoles),
+    modeClause,
     thinkerClause,
     FINISH,
   });
@@ -1250,6 +1563,7 @@ const buildInitiator = ({
 // INITIATOR — opens the Finalize phase. Reads the final resultSoFar and shapes the finish to the query:
 // names the load-bearing facts to harden and sets the report focus. Tier: opus (synthesis/planning).
 // Effort: xhigh.
+
 
                                                                          
 
@@ -1300,8 +1614,8 @@ const INITIATOR         = {
 };
 
 const initiator                       = {
-  tier: 'opus',
-  effort: 'xhigh',
+  tier: CONFIG.TIER.initiator,
+  effort: CONFIG.EFFORT.initiator,
   schema: INITIATOR,
   buildPrompt: buildInitiator,
 };
@@ -1331,6 +1645,7 @@ const buildRefiner = ({ net, query, fact, why, directive }            ) => {
 // against the web and returns its corrected, hardened claim. Tier: sonnet (adversarial verification on the
 // web — modest middle tier). Effort: high.
 
+
                                                                       
 
 const REFINE         = {
@@ -1346,8 +1661,8 @@ const REFINE         = {
 };
 
 const refiner                    = {
-  tier: 'sonnet',
-  effort: 'high',
+  tier: CONFIG.TIER.refiner,
+  effort: CONFIG.EFFORT.refiner,
   schema: REFINE,
   buildPrompt: buildRefiner,
 };
@@ -1364,7 +1679,7 @@ The answer + its evidence + \`working\` derivation (the run's living memory):
 {{resultSoFar}}
 Hardened facts (each adversarially fact-checked + source-corrected by a refine pass):
 {{cleanReports}}
-What the answer must deliver: {{focus}}
+What the answer must deliver: {{focus}}{{openClause}}{{modeClause}}
 Before upholding, actively try to disprove the load-bearing claim as hard as you can — \`verificationSound\` holds only when it survives every angle:
 - funding / conflict of interest — is the trial run or funded by the product's own seller?
 - independent replication — does a separate group confirm it, or does the headline rest on a single source?
@@ -1386,19 +1701,35 @@ const buildJudge = ({
   resultSoFar,
   cleanReports,
   focus,
+  openRabbitHoles,
   compute,
-  computerNote,
+  mode,
+  computeNote,
   thinkerNote,
 }           ) => {
   const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
+  // collect mode ⇒ goalMet is INVENTORY COMPLETENESS + per-item verification, not whether one answer is reached.
+  const modeClause =
+    mode === 'collect'
+      ? `
+MODE = collect — judge goalMet as INVENTORY COMPLETENESS: every major sub-area of the landscape is catalogued AND each catalogued item is individually verified, not whether a single answer is reached.`
+      : '';
   const computeClause = compute
-    ? ` A derivation may be written and run (Python scientific stack).${computerNote ? '\n' + computerNote : ''}`
-    : ' Derivation is off for this run — set needsCompute false and computeSound true.';
+    ? ` A derivation may be written and run (Python scientific stack).${computeNote ? '\n' + computeNote : ''}`
+    : ' Derivation is off for this run — you cannot run any computation. If the answer is complete without one, set needsCompute false and computeSound true; if it genuinely rests on a quantitative derivation this run cannot perform, report that honestly — set needsCompute true and name the missing derivation in `directive` (it is surfaced as a stated limitation, never fabricated). Either way set computeSound true: no derivation is present to be unsound.';
+  const openClause =
+    openRabbitHoles && openRabbitHoles.length
+      ? `
+LEFTOVER OPEN RABBIT-HOLES — leads the crawl surfaced but never pursued (it stopped first). Decide whether any names a REAL gap the answer needs; if one does, set goalMet false and return it in reopenRabbitHoles to reopen the crawl on it — otherwise ignore them:
+${plain(openRabbitHoles)}`
+      : '';
   return render(JUDGE_TPL, {
     query,
     resultSoFar: plain(resultSoFar),
     cleanReports: plain(cleanReports),
     focus: focus || '(meet the goal as stated)',
+    openClause,
+    modeClause,
     computeClause,
     thinkerClause,
     FINISH,
@@ -1409,6 +1740,7 @@ const buildJudge = ({
 // sees the hardened facts + the brain's resultSoFar + the goal/deliverable, and judges whether the answer
 // is sound (goal met, verification real, derivation valid). Drives a bounded remediation loop in the engine.
 // Tier: opus (adversarial judgment). Effort: xhigh.
+
 
 
                                                                      
@@ -1455,8 +1787,8 @@ const JUDGE         = {
 };
 
 const judge                   = {
-  tier: 'opus',
-  effort: 'xhigh',
+  tier: CONFIG.TIER.judge,
+  effort: CONFIG.EFFORT.judge,
   schema: JUDGE,
   buildPrompt: buildJudge,
 };
@@ -1492,10 +1824,15 @@ const buildSynthesiser = ({
   cleanReports,
   focus,
   openRabbitHoles,
+  compute,
   thinkerNote,
 }                 ) => {
   // the brain folds any finalize derivation into resultSoFar.working — present that as the quantitative result.
-  const hasCompute = !!(resultSoFar && resultSoFar.working && resultSoFar.working.trim());
+  // Key this on CONFIG.compute, NOT merely on a non-empty `working`: with compute OFF a derivation must NEVER be
+  // presented even if one leaked into resultSoFar (only an EXPLICIT compute:false suppresses it, so prompt-only
+  // callers that omit compute keep the present-when-derived default).
+  const hasCompute =
+    compute !== false && !!(resultSoFar && resultSoFar.working && resultSoFar.working.trim());
   const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
   const focusClause = focus
     ? `
@@ -1526,6 +1863,7 @@ Emphasis from the finalize director: ${focus}`
 // SYNTHESISER — writes the END report (always) from the hardened facts (source of truth) + the computed
 // derivation (verbatim) + the final resultSoFar. Tier: opus (final synthesis). Effort: xhigh.
 
+
                                                                            
 
 const REPORT         = {
@@ -1533,7 +1871,7 @@ const REPORT         = {
   properties: {
     report: {
       type: 'string',
-      description: 'the FULL report as markdown, all 7 sections in order per the contract',
+      description: 'the FULL report as markdown, all 8 sections in order per the contract',
     },
     verdict: { type: 'string', description: '1-3 sentence headline answer' },
     confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
@@ -1548,8 +1886,8 @@ const REPORT         = {
 };
 
 const synthesiser                         = {
-  tier: 'opus',
-  effort: 'xhigh',
+  tier: CONFIG.TIER.synthesiser,
+  effort: CONFIG.EFFORT.synthesiser,
   schema: REPORT,
   buildPrompt: buildSynthesiser,
 };
@@ -1562,7 +1900,7 @@ const synthesiser                         = {
 
 const DEBUG_TPL = `{{! debug — consolidates metrics, run log, and raw agent I/O into one debug report }}
 Consolidate and analyze this RR run's diagnostics for an engineer debugging the pipeline. Goal: "{{query}}".
-Walk it phase by phase — scout → prospector → each research wave → sentinel → finalize (initiate → refine → judge → synthesise) — reporting what happened at each with the actual numbers, plus anomalies, degraded/failed agents, or wasted effort to fix.
+Walk it phase by phase — scout → prospector → each research wave → finalize (initiate → refine → judge → synthesise) — reporting what happened at each with the actual numbers, plus anomalies, degraded/failed agents, or wasted effort to fix.
 Prospector→researcher utilization (run this check): the prospector named these venues:
 {{highValueSources}}
 Each lane in laneRecords carries the \`assignedVenues\` the brainer gave it; from that lane's summary + rabbitHoles, judge whether the researcher actually drew on those venues. Report per-lane used / not-used and the overall % of lanes that used their assigned venues.{{focusClause}}
@@ -1572,8 +1910,6 @@ Lane records (wave, keyword, assignedVenues, summary, rabbitHoles):
 {{laneRecords}}
 Per-wave log:
 {{waveLog}}
-Sentinel log:
-{{sentinelLog}}
 Per-wave result-so-far log (the brainer's running memory each wave):
 {{resultLog}}
 Return diagnosis (markdown).{{FINISH}}
@@ -1584,7 +1920,6 @@ const buildDebugAnalyst = ({
   focus,
   metrics,
   waveLog,
-  sentinelLog,
   resultLog,
   highValueSources,
   laneRecords,
@@ -1600,7 +1935,6 @@ Then answer this run-specific question directly: ${focus}`
     metrics: plain(metrics),
     laneRecords: plain(laneRecords),
     waveLog: plain(waveLog),
-    sentinelLog: plain(sentinelLog),
     resultLog: plain(resultLog),
     FINISH,
   });
@@ -1609,6 +1943,7 @@ Then answer this run-specific question directly: ${focus}`
 // DEBUG ANALYST — last phase, opt-in (arg.debug). Consolidates the run's diagnostics corner by corner
 // (incl. prospector→researcher venue utilization + any arg.debugPrompt question) into one _debug.md.
 // Tier: opus (diagnostic synthesis). Effort: high.
+
 
                                                                             
 
@@ -1624,12 +1959,13 @@ const DIAG         = {
 };
 
 const debugAnalyst                          = {
-  tier: 'opus',
-  effort: 'high',
+  tier: CONFIG.TIER.debugAnalyst,
+  effort: CONFIG.EFFORT.debugAnalyst,
   schema: DIAG,
   buildPrompt: buildDebugAnalyst,
 };
 // ╔══ module: src/store.ts ════════════════════════════════════════════════
+
 
              
                     
@@ -1656,9 +1992,8 @@ const debugAnalyst                          = {
                      
   
 
-// light near-duplicate check — Jaccard token-set overlap ≥ this counts as "the same lead, reworded" (catches
-// re-orderings the exact norm() match misses); kept high so genuinely distinct leads are never merged away.
-const NEAR_DUP = 0.85;
+// light near-duplicate check — Jaccard token-set overlap ≥ CONFIG.NEAR_DUP counts as "the same lead, reworded"
+// (catches re-orderings the exact norm() match misses); the threshold is kept high so distinct leads are never merged.
 const tokenSet = (s        )              => new Set(norm(s).split(' ').filter(Boolean));
 const nearDup = (a        , b        )          => {
   const A = tokenSet(a);
@@ -1666,7 +2001,7 @@ const nearDup = (a        , b        )          => {
   if (!A.size || !B.size) return false;
   let inter = 0;
   for (const t of A) if (B.has(t)) inter++;
-  return inter / (A.size + B.size - inter) >= NEAR_DUP;
+  return inter / (A.size + B.size - inter) >= CONFIG.NEAR_DUP;
 };
 
 // add-or-find an OPEN rabbit-hole. Dedup by norm(keyword), a near-duplicate keyword, AND normRef(ref) against the
@@ -1750,6 +2085,7 @@ function resolveLookupNext(
       });
     if (!rh || state.pursuedKeys.has(norm(rh.keyword))) continue;
     if (item.sources) rh.sources = item.sources;
+    if (item.note) rh.note = item.note; // the brainer's per-lane directive → rides to the scheduler + reader as noteFromBrainer
     if (item.ref && !rh.ref) rh.ref = item.ref;
     if (!picks.some((p) => p.id === rh.id)) picks.push(rh);
   }
@@ -1766,6 +2102,9 @@ function reopenRabbitHole(state            , rh            )             {
   const li = state.pursuedList.indexOf(rh.keyword);
   if (li >= 0) state.pursuedList.splice(li, 1);
   rh.failCount = (rh.failCount || 0) + 1;
+  // clear the stale directive: the `note` that already produced a dead lane must NOT be re-sent verbatim — the
+  // next brainer re-authors a fresh directive (or the scheduler/reader fall back to the rabbit-hole + goal).
+  delete rh.note;
   if (!state.rabbitHoles.some((x) => x.id === rh.id)) state.rabbitHoles.push(rh);
   return rh;
 }
@@ -1781,46 +2120,201 @@ function pursue(state            , picks              )       {
   const gone = new Set(picks.map((p) => p.id));
   state.rabbitHoles = state.rabbitHoles.filter((r) => !gone.has(r.id));
 }
-// ╔══ module: src/engine.ts ═══════════════════════════════════════════════
-
-
-
-
+// ╔══ module: src/brainerState.ts ═════════════════════════════════════════
              
-            
-           
-                  
               
         
-          
                
-        
-          
-               
-             
-             
-          
+           
              
                 
-                 
             
-            
-              
                  
               
-            
            
            
-                   
-              
              
-             
-       
                     
-               
         
                
                           
+
+// the speculative GATE's reusable outputs — runGate hardens these once; finalizeWinner reuses them for the report.
+                            
+                        
+                     
+                              
+                    
+ 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BrainerState — ONE brainer's private crawl state in the brainer tree.
+// The single-brainer ResearchReport split its state in two: the RUN GLOBALS (scout
+// + prospector seed, set once before any brainer exists) stay on ResearchReport;
+// the PER-CRAWL state (the store + resultSoFar + the per-wave logs + the crawl
+// outcome) moves here, so N brainers each carry their own. The store reducers in
+// store.ts already operate on a structural `state` first-arg, so a BrainerState IS
+// a StoreState and the reducers work on it unchanged.
+//
+// The run.ts agent fns read the same FIELD NAMES they read off ResearchReport — the
+// per-crawl ones live here, the read-only globals (scout/highValueSources/…) are
+// copied BY REFERENCE at construction (set once, shared, never mutated mid-crawl) —
+// so each fn only changed its param TYPE, not its field accesses. The engine still
+// owns every mutation + every files[name] = … write; it passes the active brainer in.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// active = waving · done = declared done, awaiting gate dispatch (transient) · finalizing = a speculative gate is in
+// flight · won = its gate passed (the run's winner) · drained = wrapped up without winning · lost = a CHILD abandoned
+// its branch as a dead end.
+                                                                                          
+
+// the read-only run globals every BrainerState shares (ResearchReport satisfies this — the scout + prospector
+// populate them before the first brainer is constructed, and nothing mutates them during the crawl).
+                             
+                         
+                               
+                            
+                           
+ 
+
+// the identity a brainer is born with — the root has parentName=null (and can never declare lost).
+                                  
+                                                               
+                                                       
+                                                                                       
+                                                                         
+                                                                                    
+ 
+
+class BrainerState {
+  // ── identity ──
+  name        ;
+  parentName               ;
+  mandate        ;
+  trail        ;
+  depth        ;
+  status               ;
+  gate                 ; // the last speculative-gate judge verdict (null until a gate runs)
+
+  // ── run globals (shared by reference — read-only during the crawl) ──
+  scout                 ;
+  scoutRabbitHoles            ;
+  highValueSources         ;
+  languageGuidance        ;
+
+  // ── StoreState (own, mutable — the reducers in store.ts mutate these) ──
+  rabbitHoles              ;
+  nextId        ;
+  pursuedKeys             ;
+  pursuedRefs             ;
+  pursuedList          ;
+  pursuedArchive              ;
+
+  // ── crawl accumulators (own) ──
+  resultSoFar                    ; // this brainer's living memory
+  topScores          ; // its own decay signal (plateau detection)
+  waveLog                ;
+  resultLog                  ;
+  validatorLog                     ;
+  lastValidatorMissing        ;
+  coord              ;
+  lookupNext              ; // the pending lanes this brainer pursues next wave (was a runCrawl local — per-brainer now)
+  starvedWaves        ; // consecutive empty-schedule waves for THIS brainer (B6 starvation guard)
+  gateCache                  ; // the speculative gate's hardened outputs, reused by finalizeWinner (no re-harden)
+  wave        ; // its own wave counter (root: wave 0 scores the scout seeds, 1..N research)
+  bestOpen        ;
+  stopReason                   ;
+
+  // ── finalize outcome (own) ──
+  rabbitHolesOut                 ;
+  synthesiserOut                  ;
+  reportOk         ;
+
+  constructor(g            , id                 ) {
+    this.name = id.name;
+    this.parentName = id.parentName;
+    this.mandate = id.mandate;
+    this.trail = id.trail;
+    this.depth = id.depth;
+    this.status = 'active';
+    this.gate = null;
+    // globals by reference (set once, shared, never mutated mid-crawl)
+    this.scout = g.scout;
+    this.scoutRabbitHoles = g.scoutRabbitHoles;
+    this.highValueSources = g.highValueSources;
+    this.languageGuidance = g.languageGuidance;
+    // own store
+    this.rabbitHoles = [];
+    this.nextId = 1;
+    this.pursuedKeys = new Set();
+    this.pursuedRefs = new Set();
+    this.pursuedList = [];
+    this.pursuedArchive = [];
+    // own accumulators
+    this.resultSoFar = null;
+    this.topScores = [];
+    this.waveLog = [];
+    this.resultLog = [];
+    this.validatorLog = [];
+    this.lastValidatorMissing = '';
+    this.coord = null;
+    this.lookupNext = [];
+    this.starvedWaves = 0;
+    this.gateCache = null;
+    this.wave = 1;
+    this.bestOpen = 0;
+    this.stopReason = null;
+    // own finalize outcome
+    this.rabbitHolesOut = [];
+    this.synthesiserOut = null;
+    this.reportOk = false;
+  }
+
+  get isRoot()          {
+    return this.parentName === null;
+  }
+}
+
+// SPAWN — a clean deep-copy of the parent into a focused CHILD brainer. New arrays + new Sets (JSON-cloned plain
+// data, zero shared references) so neither brainer can corrupt the other's store; the parent's resultSoFar is
+// cloned as the child's SEED (the parent-authored `mandate` is what aims it). The run globals propagate by
+// reference (the constructor copies them off the parent, which already holds them). depth = parent.depth + 1;
+// the child joins at the parent's current wave. The engine calls this when it honors a `spawn` delta (caps first).
+function spawnBrainer(
+  parent              ,
+  id                                                  ,
+)               {
+  const child = new BrainerState(parent, {
+    name: id.name,
+    parentName: parent.name,
+    mandate: id.mandate,
+    trail: id.trail,
+    depth: parent.depth + 1,
+  });
+  // deep-copy the parent's store — clean branch (no shared refs): JSON-clone the plain-data arrays, fresh Sets.
+  child.rabbitHoles = JSON.parse(JSON.stringify(parent.rabbitHoles));
+  child.pursuedArchive = JSON.parse(JSON.stringify(parent.pursuedArchive));
+  child.nextId = parent.nextId;
+  child.pursuedKeys = new Set(parent.pursuedKeys);
+  child.pursuedRefs = new Set(parent.pursuedRefs);
+  child.pursuedList = parent.pursuedList.slice();
+  child.topScores = parent.topScores.slice();
+  // the parent AUTHORS the child's resultSoFar — a deep clone of its own living memory, the seed the mandate aims.
+  child.resultSoFar = parent.resultSoFar ? JSON.parse(JSON.stringify(parent.resultSoFar)) : null;
+  child.wave = parent.wave;
+  return child;
+}
+// ╔══ module: src/runtime.ts ══════════════════════════════════════════════
+
+
+                                                              
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent runtime — the shared sub-agent caller + the debug capture buffers. Lives
+// in its own module (bundled before the per-agent run.ts modules) so every run fn
+// imports retryAgent without a cycle back through engine.ts; the engine no longer
+// owns the agent-call plumbing, only the orchestration that consumes it.
+// ─────────────────────────────────────────────────────────────────────────────
 
 // L7 retry indirection — wraps every agent() call; the _agent alias keeps it from rewriting itself.
 const _agent = agent;
@@ -1836,6 +2330,7 @@ try {
 } catch (e) {
   /* log not writable → run-log just won't be buffered */
 }
+
 // run a sub-agent with AGENT_RETRIES retries, narrowing the result to its agent's typed `*Out` shape (T); degrades to null when exhausted.
 const retryAgent = async    (prompt        , opts           )                    => {
   if (opts && opts.label) PROMPT_LOG[opts.label] = prompt;
@@ -1877,6 +2372,780 @@ const retryAgent = async    (prompt        , opts           )                   
   }
   return null;
 };
+// ╔══ module: src/agents/scout/run.ts ═════════════════════════════════════
+
+
+
+                                                      
+                                                               
+
+// Scout (wave-0 seed): broad WebSearch → fetch sources with the rabbit-hole footer → seed rabbit-holes.
+// Sets rr.scout + rr.scoutRabbitHoles and returns the seed leads (the engine seeds the open store from them).
+async function runScout(rr                )                      {
+  phase(CONFIG.PHASE.scout);
+  log('· scout DISPATCH · ' + scout.tier);
+  const scoutOut = await retryAgent          (
+    scout.buildPrompt({
+      query: CONFIG.query,
+      net: CONFIG.NET,
+      footer: CONFIG.FOOTER,
+      researcherNote: CONFIG.RESEARCHER_NOTE,
+    }),
+    {
+      label: 'scout',
+      phase: CONFIG.PHASE.scout,
+      model: scout.tier,
+      effort: scout.effort,
+      agentType: CONFIG.GENERAL_PURPOSE,
+      schema: scout.schema,
+    },
+  );
+  if (!scoutOut) {
+    log('✗ scout DIED');
+    throw new Error('scout died');
+  }
+  rr.scout = scoutOut;
+  const scoutRabbitHoles             = scoutOut.pages.flatMap((p) =>
+    (p.rabbitHoles || []).map((l) => ({ keyword: l.keyword, why: l.why, path: []             })),
+  ); // PATH: scout rabbit-holes descend directly from the goal
+  rr.scoutRabbitHoles = scoutRabbitHoles;
+  log(
+    '· scout RETURN · pages=' +
+      scoutOut.pages.length +
+      ' · rabbit-holes=' +
+      scoutRabbitHoles.length +
+      ' · deadEnds=' +
+      (scoutOut.deadEnds || []).length,
+  );
+  scoutOut.pages.forEach((p, i) =>
+    log(
+      '    source ' + (i + 1) + ' · rabbit-holes=' + (p.rabbitHoles || []).length + ' · ' + p.url,
+    ),
+  );
+  return scoutRabbitHoles;
+}
+// ╔══ module: src/agents/prospector/run.ts ════════════════════════════════
+
+
+
+
+                                                      
+                                                       
+
+// PROSPECT — one Opus prospector after the scout names the high-value source venues; the brainer assigns the
+// relevant subset per lane. Sets rr.highValueSources/languageGuidance/sourcesReasoning and RETURNS the
+// 02-prospector.md markdown (the engine writes it); on failure the venues degrade to none.
+async function runProspector(rr                )                  {
+  log('· prospector DISPATCH · ' + prospector.tier);
+  const res = await retryAgent            (
+    prospector.buildPrompt({
+      query: CONFIG.query,
+      landscape: rr.scout .landscape,
+      sources: rr.scout .pages.map((p) => p.url),
+      thinkerNote: CONFIG.THINKER_NOTE,
+      researcherNote: CONFIG.RESEARCHER_NOTE,
+    }),
+    {
+      label: 'prospector',
+      phase: CONFIG.PHASE.scout,
+      model: prospector.tier,
+      effort: prospector.effort,
+      schema: prospector.schema,
+    },
+  );
+  rr.highValueSources = (res && res.highValueSources) || [];
+  rr.languageGuidance = (res && res.languageGuidance) || '';
+  rr.sourcesReasoning = (res && res.reasoning) || '';
+  log(
+    '· prospector RETURN · venues=' +
+      rr.highValueSources.length +
+      (rr.languageGuidance ? ' · languages="' + rr.languageGuidance.slice(0, 80) + '"' : '') +
+      (res ? '' : ' (FAILED → none; researchers fall back to general search)'),
+  );
+  rr.highValueSources.forEach((s, i) =>
+    log('    venue ' + (i + 1) + ' · ' + s.source + ' — ' + s.goodFor),
+  );
+  return withPrompt(
+    'prospector',
+    '# 02 — Prospector\n\n**Query:** ' +
+      CONFIG.query +
+      (rr.sourcesReasoning ? '\n\n_' + rr.sourcesReasoning + '_' : '') +
+      (rr.languageGuidance ? '\n\n**Language routing:** ' + rr.languageGuidance : '') +
+      '\n\n## High-value source venues\n\n' +
+      (rr.highValueSources
+        .map(
+          (s, i) =>
+            i +
+            1 +
+            '. **' +
+            s.source +
+            '**' +
+            (s.lang ? ' [' + s.lang + ']' : '') +
+            ' — ' +
+            s.goodFor,
+        )
+        .join('\n') || '_(none returned)_') +
+      '\n',
+  );
+}
+// ╔══ module: src/agents/brainer/run.ts ═══════════════════════════════════
+
+
+
+
+                                                          
+                                                                                         
+
+// the single Opus BRAINER — the brain / global reducer. Sees the open store + pursued set + running resultSoFar; returns the updated
+// resultSoFar + DELTAS (rescore / add / lookupNext / rename / drop / stop). Can LOOK UP stored leads OR ORIGINATE new directions; code-capable
+// (general-purpose) when compute is on, so it can derive its own steering numbers inline — no separate compute stage.
+async function runBrainer(
+  bs              ,
+  wave        ,
+  findings           ,
+  phaseName         = CONFIG.PHASE.crawl,
+  ctx                                             ,
+)                        {
+  const open = bs.rabbitHoles.map(openLine);
+  return retryAgent       (
+    brainer.buildPrompt({
+      wave,
+      query: CONFIG.query,
+      rubric: CONFIG.RUBRIC,
+      landscape: bs.scout .landscape,
+      pursuedList: bs.pursuedList,
+      open,
+      findings,
+      topScores: bs.topScores,
+      resultSoFar: bs.resultSoFar,
+      assignSources: CONFIG.parallelSourcesPerLaneResearchAgent === 'auto',
+      stop: CONFIG.STOP,
+      mode: CONFIG.mode,
+      venues: bs.highValueSources,
+      languageGuidance: bs.languageGuidance,
+      lastValidatorMissing: bs.lastValidatorMissing,
+      compute: CONFIG.compute,
+      computeNote: CONFIG.COMPUTE_NOTE,
+      thinkerNote: CONFIG.THINKER_NOTE,
+      researcherNote: CONFIG.RESEARCHER_NOTE,
+      // brainer-tree context — identity off the brainer, per-wave permissions off ctx (both inert in single-brainer runs)
+      isChild: !bs.isRoot,
+      parentName: bs.parentName || undefined,
+      mandate: bs.mandate || undefined,
+      trail: bs.trail || undefined,
+      canSpawn: ctx ? ctx.canSpawn : false,
+      lastWave: ctx ? ctx.lastWave : false,
+    }),
+    {
+      label: 'brainer-' + (bs.isRoot ? '' : bs.name + '-') + 'w' + wave,
+      phase: phaseName,
+      model: brainer.tier,
+      effort: brainer.effort,
+      schema: brainer.schema,
+      agentType: CONFIG.compute ? CONFIG.GENERAL_PURPOSE : undefined,
+    },
+  );
+}
+
+// brain FINALIZE-COMPUTE — the brain (code-capable) derives the answer on the hardened facts, per the judge directive.
+// Pure: returns the BrainComputeOut; the engine folds out.resultSoFar back into bs.
+async function runBrainerCompute(
+  bs              ,
+  hardenedFacts               ,
+  directive        ,
+  reason        ,
+  pass        ,
+)                                  {
+  return retryAgent                 (
+    buildBrainerCompute({
+      query: CONFIG.query,
+      resultSoFar: bs.resultSoFar,
+      hardenedFacts,
+      directive,
+      reason,
+      computeNote: CONFIG.COMPUTE_NOTE,
+      thinkerNote: CONFIG.THINKER_NOTE,
+    }),
+    {
+      label: 'brain-compute-' + pass,
+      phase: CONFIG.PHASE.finalize,
+      model: brainer.tier,
+      effort: brainer.effort,
+      agentType: CONFIG.GENERAL_PURPOSE,
+      schema: BRAIN_COMPUTE,
+    },
+  );
+}
+// ╔══ module: src/agents/validator/run.ts ═════════════════════════════════
+
+
+
+                                                          
+                                                                                             
+
+// VALIDATOR — the per-wave coverage gate (distinct from the terminal judge). Given the wave's lookupNext
+// requests + each lane's intro + which lanes died, it rules whether each request was fulfilled and what is still missing.
+async function runValidator(
+  bs              ,
+  wave        ,
+  requests                    ,
+  findings                    ,
+  nullLanes          ,
+)                               {
+  return retryAgent              (
+    validator.buildPrompt({ query: CONFIG.query, requests, findings, nullLanes }),
+    {
+      label: 'validator-w' + wave,
+      phase: CONFIG.PHASE.crawl,
+      model: validator.tier,
+      effort: validator.effort,
+      schema: validator.schema,
+    },
+  );
+}
+// ╔══ module: src/agents/researchScheduler/run.ts ═════════════════════════
+
+
+
+
+                                                          
+                                                                                      
+
+// SCHEDULER (B4) — discovery. One Sonnet researchScheduler over the WHOLE wave's lanes: per lane (the
+// rabbit-hole + its steering `note` + assigned venues), it batches the searches, sizes every candidate via
+// mcp__harvester__fetch size_only, and returns the chosen sources grouped per lane id. Returns a Map<id, sources>;
+// the engine bin-packs each lane's sources into reader-units. Degrades to an empty map when the scheduler dies.
+async function runScheduler(
+  bs              ,
+  picks              ,
+  tag        ,
+  phaseName        ,
+)                                          {
+  const map = new Map                           ();
+  if (!picks.length) return map;
+  const out = await retryAgent              (
+    researchScheduler.buildPrompt({
+      query: CONFIG.query,
+      lanes: picks.map((p) => ({
+        id: p.id,
+        keyword: p.keyword,
+        why: p.why,
+        note: p.note || '',
+        venues: venuesFor(bs, p.sources),
+        ref: p.ref,
+      })),
+      researcherNote: CONFIG.RESEARCHER_NOTE,
+    }),
+    {
+      label: 'scheduler-' + tag,
+      phase: phaseName,
+      model: researchScheduler.tier,
+      effort: researchScheduler.effort,
+      agentType: CONFIG.GENERAL_PURPOSE,
+      schema: researchScheduler.schema,
+    },
+  );
+  // B6 — only accept lanes whose id is a REAL pick this wave: drop hallucinated ids the scheduler may invent;
+  // a duplicate id is last-wins (map.set), which is fine — the engine bin-packs whatever set lands on the id.
+  const pickIds = new Set(picks.map((p) => p.id));
+  for (const l of (out && out.lanes) || [])
+    if (l && typeof l.id === 'number' && pickIds.has(l.id) && Array.isArray(l.sources))
+      map.set(l.id, l.sources);
+  log(
+    '    scheduler · ' +
+      map.size +
+      '/' +
+      picks.length +
+      ' lane(s) sourced · sources=' +
+      [...map.values()].reduce((n, s) => n + s.length, 0),
+  );
+  return map;
+}
+// ╔══ module: src/agents/researcher/run.ts ════════════════════════════════
+
+
+
+
+                                                          
+             
+             
+             
+                 
+            
+            
+              
+                  
+                              
+
+// LANE THREAD (B5) — one SEQUENTIAL reader thread for a lane, carrying the running answer across every read.
+// `readers` is the bin-packed list of reader-units (each a set of cache char-windows). Each reader reads its
+// slice(s) off disk + digests; only the clean parsed `runningAnswer` is forwarded (handoff hygiene — no
+// tool-call/StructuredOutput serialization). Yields one accumulated ResearchOut (or null if every reader failed).
+async function runLaneThread(
+  bs              ,
+  p            ,
+  readers               ,
+  tag        ,
+  phaseName        ,
+)                              {
+  const N = readers.length;
+  let priorAnswer = '';
+  const rabbitHoles                   = [];
+  const nextSources               = [];
+  const deadEnds           = [];
+  let any = false;
+  let failed = false; // B3: any reader returned null (retries exhausted / open() threw) → the lane is INCOMPLETE
+  for (let i = 0; i < N; i++) {
+    const out = await retryAgent           (
+      researcher.buildPrompt({
+        query: CONFIG.query,
+        trail: trailOf(p.path, p.keyword),
+        keyword: p.keyword,
+        why: p.why,
+        note: p.note || '',
+        footer: CONFIG.FOOTER,
+        reads: readers[i],
+        readerIndex: i + 1,
+        readerCount: N,
+        priorAnswer, // clean parsed running answer from the prior reader ('' for reader 1) — renders LAST
+        researcherNote: CONFIG.RESEARCHER_NOTE,
+      }),
+      {
+        label: 'lane-' + tag + ':' + lab(p.keyword) + '-r' + (i + 1) + 'of' + N,
+        phase: phaseName,
+        model: researcher.tier,
+        effort: researcher.effort,
+        agentType: CONFIG.GENERAL_PURPOSE,
+        schema: researcher.schema,
+      },
+    );
+    if (out) {
+      any = true;
+      if (typeof out.runningAnswer === 'string' && out.runningAnswer.trim())
+        priorAnswer = clip(out.runningAnswer, CONFIG.HANDOFF_CHARS); // handoff hygiene + B7: bound the forwarded running answer
+      for (const rh of out.rabbitHoles || []) rabbitHoles.push(rh);
+      for (const ns of out.nextSources || []) nextSources.push(ns);
+      for (const d of out.deadEnds || []) deadEnds.push(d);
+    } else {
+      failed = true; // a dropped chunk must NOT hide behind the surviving readers
+    }
+  }
+  // B3 — if ANY reader on the lane failed (or none produced anything), return null so the validator gate
+  // (anyNull) reopens the lane; never emit a confident summary that silently dropped a chunk.
+  if (!any || failed) return null;
+  return {
+    summary: priorAnswer || '(reader returned no answer)',
+    rabbitHoles,
+    nextSources,
+    deadEnds,
+  };
+}
+
+// RUN RESEARCHERS (B5) — consume the scheduler's per-lane source sets: bin-pack each lane into ≤budget
+// reader-units, then spawn ONE sequential reader thread per lane in PARALLEL across lanes. A lane with no
+// scheduled source returns null (a dead lane → the validator gate reopens it). Returns each lane's accumulated
+// ResearchOut (or null), in pick order.
+async function runResearchers(
+  bs              ,
+  picks              ,
+  schedule                                ,
+  tag        ,
+  phaseName        ,
+)                                  {
+  return parallel(
+    picks.map((p) => () => {
+      // B7: cap sources-per-lane before packing; B2/B7: hand packReaders the slice cap + the token→char ratio.
+      const laneSources = (schedule.get(p.id) || []).slice(0, CONFIG.MAX_SOURCES_PER_LANE);
+      const readers = packReaders(
+        laneSources,
+        CONFIG.RESEARCHER_TOKEN_BUDGET,
+        CONFIG.CHUNK_OVERLAP_CHARS,
+        CONFIG.MAX_SLICES_PER_READER,
+        CONFIG.CHARS_PER_TOKEN,
+      );
+      if (!readers.length) {
+        log('    lane #' + p.id + ' ' + lab(p.keyword) + ' — no source scheduled → skipped');
+        return Promise.resolve(null);
+      }
+      return runLaneThread(bs, p, readers, tag, phaseName);
+    }),
+  );
+}
+// ╔══ module: src/agents/initiator/run.ts ═════════════════════════════════
+
+
+
+
+                                                          
+                                                                       
+
+// INITIATOR — shapes the finish to the query: names the load-bearing facts to harden + sets the report focus.
+// Returns the facts + synthesiser focus the finalize loop consumes, plus the initiator artifact markdown.
+async function runInitiator(
+  bs              ,
+  topOpen          ,
+)                                                                           {
+  log(
+    '· finalize · initiator · ' +
+      initiator.tier +
+      ' · naming the facts to harden + the report focus',
+  );
+  const plan = await retryAgent              (
+    initiator.buildPrompt({
+      query: CONFIG.query,
+      resultSoFar: bs.resultSoFar,
+      waveLog: bs.waveLog,
+      landscape: bs.scout .landscape,
+      openRabbitHoles: topOpen,
+      mode: CONFIG.mode,
+      thinkerNote: CONFIG.THINKER_NOTE,
+    }),
+    {
+      label: 'initiator',
+      phase: CONFIG.PHASE.finalize,
+      model: initiator.tier,
+      effort: initiator.effort,
+      schema: initiator.schema,
+    },
+  );
+  const facts =
+    plan && plan.refinement && Array.isArray(plan.refinement.facts) ? plan.refinement.facts : [];
+  const synthFocus = (plan && plan.synthesiser && plan.synthesiser.focus) || '';
+  log(
+    '· finalize · plan · facts=' +
+      facts.length +
+      ' · synthFocus=' +
+      (synthFocus ? '"' + synthFocus.slice(0, 60) + '"' : 'none'),
+  );
+  const artifact = withPrompt(
+    'initiator',
+    '# Initiator — finalize plan\n\n' +
+      '## Facts to harden (' +
+      facts.length +
+      ')\n\n' +
+      (facts.map((f, i) => i + 1 + '. **' + f.fact + '** — ' + f.why).join('\n') || '_none_') +
+      '\n\n## Synthesiser focus\n\n' +
+      (synthFocus || '_none_') +
+      '\n',
+  );
+  return { facts, synthFocus, artifact };
+}
+// ╔══ module: src/agents/refiner/run.ts ═══════════════════════════════════
+
+
+
+                                                          
+                                                                                 
+
+// REFINE the named load-bearing facts in parallel — one sonnet refine agent per fact; on a re-run the judge `directive`
+// rides into each so it re-checks what the judge flagged. Returns the hardened reports + the refinement artifact markdown
+// (the engine writes/overwrites the refinement file). passTag keeps labels unique per pass.
+async function runRefine(
+  bs              ,
+  facts                ,
+  directive        ,
+  passTag        ,
+)                                                             {
+  const refined = await parallel(
+    facts.map(
+      (f, i) => () =>
+        retryAgent           (
+          refiner.buildPrompt({
+            net: CONFIG.NET,
+            query: CONFIG.query,
+            fact: f.fact,
+            why: f.why,
+            directive,
+          }),
+          {
+            label: 'refine-' + passTag + i,
+            phase: CONFIG.PHASE.finalize,
+            model: refiner.tier,
+            effort: refiner.effort,
+            schema: refiner.schema,
+          },
+        ),
+    ),
+  );
+  const cleanReports                = facts.map((f, i) => ({
+    fact: f.fact,
+    why: f.why,
+    clean: (refined[i] && refined[i] .report) || '(refine failed)',
+  }));
+  const artifact =
+    '# Refinement — fact-check & harden the load-bearing facts\n\n' +
+    (facts.length
+      ? facts
+          .map(
+            (f, i) =>
+              '## ' +
+              (i + 1) +
+              ' — ' +
+              f.fact +
+              '\n\n_' +
+              f.why +
+              '_\n\n' +
+              ((refined[i] && refined[i] .report) || '_(refine failed)_'),
+          )
+          .join('\n\n')
+      : '_no facts to harden_') +
+    '\n';
+  return { cleanReports, artifact };
+}
+// ╔══ module: src/agents/judge/run.ts ═════════════════════════════════════
+
+
+
+
+                                                          
+                                                                  
+
+// the prefix shared by the compute-off limitation message and the engine's openGaps dedup, so editing the wording edits both.
+const COMPUTE_LIMIT_PREFIX = 'Quantitative derivation unavailable';
+
+// JUDGE — the TERMINAL skeptic of the finalize phase. Judges the hardened answer (goal met, verification real, derivation valid) and
+// names the precise fix when not. When compute is off, needsCompute/computeSound are forced (no derivation path). Bounded by MAX_JUDGE_PASSES.
+async function runJudge(
+  bs              ,
+  cleanReports               ,
+  focus        ,
+  pass        ,
+)                           {
+  log('· finalize · judge · ' + judge.tier + ' · judging the hardened answer (pass ' + pass + ')');
+  // B1-refinement: the judge sees the leftover/unpursued open rabbit-holes (top by score) so it can rule whether a real gap remains and reopen the crawl.
+  const openRabbitHoles = [...bs.rabbitHoles]
+    .sort((a, b) => (lastScore(b) ?? -1) - (lastScore(a) ?? -1))
+    .slice(0, CONFIG.FINALIZE_TOP_OPEN)
+    .map((r) => '[' + (lastScore(r) ?? 'new') + '] ' + r.keyword + ' — ' + r.why);
+  const out = await retryAgent          (
+    judge.buildPrompt({
+      query: CONFIG.query,
+      resultSoFar: bs.resultSoFar,
+      cleanReports,
+      focus,
+      openRabbitHoles,
+      compute: CONFIG.compute,
+      mode: CONFIG.mode,
+      computeNote: CONFIG.COMPUTE_NOTE,
+      thinkerNote: CONFIG.THINKER_NOTE,
+    }),
+    {
+      label: 'judge-' + pass,
+      phase: CONFIG.PHASE.finalize,
+      model: judge.tier,
+      effort: judge.effort,
+      schema: judge.schema,
+    },
+  );
+  if (out && !CONFIG.compute) {
+    // compute off → no derivation can run; computeSound is true because none is PRESENT to be unsound (this never
+    // blocks the exit). But do NOT rubber-stamp needsCompute to false: if the judge says the answer genuinely needs
+    // a derivation it cannot have, RETURN that honest signal as a STATED LIMITATION for the engine to fold into
+    // openGaps (the report's Open questions) — the engine owns every resultSoFar mutation, not this run fn.
+    out.computeSound = true;
+    if (out.needsCompute && bs.resultSoFar)
+      out.computeLimitation =
+        COMPUTE_LIMIT_PREFIX +
+        ' (compute is off): ' +
+        (out.directive ||
+          out.reasoning ||
+          'the answer rests on a derivation this run could not perform');
+  }
+  if (out)
+    log(
+      '· finalize · judge pass ' +
+        pass +
+        ' · goalMet=' +
+        out.goalMet +
+        ' verif=' +
+        out.verificationSound +
+        ' needsCompute=' +
+        out.needsCompute +
+        ' computeSound=' +
+        out.computeSound,
+    );
+  return out;
+}
+// ╔══ module: src/agents/synthesiser/run.ts ═══════════════════════════════
+
+
+
+                                                          
+                                                                   
+
+// SYNTHESISER — writes the END report (always) from the judged answer (resultSoFar, any derivation folded into `working`) + the hardened facts.
+// gated on CONFIG.compute (not just a non-empty `working`) so compute-off runs never present a derivation. Returns the ReportOut; the engine
+// prepends the run-args banner and writes result.md.
+async function runSynthesiser(
+  bs              ,
+  cleanReports               ,
+  synthFocus        ,
+  topOpen          ,
+)                            {
+  const hasDerivation = !!(
+    CONFIG.compute &&
+    bs.resultSoFar &&
+    bs.resultSoFar.working &&
+    bs.resultSoFar.working.trim()
+  );
+  log(
+    '· finalize · synthesiser · ' +
+      synthesiser.tier +
+      ' · writing the report' +
+      (hasDerivation ? ' (with derivation)' : ''),
+  );
+  return retryAgent           (
+    synthesiser.buildPrompt({
+      mode: CONFIG.mode,
+      query: CONFIG.query,
+      landscape: bs.scout .landscape,
+      resultSoFar: bs.resultSoFar,
+      waveLog: bs.waveLog,
+      cleanReports,
+      focus: synthFocus,
+      openRabbitHoles: topOpen,
+      compute: CONFIG.compute,
+      thinkerNote: CONFIG.THINKER_NOTE,
+    }),
+    {
+      label: 'synthesiser',
+      phase: CONFIG.PHASE.finalize,
+      model: synthesiser.tier,
+      effort: synthesiser.effort,
+      schema: synthesiser.schema,
+    },
+  );
+}
+// ╔══ module: src/agents/debugAnalyst/run.ts ══════════════════════════════
+
+
+
+
+                                                      
+                                                          
+                                                             
+
+// DEBUG & ANALYSIS (last phase, opt-in via arg.debug): an Opus agent consolidates the run's diagnostics — corner-by-corner,
+// prospector→researcher venue utilization, and any arg.debugPrompt question — then JS appends the verbatim metrics, run log,
+// and raw agent I/O (exact prompt in / exact output out) into one shippable _debug.md. Returns the _debug.md markdown (the engine writes it).
+async function runDebug(
+  rr                ,
+  bs              ,
+  metrics         ,
+)                  {
+  phase(CONFIG.PHASE.debug);
+  log(
+    '· debug & analysis · ' +
+      debugAnalyst.tier +
+      ' · over ' +
+      IO_LOG.length +
+      ' agent calls + ' +
+      LOG_BUFFER.length +
+      ' log lines + ' +
+      rr.laneRecords.length +
+      ' lane records',
+  );
+  const diag = await retryAgent         (
+    debugAnalyst.buildPrompt({
+      query: CONFIG.query,
+      focus: CONFIG.debugPrompt,
+      metrics,
+      waveLog: bs.waveLog,
+      resultLog: bs.resultLog,
+      highValueSources: rr.highValueSources,
+      laneRecords: rr.laneRecords,
+    }),
+    {
+      label: 'debug-analyst',
+      phase: CONFIG.PHASE.debug,
+      model: debugAnalyst.tier,
+      effort: debugAnalyst.effort,
+      schema: debugAnalyst.schema,
+    },
+  );
+  const narrative = (diag && diag.diagnosis) || '_(debug analyst failed — see raw sections below)_';
+  const rawIO = IO_LOG.map(
+    (e, i) =>
+      '### ' +
+      (i + 1) +
+      '. `' +
+      e.label +
+      '` · ' +
+      e.model +
+      ' · ' +
+      e.phase +
+      '\n\n**PROMPT**\n\n' +
+      (e.prompt || '') +
+      '\n\n**OUTPUT**' +
+      (e.error ? ' _(' + e.error + ')_' : '') +
+      '\n\n' +
+      (e.output == null ? '_(null)_' : JSON.stringify(e.output, null, 2)),
+  ).join('\n\n');
+  const artifact =
+    '# RR debug & analysis — ' +
+    clip(CONFIG.query, 80) +
+    (CONFIG.debugPrompt ? '\n\n**Debug prompt:** ' + CONFIG.debugPrompt : '') +
+    '\n\n## Analysis (debug-analyst · ' +
+    debugAnalyst.tier +
+    ')\n\n' +
+    narrative +
+    '\n\n## Metrics\n\n```json\n' +
+    JSON.stringify(metrics, null, 2) +
+    '\n```' +
+    '\n\n## Run log (' +
+    LOG_BUFFER.length +
+    ' lines)\n\n```\n' +
+    LOG_BUFFER.join('\n') +
+    '\n```' +
+    '\n\n## Raw agent I/O — exact prompt in, exact output out (' +
+    IO_LOG.length +
+    ' calls)\n\n' +
+    (rawIO || '_(none captured)_') +
+    '\n';
+  log('· debug DONE · _debug.md assembled');
+  return artifact;
+}
+// ╔══ module: src/engine.ts ═══════════════════════════════════════════════
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+             
+              
+        
+        
+          
+           
+             
+          
+             
+                
+                 
+            
+                 
+              
+            
+                  
+           
+           
+             
+                    
+        
+               
+                          
+
 log('▶ RR START · mode=' + CONFIG.mode + ' · maxWave=' + CONFIG.maxWave + ' · dir=' + CONFIG.DIR);
 
 // compact "Run arguments" record — the COMPLETE launch args (CONFIG.rawArgs), verbatim as received. Surfaced at the top of result.md
@@ -1884,46 +3153,25 @@ log('▶ RR START · mode=' + CONFIG.mode + ' · maxWave=' + CONFIG.maxWave + ' 
 const runArgsMd = ()         => '> **Run arguments:** `' + JSON.stringify(CONFIG.rawArgs) + '`\n\n';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ResearchReport — the pipeline. Holds the crawl state; each method is a phase. Each agent's tier +
-// effort + schema + prompt-builder + template live in its own src/agents/<agent>/ module (shared
-// fragments in agents/shared.ts); the store reducers live in store.ts (called with `this`).
+// ResearchReport — the pipeline backbone. Holds the crawl state; each phase method (runCrawl / runFinalize /
+// reopenCrawl / buildResult / run) orchestrates the loop and owns every `files[name] = …` write. The per-agent
+// work (buildPrompt → retryAgent → artifact) lives in each agent's src/agents/<agent>/run.ts; the store reducers
+// live in store.ts; the shared agent caller (retryAgent + the debug I/O buffers) lives in runtime.ts.
 // ─────────────────────────────────────────────────────────────────────────────
 class ResearchReport {
-  // scout seed
+  // ── run globals — set ONCE by the scout + prospector before any brainer exists, then shared read-only
+  // (by reference) into every BrainerState. Nothing mutates these during the crawl. ──
   scout                 ;
   scoutRabbitHoles            ;
-  // prospector seed (set by runProspect) — high-value source venues the brainer assigns per lane
-  highValueSources         ;
-  languageGuidance        ; // prospector's non-English routing note (''=English-dominated); threads into the brainer every wave
+  highValueSources         ; // prospector's high-value source venues the brainer assigns per lane
+  languageGuidance        ; // prospector's non-English routing note (''=English-dominated)
   sourcesReasoning        ;
-  laneRecords              ; // debug: per lane-researcher feed for the venue-utilization analysis
-  // crawl accumulators (persist across waves)
-  pursuedKeys             ;
-  pursuedRefs             ; // L3: norm(ref) of every fetched URL/DOI — dedup so a followed citation is never fetched twice
-  pursuedList          ;
-  pursuedArchive              ; // L2: rabbit-holes are MOVED here on pursue (no delete-on-pursue)
-  topScores          ; // L2: max lookupNext score per wave — the decay signal
-  waveLog                ; // slim per-wave log — feeds §2 narrative / sentinel / debug
-  resultLog                  ; // per-wave resultSoFar snapshots — for the debug agent
-  sentinelReopensUsed        ; // L4: how many times the goal-mode sentinel has forced an extra wave
-  sentinelLog                    ;
-  lastSentinelReason        ; // a crawl-sentinel rejection (1 line) → a standing reminder threaded into the brainer to raise its bar before declaring done again; '' when none
-  validatorLog                     ; // per-wave coverage-gate record (reopened lanes + capped known-gaps)
-  lastValidatorMissing        ; // the last wave's validator gaps → threaded into the next brainer; '' when none
+  laneRecords              ; // debug: per-lane reader feed (venue-utilization analysis) — a GLOBAL sink across all brainers
 
-  files       ;
-  rabbitHoles              ; // OPEN rabbit-hole store (id-keyed); scoreHistory rides natively on the id
-  nextId        ;
-  resultSoFar                    ; // the run's living MEMORY — carried wave to wave
-  // crawl outcome (set by runCrawl)
-  coord              ;
-  wave        ;
-  bestOpen        ;
-  stopReason                   ;
-  // finalize outcome (set by runFinalize) — this.synthesiserOut holds the synthesiser's REPORT
-  rabbitHolesOut                 ;
-  synthesiserOut                  ;
-  reportOk         ;
+  files       ; // every output artifact — written ONLY by the engine
+  liveBrainers                ; // the brainer tree: the root + every spawned child (one entry when maxParallelBrainers=1)
+  winner                     ; // the first brainer whose speculative gate the judge upheld — owns result.md
+  lastWaveTriggered         ; // a gate passed → run ONE more global wave (wrap-up), then drain
 
   constructor() {
     this.scout = null;
@@ -1932,284 +3180,25 @@ class ResearchReport {
     this.languageGuidance = '';
     this.sourcesReasoning = '';
     this.laneRecords = [];
-    this.pursuedKeys = new Set();
-    this.pursuedRefs = new Set();
-    this.pursuedList = [];
-    this.pursuedArchive = [];
-    this.topScores = [];
-    this.waveLog = [];
-    this.resultLog = [];
-    this.sentinelReopensUsed = 0;
-    this.sentinelLog = [];
-    this.lastSentinelReason = '';
-    this.validatorLog = [];
-    this.lastValidatorMissing = '';
     this.files = {};
-    this.rabbitHoles = [];
-    this.nextId = 1;
-    this.resultSoFar = null;
-    this.coord = null;
-    this.wave = 1;
-    this.bestOpen = 0;
-    this.stopReason = null;
-    this.rabbitHolesOut = [];
-    this.synthesiserOut = null;
-    this.reportOk = false;
+    this.liveBrainers = [];
+    this.winner = null;
+    this.lastWaveTriggered = false;
   }
 
-  // ── agent wrappers ──
-
-  // the single Opus BRAINER — the brain / global reducer. Sees the open store + pursued set + running resultSoFar; returns the updated
-  // resultSoFar + DELTAS (rescore / add / lookupNext / rename / drop / stop). Can LOOK UP stored leads OR ORIGINATE new directions; code-capable
-  // (general-purpose) when compute is on, so it can derive its own steering numbers inline — no separate compute stage.
-  async coordinate(
-    wave        ,
-    findings           ,
-    phaseName         = CONFIG.PHASE.crawl,
-  )                        {
-    const open = this.rabbitHoles.map(openLine);
-    return retryAgent       (
-      brainer.buildPrompt({
-        wave,
-        query: CONFIG.query,
-        rubric: CONFIG.RUBRIC,
-        landscape: this.scout .landscape,
-        pursuedList: this.pursuedList,
-        open,
-        findings,
-        topScores: this.topScores,
-        resultSoFar: this.resultSoFar,
-        assignSources: CONFIG.parallelSourcesPerLaneResearchAgent === 'auto',
-        stop: CONFIG.STOP,
-        mode: CONFIG.mode,
-        venues: this.highValueSources,
-        languageGuidance: this.languageGuidance,
-        lastSentinelReason: this.lastSentinelReason,
-        lastValidatorMissing: this.lastValidatorMissing,
-        compute: CONFIG.compute,
-        computerNote: CONFIG.COMPUTER_NOTE,
-        thinkerNote: CONFIG.THINKER_NOTE,
-        researcherNote: CONFIG.RESEARCHER_NOTE,
-      }),
-      {
-        label: 'brainer-w' + wave,
-        phase: phaseName,
-        model: brainer.tier,
-        effort: brainer.effort,
-        schema: brainer.schema,
-        agentType: CONFIG.compute ? 'general-purpose' : undefined,
-      },
-    );
-  }
-
-  // map the brainer's assigned source-identifier strings back to the full {source, goodFor} venue objects (for the researcher prompt).
-  venuesFor(sources           )          {
-    if (!sources || !sources.length) return [];
-    return sources.map(
-      (s) => this.highValueSources.find((v) => v.source === s) || { source: s, goodFor: '' },
-    );
-  }
-
-  // dispatch one haiku lane-researcher per pick, in parallel — each carries its full TRAIL + the venues the brainer assigned its lane.
-  // Used by the crawl waves (tag='w'+wave) and the finalize judge crawl-reopen (tag='reopen'). Returns each lane's ResearchOut or null.
-  async runResearchers(
+  // SCHEDULER (B4) — thin delegator to runScheduler (researchScheduler/run.ts); the crawl + finalize reopen route
+  // their source discovery through here. Returns a Map<lane id, sources> the engine bin-packs into reader-units.
+  scheduleSources(
+    bs              ,
     picks              ,
     tag        ,
     phaseName        ,
-  )                                  {
-    return parallel(
-      picks.map((p) => () => {
-        // per-lane source count: auto → derived from the number of venues the brainer assigned this lane (capped 5, default 2); manual → the fixed clamped knob.
-        const srcCount =
-          CONFIG.parallelSourcesPerLaneResearchAgent === 'auto'
-            ? Math.min(5, (p.sources && p.sources.length) || 2)
-            : CONFIG.parallelSourcesPerLaneResearchAgent;
-        return retryAgent             (
-          researcher.buildPrompt({
-            net: CONFIG.NET,
-            query: CONFIG.query,
-            trail: trailOf(p.path, p.keyword),
-            keyword: p.keyword,
-            why: p.why,
-            footer: CONFIG.FOOTER,
-            venues: this.venuesFor(p.sources),
-            parallelSourcesPerLaneResearchAgent: srcCount,
-            researcherNote: CONFIG.RESEARCHER_NOTE,
-            ref: p.ref, // when set, this lane fetches the citation directly instead of WebSearching
-          }),
-          {
-            label: 'lane-' + tag + ':' + lab(p.keyword),
-            phase: phaseName,
-            model: researcher.tier,
-            effort: researcher.effort,
-            agentType: 'general-purpose',
-            schema: researcher.schema,
-          },
-        );
-      }),
-    );
+  )                                          {
+    return runScheduler(bs, picks, tag, phaseName);
   }
 
-  // the goal-mode SENTINEL — the TERMINAL skeptic of the crawl phase, the inverse of verify. Runs ONCE when the brainer declares done:
-  // sees the open store + the brainer's running answer; if the stop isn't solid it injects high-score gaps. Bounded by MAX_SENTINEL_REOPENS.
-  async checkSentinel(
-    wave        ,
-    waveLog                ,
-    pursuedList          ,
-    lastBrainer       ,
-  )                              {
-    const rabbitHoles = this.rabbitHoles.map(openLine);
-    return retryAgent             (
-      sentinel.buildPrompt({
-        query: CONFIG.query,
-        resultSoFar: lastBrainer.resultSoFar,
-        reason: lastBrainer.stop.reason,
-        waveLog,
-        rabbitHoles,
-        pursuedList,
-        thinkerNote: CONFIG.THINKER_NOTE,
-        researcherNote: CONFIG.RESEARCHER_NOTE,
-      }),
-      {
-        label: 'sentinel-w' + wave,
-        phase: CONFIG.PHASE.crawl,
-        model: sentinel.tier,
-        effort: sentinel.effort,
-        schema: sentinel.schema,
-      },
-    );
-  }
-
-  // VALIDATOR — the per-wave coverage gate (distinct from the terminal sentinel/judge). Given the wave's lookupNext
-  // requests + each lane's intro + which lanes died, it rules whether each request was fulfilled and what is still missing.
-  async runValidator(
-    wave        ,
-    requests                                                ,
-    findings                                      ,
-    nullLanes          ,
-  )                               {
-    return retryAgent              (
-      validator.buildPrompt({ query: CONFIG.query, requests, findings, nullLanes }),
-      {
-        label: 'validator-w' + wave,
-        phase: CONFIG.PHASE.crawl,
-        model: validator.tier,
-        effort: validator.effort,
-        schema: validator.schema,
-      },
-    );
-  }
-
-  // PROSPECTOR — runs after the scout, first agent of the Crawl phase. Given the goal + scout landscape, it names the high-value
-  // AUTHORITATIVE source venues for THIS topic (domain-specific). Output rides with the brainer, which assigns the relevant subset to each lane.
-  async prospect(model      )                             {
-    return retryAgent            (
-      prospector.buildPrompt({
-        query: CONFIG.query,
-        landscape: this.scout .landscape,
-        sources: this.scout .pages.map((p) => p.url),
-        thinkerNote: CONFIG.THINKER_NOTE,
-        researcherNote: CONFIG.RESEARCHER_NOTE,
-      }),
-      {
-        label: 'prospector',
-        phase: CONFIG.PHASE.scout,
-        model,
-        effort: prospector.effort,
-        schema: prospector.schema,
-      },
-    );
-  }
-
-  // ── phases ──
-
-  // Scout (wave 0 seed): broad WebSearch → fetch sources with the rabbit-hole footer → seed rabbit-holes.
-  async runScout()                      {
-    phase(CONFIG.PHASE.scout);
-    log('· scout DISPATCH · ' + scout.tier);
-    const scoutOut = await retryAgent          (
-      scout.buildPrompt({
-        query: CONFIG.query,
-        net: CONFIG.NET,
-        footer: CONFIG.FOOTER,
-        researcherNote: CONFIG.RESEARCHER_NOTE,
-      }),
-      {
-        label: 'scout',
-        phase: CONFIG.PHASE.scout,
-        model: scout.tier,
-        effort: scout.effort,
-        agentType: 'general-purpose',
-        schema: scout.schema,
-      },
-    );
-    if (!scoutOut) {
-      log('✗ scout DIED');
-      throw new Error('scout died');
-    }
-    this.scout = scoutOut;
-    const scoutRabbitHoles             = scoutOut.pages.flatMap((p) =>
-      (p.rabbitHoles || []).map((l) => ({ keyword: l.keyword, why: l.why, path: []             })),
-    ); // PATH: scout rabbit-holes descend directly from the goal
-    this.scoutRabbitHoles = scoutRabbitHoles;
-    log(
-      '· scout RETURN · pages=' +
-        scoutOut.pages.length +
-        ' · rabbit-holes=' +
-        scoutRabbitHoles.length +
-        ' · deadEnds=' +
-        (scoutOut.deadEnds || []).length,
-    );
-    scoutOut.pages.forEach((p, i) =>
-      log(
-        '    source ' + (i + 1) + ' · rabbit-holes=' + (p.rabbitHoles || []).length + ' · ' + p.url,
-      ),
-    );
-    return scoutRabbitHoles;
-  }
-
-  // PROSPECT (real flow): one Opus prospector after the scout names the high-value source venues; the brainer assigns the relevant subset per lane.
-  async runProspect()                {
-    log('· prospector DISPATCH · ' + prospector.tier);
-    const res = await this.prospect(prospector.tier);
-    this.highValueSources = (res && res.highValueSources) || [];
-    this.languageGuidance = (res && res.languageGuidance) || '';
-    this.sourcesReasoning = (res && res.reasoning) || '';
-    log(
-      '· prospector RETURN · venues=' +
-        this.highValueSources.length +
-        (this.languageGuidance ? ' · languages="' + this.languageGuidance.slice(0, 80) + '"' : '') +
-        (res ? '' : ' (FAILED → none; researchers fall back to general search)'),
-    );
-    this.highValueSources.forEach((s, i) =>
-      log('    venue ' + (i + 1) + ' · ' + s.source + ' — ' + s.goodFor),
-    );
-    this.files['02-prospector.md'] = withPrompt(
-      'prospector',
-      '# 02 — Prospector\n\n**Query:** ' +
-        CONFIG.query +
-        (this.sourcesReasoning ? '\n\n_' + this.sourcesReasoning + '_' : '') +
-        (this.languageGuidance ? '\n\n**Language routing:** ' + this.languageGuidance : '') +
-        '\n\n## High-value source venues\n\n' +
-        (this.highValueSources
-          .map(
-            (s, i) =>
-              i +
-              1 +
-              '. **' +
-              s.source +
-              '**' +
-              (s.lang ? ' [' + s.lang + ']' : '') +
-              ' — ' +
-              s.goodFor,
-          )
-          .join('\n') || '_(none returned)_') +
-        '\n',
-    );
-  }
-
-  // Crawl: wave 0 = score the scout rabbit-holes; waves 1..N = pursue → research → re-coordinate; then the terminal sentinel gate.
-  async runCrawl(scoutRabbitHoles            )                {
+  // Crawl: wave 0 = score the scout rabbit-holes; waves 1..N = pursue → research → re-coordinate until the brainer stops.
+  async runCrawl(bs              , scoutRabbitHoles            )                {
     const scoutOut = this.scout ;
 
     this.files['01-scout.md'] = withPrompt(
@@ -2239,7 +3228,7 @@ class ResearchReport {
 
     // seed the open store with the scout rabbit-holes (UNSCORED — the brainer scores them this wave via rescore).
     scoutRabbitHoles.forEach((l) =>
-      addRabbitHole(this, { keyword: l.keyword, why: l.why, path: l.path || [], wave: 0 }),
+      addRabbitHole(bs, { keyword: l.keyword, why: l.why, path: l.path || [], wave: 0 }),
     );
 
     const seedFindings            = scoutOut.pages.map((p) => ({
@@ -2250,37 +3239,37 @@ class ResearchReport {
       '· brainer-w0 DISPATCH · ' +
         brainer.tier +
         ' · scoring ' +
-        this.rabbitHoles.length +
+        bs.rabbitHoles.length +
         ' rabbit-hole(s)',
     );
-    let coord = await this.coordinate(0, seedFindings, CONFIG.PHASE.scout);
+    let coord = await runBrainer(bs, 0, seedFindings, CONFIG.PHASE.scout);
     if (!coord) {
       log('✗ brainer-w0 DIED');
       throw new Error('brainer died at wave 0');
     }
-    applyDeltas(this, coord, 0);
-    if (coord.resultSoFar) this.resultSoFar = coord.resultSoFar;
-    this.resultLog.push({ wave: 0, resultSoFar: this.resultSoFar });
-    let lookupNext = resolveLookupNext(this, coord, 0, laneCount);
-    this.topScores.push(lookupNext.length ? Math.max(...lookupNext.map((p) => p.score ?? 0)) : 0);
-    this.waveLog.push({
+    applyDeltas(bs, coord, 0);
+    if (coord.resultSoFar) bs.resultSoFar = coord.resultSoFar;
+    bs.resultLog.push({ wave: 0, resultSoFar: bs.resultSoFar });
+    let lookupNext = resolveLookupNext(bs, coord, 0, laneCount);
+    bs.topScores.push(lookupNext.length ? Math.max(...lookupNext.map((p) => p.score ?? 0)) : 0);
+    bs.waveLog.push({
       wave: 0,
       pursued: [],
       newRabbitHoles: scoutRabbitHoles.length,
-      rabbitHoles: this.rabbitHoles.length,
-      topScore: this.topScores[this.topScores.length - 1],
+      rabbitHoles: bs.rabbitHoles.length,
+      topScore: bs.topScores[bs.topScores.length - 1],
       done: coord.stop.done,
       reason: coord.stop.reason,
     });
     log(
       '· brainer-w0 RETURN · rabbitHoles=' +
-        this.rabbitHoles.length +
+        bs.rabbitHoles.length +
         ' · lookupNext=' +
         lookupNext.length +
         '/' +
         (coord.lookupNext || []).length +
         ' · topScore=' +
-        this.topScores[this.topScores.length - 1] +
+        bs.topScores[bs.topScores.length - 1] +
         ' · done=' +
         coord.stop.done,
     );
@@ -2300,381 +3289,298 @@ class ResearchReport {
 
     this.files['03-wave-0.md'] = withPrompt(
       'brainer-w0',
-      waveMd(0, coord, lookupNext, [], this.rabbitHoles),
+      waveMd(0, coord, lookupNext, [], bs.rabbitHoles),
     );
 
     phase(CONFIG.PHASE.crawl); // scout → prospector → seed brainer = the Scout phase; waves 1..N = Crawl
     let wave = 1;
-    let crawlSettled = false;
     let dryStop = false; // collect-mode dry: set when the novelty trajectory has plateaued (diminishing returns)
-    let sentinelFileLabel = ''; // label of the LAST sentinel gate — its prompt is prepended to the sentinel file (Change E)
+    let starvedStop = false; // B6: set when the scheduler/readers starved for MAX_STARVED_WAVES in a row
+    let starvedWaves = 0; // consecutive all-null / empty-schedule waves
     const baseCap = CONFIG.maxWave === 'auto' ? CONFIG.HARD_CAP : CONFIG.maxWave; // effective wave cap; 'auto' rides up to HARD_CAP, the brainer stops it sooner
-    // Outer crawl: the inner loop runs waves until the brainer stops; then the goal-mode SENTINEL gate (terminal skeptic) contests a
-    // `done` — if the brainer stopped prematurely it injects high-score gaps at the store top and the inner loop resumes. Bounded by MAX_SENTINEL_REOPENS.
-    while (!crawlSettled) {
-      while (
-        wave <= Math.min(CONFIG.HARD_CAP, baseCap + this.sentinelReopensUsed) &&
-        !coord.stop.done &&
-        lookupNext.length &&
-        !dryStop
-      ) {
-        // PURSUE — move lookupNext into the pursued-archive (keeps id + scoreHistory + path) and out of the open store, so the brainer
-        // re-scores a clean open-only set next wave.
-        pursue(this, lookupNext);
-        log(
-          '— wave ' +
-            wave +
-            ' · pursuing ' +
-            lookupNext.length +
-            ' rabbit-hole(s) · pursued-total=' +
-            this.pursuedList.length +
-            ' · archived=' +
-            this.pursuedArchive.length,
-        );
+    // the crawl runs waves until the brainer declares done, the store dries up, the collect novelty plateaus, or the wave cap is hit.
+    while (
+      wave <= Math.min(CONFIG.HARD_CAP, baseCap) &&
+      !coord.stop.done &&
+      lookupNext.length &&
+      !dryStop
+    ) {
+      // PURSUE — move lookupNext into the pursued-archive (keeps id + scoreHistory + path) and out of the open store, so the brainer
+      // re-scores a clean open-only set next wave.
+      pursue(bs, lookupNext);
+      log(
+        '— wave ' +
+          wave +
+          ' · pursuing ' +
+          lookupNext.length +
+          ' rabbit-hole(s) · pursued-total=' +
+          bs.pursuedList.length +
+          ' · archived=' +
+          bs.pursuedArchive.length,
+      );
 
-        // RESEARCH wave — one haiku lane-researcher per pursued rabbit-hole, parallel; each carries its full TRAIL (goal → … → here).
-        const toPursue = lookupNext;
-        const raw = await this.runResearchers(toPursue, 'w' + wave, CONFIG.PHASE.crawl);
-        const findings            = raw.map((r, i) => ({
-          rabbitHole: toPursue[i].keyword,
-          trail: trailOf(toPursue[i].path, toPursue[i].keyword),
-          summary: r ? r.summary : '(researcher failed)',
-        }));
-        if (CONFIG.debug)
-          raw.forEach((r, i) =>
-            this.laneRecords.push({
-              wave,
-              keyword: toPursue[i].keyword,
-              assignedVenues: toPursue[i].sources || [],
-              summary: r ? r.summary : null,
-              rabbitHoles: r ? (r.rabbitHoles || []).map((l) => l.keyword) : [],
-            }),
-          );
-
-        // PATH: each freshly-surfaced rabbit-hole inherits its parent's trail (parent path + parent keyword). The engine adds them to the open
-        // store UNSCORED (scoreHistory=[]); deduped against pursued + the current store; the brainer scores them next wave (shown as "new").
-        const fresh             = raw.flatMap((r, i) =>
-          r && r.rabbitHoles
-            ? r.rabbitHoles.map((l) => ({
-                keyword: l.keyword,
-                why: l.why,
-                path: [...(toPursue[i].path || []), toPursue[i].keyword],
-              }))
-            : [],
-        );
-        // FOLLOW-THE-LINKS: each page's top outbound citations become ref-carrying leads the next lane fetches directly.
-        const freshSources             = raw.flatMap((r, i) =>
-          r && r.nextSources
-            ? r.nextSources.map((s) => ({
-                keyword: s.why,
-                why: 'followed citation',
-                ref: s.ref,
-                path: [...(toPursue[i].path || []), toPursue[i].keyword],
-              }))
-            : [],
-        );
-        const beforeAdd = this.rabbitHoles.length;
-        fresh.forEach((l) =>
-          addRabbitHole(this, { keyword: l.keyword, why: l.why, path: l.path, wave }),
-        );
-        freshSources.forEach((l) =>
-          addRabbitHole(this, { keyword: l.keyword, why: l.why, path: l.path, wave, ref: l.ref }),
-        );
-        const newCount = this.rabbitHoles.length - beforeAdd;
+      // RESEARCH wave — the SCHEDULER discovers + sizes the sources for the wave's lanes, then code bin-packs
+      // each lane and runs ONE sequential reader thread per lane (parallel across lanes); each carries its full TRAIL.
+      const toPursue = lookupNext;
+      const schedule = await this.scheduleSources(bs, toPursue, 'w' + wave, CONFIG.PHASE.crawl);
+      const raw = await runResearchers(bs, toPursue, schedule, 'w' + wave, CONFIG.PHASE.crawl);
+      // B6 — guard scheduler-DEATH starvation: a wave is "starved" when the scheduler returned NO usable sources at
+      // all (an empty map, or every lane's source list empty). After MAX_STARVED_WAVES in a row, break with an
+      // explicit stopReason instead of grinding to HARD_CAP with nothing to read. (An all-null wave whose schedule
+      // DID carry sources is a reader failure — left to the validator reopen/cap + brainer-convergence path, which
+      // this guard must not preempt.)
+      const waveStarved = [...schedule.values()].every((srcs) => !srcs || !srcs.length);
+      starvedWaves = waveStarved ? starvedWaves + 1 : 0;
+      if (starvedWaves >= CONFIG.MAX_STARVED_WAVES) {
+        starvedStop = true;
         log(
           '  wave ' +
             wave +
-            ' · researchers=' +
-            raw.filter(Boolean).length +
-            '/' +
-            toPursue.length +
-            ' · freshRabbitHoles=' +
-            (fresh.length + freshSources.length) +
-            ' → +' +
-            newCount +
-            ' new after dedup',
+            ' · scheduler-starved (' +
+            starvedWaves +
+            ' consecutive empty waves) → stopping',
+        );
+        break;
+      }
+      const findings            = raw.map((r, i) => ({
+        rabbitHole: toPursue[i].keyword,
+        trail: trailOf(toPursue[i].path, toPursue[i].keyword),
+        summary: r ? r.summary : '(researcher failed)',
+      }));
+      if (CONFIG.debug)
+        raw.forEach((r, i) =>
+          this.laneRecords.push({
+            wave,
+            keyword: toPursue[i].keyword,
+            assignedVenues: toPursue[i].sources || [],
+            summary: r ? r.summary : null,
+            rabbitHoles: r ? (r.rabbitHoles || []).map((l) => l.keyword) : [],
+          }),
         );
 
-        // VALIDATOR GATE — the per-wave coverage check. Runs only when a lane died or a finding is thin (keeps it cheap).
-        // Re-opens every lane that returned null OR fulfilled:false (bounded per-lane by MAX_LANE_REFAILS) so the next
-        // brainer can re-pursue; a lane past the cap is surfaced as a known gap; `missing` threads into the next brainer.
-        const anyNull = raw.some((r) => !r);
-        const anyThin = findings.some(
-          (f) => !f.summary || f.summary.length < CONFIG.VALIDATOR_THIN,
+      // PATH: each freshly-surfaced rabbit-hole inherits its parent's trail (parent path + parent keyword). The engine adds them to the open
+      // store UNSCORED (scoreHistory=[]); deduped against pursued + the current store; the brainer scores them next wave (shown as "new").
+      const fresh             = raw.flatMap((r, i) =>
+        r && r.rabbitHoles
+          ? r.rabbitHoles.map((l) => ({
+              keyword: l.keyword,
+              why: l.why,
+              path: [...(toPursue[i].path || []), toPursue[i].keyword],
+            }))
+          : [],
+      );
+      // FOLLOW-THE-LINKS: each page's top outbound citations become ref-carrying leads the next lane fetches directly.
+      const freshSources             = raw.flatMap((r, i) =>
+        r && r.nextSources
+          ? r.nextSources.map((s) => ({
+              keyword: s.why,
+              why: 'followed citation',
+              ref: s.ref,
+              path: [...(toPursue[i].path || []), toPursue[i].keyword],
+            }))
+          : [],
+      );
+      const beforeAdd = bs.rabbitHoles.length;
+      fresh.forEach((l) =>
+        addRabbitHole(bs, { keyword: l.keyword, why: l.why, path: l.path, wave }),
+      );
+      freshSources.forEach((l) =>
+        addRabbitHole(bs, { keyword: l.keyword, why: l.why, path: l.path, wave, ref: l.ref }),
+      );
+      const newCount = bs.rabbitHoles.length - beforeAdd;
+      log(
+        '  wave ' +
+          wave +
+          ' · researchers=' +
+          raw.filter(Boolean).length +
+          '/' +
+          toPursue.length +
+          ' · freshRabbitHoles=' +
+          (fresh.length + freshSources.length) +
+          ' → +' +
+          newCount +
+          ' new after dedup',
+      );
+
+      // VALIDATOR GATE — the per-wave coverage check. Runs only when a lane died or a finding is thin (keeps it cheap).
+      // Re-opens every lane that returned null OR fulfilled:false (bounded per-lane by MAX_LANE_REFAILS) so the next
+      // brainer can re-pursue; a lane past the cap is surfaced as a known gap; `missing` threads into the next brainer.
+      const anyNull = raw.some((r) => !r);
+      const anyThin = findings.some((f) => !f.summary || f.summary.length < CONFIG.VALIDATOR_THIN);
+      if (anyNull || anyThin) {
+        const requests = toPursue.map((p) => ({ id: p.id, keyword: p.keyword, why: p.why }));
+        const vFindings = findings.map((f) => ({
+          keyword: f.rabbitHole,
+          intro: (f.summary || '').slice(0, CONFIG.VALIDATOR_INTRO_CHARS),
+        }));
+        const nullLanes = toPursue.filter((p, i) => !raw[i]).map((p) => p.keyword);
+        const val = await runValidator(bs, wave, requests, vFindings, nullLanes);
+        const failedIds = new Set        ();
+        toPursue.forEach((p, i) => {
+          if (!raw[i]) failedIds.add(p.id);
+        });
+        if (val && Array.isArray(val.checks))
+          val.checks.forEach((c) => {
+            if (c && c.fulfilled === false && typeof c.id === 'number') failedIds.add(c.id);
+          });
+        const reopened           = [];
+        const cappedGaps           = [];
+        for (const id of failedIds) {
+          const rh = bs.pursuedArchive.find((r) => r.id === id);
+          if (!rh) continue;
+          if ((rh.failCount || 0) >= CONFIG.MAX_LANE_REFAILS) cappedGaps.push(rh.keyword);
+          else reopened.push(reopenRabbitHole(bs, rh).keyword);
+        }
+        const missing = (val && val.missing) || [];
+        bs.lastValidatorMissing = [
+          ...missing,
+          ...cappedGaps.map((k) => k + ' (lane retried twice — treat as a known gap)'),
+        ]
+          .join('; ')
+          .slice(0, CONFIG.VALIDATOR_MISSING_CHARS);
+        bs.validatorLog.push({
+          wave,
+          enough: val ? val.enough : null,
+          reopened,
+          cappedGaps,
+          missing,
+        });
+        log(
+          '  wave ' +
+            wave +
+            ' · validator · enough=' +
+            (val ? val.enough : '?') +
+            ' · reopened=' +
+            reopened.length +
+            ' · cappedGaps=' +
+            cappedGaps.length,
         );
-        if (anyNull || anyThin) {
-          const requests = toPursue.map((p) => ({ id: p.id, keyword: p.keyword, why: p.why }));
-          const vFindings = findings.map((f) => ({
-            keyword: f.rabbitHole,
-            intro: (f.summary || '').slice(0, 240),
-          }));
-          const nullLanes = toPursue.filter((p, i) => !raw[i]).map((p) => p.keyword);
-          const val = await this.runValidator(wave, requests, vFindings, nullLanes);
-          const failedIds = new Set        ();
-          toPursue.forEach((p, i) => {
-            if (!raw[i]) failedIds.add(p.id);
-          });
-          if (val && Array.isArray(val.checks))
-            val.checks.forEach((c) => {
-              if (c && c.fulfilled === false && typeof c.id === 'number') failedIds.add(c.id);
-            });
-          const reopened           = [];
-          const cappedGaps           = [];
-          for (const id of failedIds) {
-            const rh = this.pursuedArchive.find((r) => r.id === id);
-            if (!rh) continue;
-            if ((rh.failCount || 0) >= CONFIG.MAX_LANE_REFAILS) cappedGaps.push(rh.keyword);
-            else reopened.push(reopenRabbitHole(this, rh).keyword);
-          }
-          const missing = (val && val.missing) || [];
-          this.lastValidatorMissing = [
-            ...missing,
-            ...cappedGaps.map((k) => k + ' (lane retried twice — treat as a known gap)'),
-          ]
-            .join('; ')
-            .slice(0, 300);
-          this.validatorLog.push({
-            wave,
-            enough: val ? val.enough : null,
-            reopened,
-            cappedGaps,
-            missing,
-          });
+      } else {
+        bs.lastValidatorMissing = '';
+      }
+
+      // BRAINER — the single Opus brain re-scores the open store via deltas, updates the running result, and sets the next direction.
+      log(
+        '  wave ' +
+          wave +
+          ' · brainer DISPATCH · ' +
+          brainer.tier +
+          ' · open=' +
+          bs.rabbitHoles.length,
+      );
+      const nextCoord = await runBrainer(bs, wave, findings);
+      if (!nextCoord) {
+        log('✗ brainer-w' + wave + ' DIED — stopping');
+        break;
+      }
+      coord = nextCoord;
+      applyDeltas(bs, coord, wave);
+      if (coord.resultSoFar) bs.resultSoFar = coord.resultSoFar;
+      bs.resultLog.push({ wave, resultSoFar: bs.resultSoFar });
+      lookupNext = resolveLookupNext(bs, coord, wave, laneCount);
+      bs.topScores.push(lookupNext.length ? Math.max(...lookupNext.map((p) => p.score ?? 0)) : 0);
+      bs.waveLog.push({
+        wave,
+        pursued: toPursue.map((p) => p.keyword),
+        newRabbitHoles: newCount,
+        rabbitHoles: bs.rabbitHoles.length,
+        topScore: bs.topScores[bs.topScores.length - 1],
+        done: coord.stop.done,
+        reason: coord.stop.reason,
+      });
+      this.files[padIdx(wave + 3) + '-wave-' + wave + '.md'] = withPrompt(
+        'brainer-w' + wave,
+        waveMd(wave, coord, lookupNext, findings, bs.rabbitHoles),
+      );
+      log(
+        '  wave ' +
+          wave +
+          ' · rabbitHoles=' +
+          bs.rabbitHoles.length +
+          ' · lookupNext=' +
+          lookupNext.length +
+          '/' +
+          (coord.lookupNext || []).length +
+          ' · topScore=' +
+          bs.topScores[bs.topScores.length - 1] +
+          ' · done=' +
+          coord.stop.done +
+          (coord.stop.done ? ' (' + coord.stop.reason + ')' : ''),
+      );
+      lookupNext.forEach((p, i) =>
+        log(
+          '    next ' +
+            (i + 1) +
+            ' · [' +
+            (p.score ?? '?') +
+            '] #' +
+            p.id +
+            ' ' +
+            p.keyword +
+            (p.sources && p.sources.length ? ' · venues=[' + p.sources.join(', ') + ']' : ''),
+        ),
+      );
+
+      // collect-mode DRY stop: diminishing returns relative to the run's OWN peak novelty (adapts per topic — no magic absolute floor).
+      // B9 — peak/window are computed over the RESEARCH waves only (topScores.slice(1)) so the inflated wave-0 SEED
+      // score never masks a plateau; PLATEAU_MIN_WAVES gates on the research-wave count (3 = 3 research waves).
+      const crawlScores = bs.topScores.slice(1);
+      if (
+        CONFIG.mode === 'collect' &&
+        !coord.stop.done &&
+        crawlScores.length >= CONFIG.PLATEAU_MIN_WAVES
+      ) {
+        const peak = Math.max(...crawlScores);
+        const window = crawlScores.slice(-CONFIG.PLATEAU_WINDOW);
+        if (peak > 0 && window.every((s) => s <= peak * CONFIG.QUERY_PLATEAU)) {
+          dryStop = true;
           log(
             '  wave ' +
               wave +
-              ' · validator · enough=' +
-              (val ? val.enough : '?') +
-              ' · reopened=' +
-              reopened.length +
-              ' · cappedGaps=' +
-              cappedGaps.length,
+              ' · collect DRY — top novelty plateaued (' +
+              window.join(',') +
+              ' ≤ ' +
+              CONFIG.QUERY_PLATEAU +
+              '×peak ' +
+              peak +
+              ') → stopping',
           );
-        } else {
-          this.lastValidatorMissing = '';
         }
-
-        // BRAINER — the single Opus brain re-scores the open store via deltas, updates the running result, and sets the next direction.
-        log(
-          '  wave ' +
-            wave +
-            ' · brainer DISPATCH · ' +
-            brainer.tier +
-            ' · open=' +
-            this.rabbitHoles.length,
-        );
-        const nextCoord = await this.coordinate(wave, findings);
-        if (!nextCoord) {
-          log('✗ brainer-w' + wave + ' DIED — stopping');
-          crawlSettled = true;
-          break;
-        }
-        coord = nextCoord;
-        applyDeltas(this, coord, wave);
-        if (coord.resultSoFar) this.resultSoFar = coord.resultSoFar;
-        this.resultLog.push({ wave, resultSoFar: this.resultSoFar });
-        lookupNext = resolveLookupNext(this, coord, wave, laneCount);
-        this.topScores.push(
-          lookupNext.length ? Math.max(...lookupNext.map((p) => p.score ?? 0)) : 0,
-        );
-        this.waveLog.push({
-          wave,
-          pursued: toPursue.map((p) => p.keyword),
-          newRabbitHoles: newCount,
-          rabbitHoles: this.rabbitHoles.length,
-          topScore: this.topScores[this.topScores.length - 1],
-          done: coord.stop.done,
-          reason: coord.stop.reason,
-        });
-        this.files[padIdx(wave + 3) + '-wave-' + wave + '.md'] = withPrompt(
-          'brainer-w' + wave,
-          waveMd(wave, coord, lookupNext, findings, this.rabbitHoles),
-        );
-        log(
-          '  wave ' +
-            wave +
-            ' · rabbitHoles=' +
-            this.rabbitHoles.length +
-            ' · lookupNext=' +
-            lookupNext.length +
-            '/' +
-            (coord.lookupNext || []).length +
-            ' · topScore=' +
-            this.topScores[this.topScores.length - 1] +
-            ' · done=' +
-            coord.stop.done +
-            (coord.stop.done ? ' (' + coord.stop.reason + ')' : ''),
-        );
-        lookupNext.forEach((p, i) =>
-          log(
-            '    next ' +
-              (i + 1) +
-              ' · [' +
-              (p.score ?? '?') +
-              '] #' +
-              p.id +
-              ' ' +
-              p.keyword +
-              (p.sources && p.sources.length ? ' · venues=[' + p.sources.join(', ') + ']' : ''),
-          ),
-        );
-
-        // collect-mode DRY stop: diminishing returns relative to the run's OWN peak novelty (adapts per topic — no magic absolute floor).
-        if (CONFIG.mode === 'collect' && !coord.stop.done && this.topScores.length >= 3) {
-          const peak = Math.max(...this.topScores);
-          if (peak > 0 && this.topScores.slice(-2).every((s) => s <= peak * CONFIG.QUERY_PLATEAU)) {
-            dryStop = true;
-            log(
-              '  wave ' +
-                wave +
-                ' · collect DRY — top novelty plateaued (' +
-                this.topScores.slice(-2).join(',') +
-                ' ≤ ' +
-                CONFIG.QUERY_PLATEAU +
-                '×peak ' +
-                peak +
-                ') → stopping',
-            );
-          }
-        }
-        wave++;
       }
-
-      // SENTINEL GATE — terminal skeptic of the crawl phase (goal mode). Runs once when the BRAINER declared done: sees the open store + the
-      // brainer's running answer. If the stop isn't solid, inject high-score gap objects at the store TOP and resume.
-      if (
-        CONFIG.mode === 'goal' &&
-        (coord.stop.done || !lookupNext.length) &&
-        wave <= CONFIG.HARD_CAP &&
-        this.sentinelReopensUsed < CONFIG.MAX_SENTINEL_REOPENS
-      ) {
-        log(
-          "· sentinel GATE · contesting the brainer's done (sees the open store + the running answer)",
-        );
-        sentinelFileLabel = 'sentinel-w' + wave;
-        const ch = await this.checkSentinel(wave, this.waveLog, this.pursuedList, coord);
-        const inject =
-          ch && ch.solid === false && Array.isArray(ch.rabbitHoles)
-            ? ch.rabbitHoles
-                .filter((l) => l && l.keyword && !this.pursuedKeys.has(norm(l.keyword)))
-                .slice(0, laneCount)
-            : [];
-        this.sentinelLog.push({
-          afterWave: wave - 1,
-          solid: ch ? ch.solid : null,
-          reasoning: ch ? ch.reasoning : '(sentinel failed)',
-          injected: inject.map((l) => l.keyword),
-        });
-        if (inject.length) {
-          this.sentinelReopensUsed++;
-          coord.stop.done = false;
-          // standing 1-line reminder threaded into the brainer next wave — raise the bar before declaring done again
-          this.lastSentinelReason = ((ch && ch.reasoning) || '')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .slice(0, 200);
-          // inject high-score gap objects into the store (path marks them sentinel-born) and hand them to the lane researchers next iteration
-          lookupNext = inject
-            .map((l) =>
-              addRabbitHole(this, {
-                keyword: l.keyword,
-                why: l.why,
-                path: ['⚔ sentinel'],
-                score: CONFIG.INJECT_SCORE,
-                wave,
-              }),
-            )
-            .filter(Boolean)                ;
-          log(
-            "· ⚔ SENTINEL REOPENED the brainer's done (" +
-              this.sentinelReopensUsed +
-              '/' +
-              CONFIG.MAX_SENTINEL_REOPENS +
-              ') — injected ' +
-              lookupNext.length +
-              ' high-score gap(s) into the store; crawl resumes',
-          );
-          lookupNext.forEach((p, i) =>
-            log(
-              '    inject ' +
-                (i + 1) +
-                ' · [' +
-                CONFIG.INJECT_SCORE +
-                '] #' +
-                p.id +
-                ' ' +
-                p.keyword,
-            ),
-          );
-        } else {
-          crawlSettled = true;
-          log(
-            "· ✓ sentinel UPHELD the brainer's done" +
-              (ch && ch.reasoning ? ' · ' + ch.reasoning.slice(0, 110) : ''),
-          );
-        }
-      } else {
-        crawlSettled = true;
-      }
+      wave++;
     }
 
     // L2 stop classification: the brainer's own satisficing `done` (primary), else why the loop stopped.
-    const bestOpen = this.rabbitHoles.length
-      ? Math.max(...this.rabbitHoles.map((r) => lastScore(r) ?? 0))
+    const bestOpen = bs.rabbitHoles.length
+      ? Math.max(...bs.rabbitHoles.map((r) => lastScore(r) ?? 0))
       : 0;
+    // Classify in priority order: the brainer's own `done`, then a starved scheduler, then an EMPTY store (an
+    // empty-store exit is labelled BEFORE the plateau label — B9), then the collect plateau, the wave cap, and a dry store.
     const stopReason             = coord.stop.done
       ? 'brainer-done'
-      : dryStop
-        ? 'collect-dry-plateau'
-        : lookupNext.length
-          ? 'wave-cap'
-          : this.rabbitHoles.length
-            ? 'rabbithole-dry'
-            : 'rabbithole-empty';
+      : starvedStop
+        ? 'scheduler-starved'
+        : !bs.rabbitHoles.length
+          ? 'rabbithole-empty'
+          : dryStop
+            ? 'collect-dry-plateau'
+            : lookupNext.length
+              ? 'wave-cap'
+              : 'rabbithole-dry';
     log(
       '■ crawl DONE · stopReason=' +
         stopReason +
         ' · waves=' +
         (wave - 1) +
         ' · rabbitHoles=' +
-        this.rabbitHoles.length +
-        ' · sentinelReopens=' +
-        this.sentinelReopensUsed,
+        bs.rabbitHoles.length,
     );
 
-    // SENTINEL output → file (every gate invocation: uphold or reopen + what it injected)
-    if (this.sentinelLog.length) {
-      this.files[padIdx(wave + 3) + '-sentinel.md'] = withPrompt(
-        sentinelFileLabel,
-        '# Sentinel — crawl-phase terminal skeptic\n\n' +
-          this.sentinelLog
-            .map(
-              (c, i) =>
-                '## Gate ' +
-                (i + 1) +
-                ' — after wave ' +
-                c.afterWave +
-                ' — ' +
-                (c.solid
-                  ? "✓ UPHELD the brainer's done"
-                  : '⚔ REOPENED (brainer stopped prematurely)') +
-                '\n\n' +
-                (c.reasoning || '') +
-                (c.injected && c.injected.length
-                  ? '\n\n**Injected high-score gaps (handed back to lane researchers):**\n' +
-                    c.injected.map((k) => '- ' + k).join('\n')
-                  : ''),
-            )
-            .join('\n\n') +
-          '\n',
-      );
-    }
-
     // VALIDATOR output → file (every wave it ran: enough verdict + reopened lanes + capped known-gaps + missing)
-    if (this.validatorLog.length) {
+    if (bs.validatorLog.length) {
       this.files[padIdx(wave + 3) + '-validator.md'] =
         '# Validator — per-wave crawl coverage gate\n\n' +
-        this.validatorLog
+        bs.validatorLog
           .map(
             (v) =>
               '## Wave ' +
@@ -2692,152 +3598,55 @@ class ResearchReport {
     }
 
     // hand the crawl outcome to the later phases
-    this.coord = coord;
-    this.wave = wave;
-    this.bestOpen = bestOpen;
-    this.stopReason = stopReason;
+    bs.coord = coord;
+    bs.wave = wave;
+    bs.bestOpen = bestOpen;
+    bs.stopReason = stopReason;
   }
 
-  // REFINE the named load-bearing facts in parallel — one sonnet refine agent per fact; on a re-run the judge `directive`
-  // rides into each so it re-checks what the judge flagged. Writes/overwrites the refinement file. passTag keeps labels unique per pass.
-  async refineFacts(
-    facts                ,
-    directive        ,
-    passTag        ,
-  )                         {
-    const refined = await parallel(
-      facts.map(
-        (f, i) => () =>
-          retryAgent           (
-            refiner.buildPrompt({
-              net: CONFIG.NET,
-              query: CONFIG.query,
-              fact: f.fact,
-              why: f.why,
-              directive,
-            }),
-            {
-              label: 'refine-' + passTag + i,
-              phase: CONFIG.PHASE.finalize,
-              model: refiner.tier,
-              effort: refiner.effort,
-              schema: refiner.schema,
-            },
-          ),
-      ),
-    );
-    const cleanReports                = facts.map((f, i) => ({
-      fact: f.fact,
-      why: f.why,
-      clean: (refined[i] && refined[i] .report) || '(refine failed)',
-    }));
-    this.files[padIdx(this.wave + 5) + '-refinement.md'] =
-      '# Refinement — fact-check & harden the load-bearing facts\n\n' +
-      (facts.length
-        ? facts
-            .map(
-              (f, i) =>
-                '## ' +
-                (i + 1) +
-                ' — ' +
-                f.fact +
-                '\n\n_' +
-                f.why +
-                '_\n\n' +
-                ((refined[i] && refined[i] .report) || '_(refine failed)_'),
-            )
-            .join('\n\n')
-        : '_no facts to harden_') +
-      '\n';
-    return cleanReports;
-  }
-
-  // JUDGE — the TERMINAL skeptic of the finalize phase. Judges the hardened answer (goal met, verification real, derivation valid) and
-  // names the precise fix when not. When compute is off, needsCompute/computeSound are forced (no derivation path). Bounded by MAX_JUDGE_PASSES.
-  async runJudge(
-    cleanReports               ,
-    focus        ,
-    pass        ,
-  )                           {
-    log(
-      '· finalize · judge · ' + judge.tier + ' · judging the hardened answer (pass ' + pass + ')',
-    );
-    const out = await retryAgent          (
-      judge.buildPrompt({
-        query: CONFIG.query,
-        resultSoFar: this.resultSoFar,
-        cleanReports,
-        focus,
-        compute: CONFIG.compute,
-        computerNote: CONFIG.COMPUTER_NOTE,
-        thinkerNote: CONFIG.THINKER_NOTE,
-      }),
-      {
-        label: 'judge-' + pass,
-        phase: CONFIG.PHASE.finalize,
-        model: judge.tier,
-        effort: judge.effort,
-        schema: judge.schema,
-      },
-    );
-    if (out && !CONFIG.compute) {
-      out.needsCompute = false; // compute off → no derivation path; never block the exit on it
-      out.computeSound = true;
-    }
-    if (out)
-      log(
-        '· finalize · judge pass ' +
-          pass +
-          ' · goalMet=' +
-          out.goalMet +
-          ' verif=' +
-          out.verificationSound +
-          ' needsCompute=' +
-          out.needsCompute +
-          ' computeSound=' +
-          out.computeSound,
-      );
-    return out;
-  }
-
-  // CRAWL REOPEN (rare) — the judge found a real evidence gap: pursue its leads through lane-researchers and fold the
+  // CRAWL REOPEN (rare) — the judge found a real evidence gap: pursue its leads through lane readers and fold the
   // findings back into resultSoFar via a brainer pass. Bounded by the leads the judge returns (≤ laneCount, deduped vs pursued).
-  async reopenCrawl(leads                  )                {
+  async reopenCrawl(bs              , leads                  , directive        )                {
     const picks = leads
-      .filter((l) => l && l.keyword && !this.pursuedKeys.has(norm(l.keyword)))
+      .filter((l) => l && l.keyword && !bs.pursuedKeys.has(norm(l.keyword)))
       .slice(0, laneCount)
-      .map((l) =>
-        addRabbitHole(this, {
+      .map((l) => {
+        const rh = addRabbitHole(bs, {
           keyword: l.keyword,
           why: l.why,
           path: ['⚖ judge'],
           score: CONFIG.INJECT_SCORE,
-          wave: this.wave,
-        }),
-      )
+          wave: bs.wave,
+        });
+        // steer the finalize lane: the judge's directive becomes the lane `note` (so the scheduler + reader get
+        // the same WHAT-to-find steering the crawl lanes get); fall back to the lead's own `why` if no directive.
+        if (rh) rh.note = directive || l.why || '';
+        return rh;
+      })
       .filter(Boolean)                ;
     if (!picks.length) {
       log('· finalize · judge reopen · no fresh leads (all already pursued)');
       return;
     }
-    pursue(this, picks);
-    const raw = await this.runResearchers(picks, 'reopen', CONFIG.PHASE.finalize);
+    pursue(bs, picks);
+    const schedule = await this.scheduleSources(bs, picks, 'reopen', CONFIG.PHASE.finalize);
+    const raw = await runResearchers(bs, picks, schedule, 'reopen', CONFIG.PHASE.finalize);
     const findings            = raw.map((r, i) => ({
       rabbitHole: picks[i].keyword,
       trail: trailOf(picks[i].path, picks[i].keyword),
       summary: r ? r.summary : '(researcher failed)',
     }));
-    const coord = await this.coordinate(this.wave, findings, CONFIG.PHASE.finalize);
-    if (coord && coord.resultSoFar) this.resultSoFar = coord.resultSoFar;
+    const coord = await runBrainer(bs, bs.wave, findings, CONFIG.PHASE.finalize);
+    if (coord && coord.resultSoFar) bs.resultSoFar = coord.resultSoFar;
     log('· finalize · judge reopen · folded ' + picks.length + ' lane(s) into the answer');
   }
 
   // Finalize (end-only). An opus INITIATOR names the load-bearing facts + the report focus → REFINEMENT: one sonnet REFINE pass per fact,
   // hardening it against the sources → an opus JUDGE judges the hardened answer and drives a bounded remediation loop (the brain DERIVES the
   // answer when one is needed / refine re-checks a mis-hardened fact / the crawl reopens on a real gap) → the opus SYNTHESISER writes the END report.
-  async runFinalize()                {
+  async runFinalize(bs              )                {
     phase(CONFIG.PHASE.finalize);
-    const rabbitHolesOut                  = this.rabbitHoles
+    const rabbitHolesOut                  = bs.rabbitHoles
       .map((f) => ({
         id: f.id,
         keyword: f.keyword,
@@ -2845,64 +3654,43 @@ class ResearchReport {
         path: f.path || [],
         score: lastScore(f),
         scoreHistory: f.scoreHistory,
+        ...(f.note ? { note: f.note } : {}), // B8: surface the per-lane directive in _rabbitHoles.json
       }))
       .sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
-    this.rabbitHolesOut = rabbitHolesOut;
-    const topOpen = rabbitHolesOut.slice(0, 6).map((f) => f.keyword);
+    bs.rabbitHolesOut = rabbitHolesOut;
+    const topOpen = rabbitHolesOut.slice(0, CONFIG.FINALIZE_TOP_OPEN).map((f) => f.keyword);
 
-    // ── INITIATOR — shapes the finish to the query: names the load-bearing facts to harden + sets the report focus ──
-    log(
-      '· finalize · initiator · ' +
-        initiator.tier +
-        ' · naming the facts to harden + the report focus',
-    );
-    const plan = await retryAgent              (
-      initiator.buildPrompt({
-        query: CONFIG.query,
-        resultSoFar: this.resultSoFar,
-        waveLog: this.waveLog,
-        landscape: this.scout .landscape,
-        openRabbitHoles: topOpen,
-        thinkerNote: CONFIG.THINKER_NOTE,
-      }),
-      {
-        label: 'initiator',
-        phase: CONFIG.PHASE.finalize,
-        model: initiator.tier,
-        effort: initiator.effort,
-        schema: initiator.schema,
-      },
-    );
-    const facts =
-      plan && plan.refinement && Array.isArray(plan.refinement.facts) ? plan.refinement.facts : [];
-    const synthFocus = (plan && plan.synthesiser && plan.synthesiser.focus) || '';
-    log(
-      '· finalize · plan · facts=' +
-        facts.length +
-        ' · synthFocus=' +
-        (synthFocus ? '"' + synthFocus.slice(0, 60) + '"' : 'none'),
-    );
-    this.files[padIdx(this.wave + 4) + '-initiator.md'] = withPrompt(
-      'initiator',
-      '# Initiator — finalize plan\n\n' +
-        '## Facts to harden (' +
-        facts.length +
-        ')\n\n' +
-        (facts.map((f, i) => i + 1 + '. **' + f.fact + '** — ' + f.why).join('\n') || '_none_') +
-        '\n\n## Synthesiser focus\n\n' +
-        (synthFocus || '_none_') +
-        '\n',
-    );
+    // ── INITIATOR — names the load-bearing facts to harden + sets the report focus ──
+    const { facts, synthFocus, artifact: initiatorMd } = await runInitiator(bs, topOpen);
+    this.files[padIdx(bs.wave + 4) + '-initiator.md'] = initiatorMd;
 
     // ── REFINEMENT — one REFINE agent per fact (parallel): adversarially fact-checks, returns the corrected solid claim ──
+    // a local writer keeps the refinement file (always the same key — re-refine overwrites) owned by the engine.
+    const writeRefinement = (r   
+                                  
+                       
+     )                => {
+      this.files[padIdx(bs.wave + 5) + '-refinement.md'] = r.artifact;
+      return r.cleanReports;
+    };
     log('· finalize · refinement · ' + facts.length + ' fact(s) → refine · ' + refiner.tier);
-    let cleanReports = await this.refineFacts(facts, '', '');
+    let cleanReports = writeRefinement(await runRefine(bs, facts, '', ''));
     log('· finalize · refinement DONE · ' + cleanReports.length + ' hardened fact(s)');
 
     // ── JUDGE loop — terminal skeptic judges, then a bounded remediation loop fixes the single biggest problem and re-judges ──
+    // fold the judge's compute-off limitation (returned, not applied by the judge) into openGaps, deduped — the engine
+    // is the sole layer that mutates resultSoFar (replace, never alias-mutate a shared object across the loop).
+    const foldComputeLimitation = (j                 )                  => {
+      if (j && j.computeLimitation && bs.resultSoFar) {
+        const gaps = bs.resultSoFar.openGaps || [];
+        if (!gaps.some((g) => g.startsWith(COMPUTE_LIMIT_PREFIX)))
+          bs.resultSoFar = { ...bs.resultSoFar, openGaps: [...gaps, j.computeLimitation] };
+      }
+      return j;
+    };
     const judgeLog             = [];
     const computeDirectives           = [];
-    let judgement = await this.runJudge(cleanReports, synthFocus, 0);
+    let judgement = foldComputeLimitation(await runJudge(bs, cleanReports, synthFocus, 0));
     if (judgement) judgeLog.push(judgement);
     let pass = 0;
     while (
@@ -2916,31 +3704,13 @@ class ResearchReport {
       if (CONFIG.compute && judgement.needsCompute && !judgement.computeSound) {
         // brain FINALIZE-COMPUTE — the brain (code-capable) derives the answer on the hardened facts, per the judge directive
         log('· finalize · judge pass ' + pass + ' → brain finalize-compute · ' + brainer.tier);
-        const out = await retryAgent                 (
-          buildBrainerCompute({
-            query: CONFIG.query,
-            resultSoFar: this.resultSoFar,
-            hardenedFacts: cleanReports,
-            directive,
-            reason,
-            computerNote: CONFIG.COMPUTER_NOTE,
-            thinkerNote: CONFIG.THINKER_NOTE,
-          }),
-          {
-            label: 'brain-compute-' + pass,
-            phase: CONFIG.PHASE.finalize,
-            model: brainer.tier,
-            effort: brainer.effort,
-            agentType: 'general-purpose',
-            schema: BRAIN_COMPUTE,
-          },
-        );
-        if (out && out.resultSoFar) this.resultSoFar = out.resultSoFar;
+        const out = await runBrainerCompute(bs, cleanReports, directive, reason, pass);
+        if (out && out.resultSoFar) bs.resultSoFar = out.resultSoFar;
         computeDirectives.push(directive || '(derive the answer the goal needs)');
       } else if (!judgement.verificationSound) {
         // RE-REFINE — the judge flagged a mis-hardened / rubber-stamped fact; re-run refine with its directive
         log('· finalize · judge pass ' + pass + ' → re-refine the flagged fact(s)');
-        cleanReports = await this.refineFacts(facts, directive, 'r' + pass + '-');
+        cleanReports = writeRefinement(await runRefine(bs, facts, directive, 'r' + pass + '-'));
       } else if (
         !judgement.goalMet &&
         judgement.reopenRabbitHoles &&
@@ -2948,8 +3718,8 @@ class ResearchReport {
       ) {
         // CRAWL REOPEN (rare) — a real evidence/coverage gap; reopen the crawl on the judge's leads, then re-harden
         log('· finalize · judge pass ' + pass + ' → reopen the crawl on a real gap');
-        await this.reopenCrawl(judgement.reopenRabbitHoles);
-        cleanReports = await this.refineFacts(facts, directive, 'r' + pass + '-');
+        await this.reopenCrawl(bs, judgement.reopenRabbitHoles, directive);
+        cleanReports = writeRefinement(await runRefine(bs, facts, directive, 'r' + pass + '-'));
       } else {
         log(
           '· finalize · judge pass ' +
@@ -2958,13 +3728,13 @@ class ResearchReport {
         );
         break;
       }
-      judgement = await this.runJudge(cleanReports, synthFocus, pass);
+      judgement = foldComputeLimitation(await runJudge(bs, cleanReports, synthFocus, pass));
       if (judgement) judgeLog.push(judgement);
     }
 
     // JUDGE file — every pass: the four-flag verdict + reasoning + directive + any reopen
     if (judgeLog.length)
-      this.files[padIdx(this.wave + 6) + '-judge.md'] = withPrompt(
+      this.files[padIdx(bs.wave + 6) + '-judge.md'] = withPrompt(
         'judge-' + (judgeLog.length - 1),
         '# Judge — finalize-phase terminal skeptic\n\n' +
           judgeLog
@@ -3003,41 +3773,11 @@ class ResearchReport {
         '## Directive(s)\n\n' +
         computeDirectives.map((d, i) => i + 1 + '. ' + d).join('\n') +
         '\n\n## Derivation (resultSoFar.working)\n\n' +
-        ((this.resultSoFar && this.resultSoFar.working) || '_none_') +
+        ((bs.resultSoFar && bs.resultSoFar.working) || '_none_') +
         '\n';
 
-    // ── SYNTHESISER — writes the END report (always) from the judged answer (resultSoFar, any derivation folded into `working`) + the hardened facts ──
-    const hasDerivation = !!(
-      this.resultSoFar &&
-      this.resultSoFar.working &&
-      this.resultSoFar.working.trim()
-    );
-    log(
-      '· finalize · synthesiser · ' +
-        synthesiser.tier +
-        ' · writing the report' +
-        (hasDerivation ? ' (with derivation)' : ''),
-    );
-    const agg = await retryAgent           (
-      synthesiser.buildPrompt({
-        mode: CONFIG.mode,
-        query: CONFIG.query,
-        landscape: this.scout .landscape,
-        resultSoFar: this.resultSoFar,
-        waveLog: this.waveLog,
-        cleanReports,
-        focus: synthFocus,
-        openRabbitHoles: topOpen,
-        thinkerNote: CONFIG.THINKER_NOTE,
-      }),
-      {
-        label: 'synthesiser',
-        phase: CONFIG.PHASE.finalize,
-        model: synthesiser.tier,
-        effort: synthesiser.effort,
-        schema: synthesiser.schema,
-      },
-    );
+    // ── SYNTHESISER — writes the END report (always) from the judged answer + the hardened facts ──
+    const agg = await runSynthesiser(bs, cleanReports, synthFocus, topOpen);
     const reportOk = !!(agg && agg.report);
     if (reportOk) {
       this.files['result.md'] = runArgsMd() + agg .report; // surface the launch args at the top of the deliverable
@@ -3052,27 +3792,26 @@ class ResearchReport {
     } else {
       log('✗ finalize FAILED — no report returned');
     }
-    this.synthesiserOut = agg;
-    this.reportOk = reportOk;
+    bs.synthesiserOut = agg;
+    bs.reportOk = reportOk;
   }
 
   // metrics + _rabbitHoles.json + the crawl-tree render, then the final return shape.
-  buildResult()            {
-    const { synthesiserOut, reportOk, rabbitHolesOut, coord, wave } = this;
+  buildResult(bs              )            {
+    const { synthesiserOut, reportOk, rabbitHolesOut, coord, wave } = bs;
 
     const metrics          = {
       mode: CONFIG.mode,
       dir: CONFIG.DIR,
       wavesRun: wave - 1,
-      stopReason: this.stopReason,
+      stopReason: bs.stopReason,
       scoutRabbitHoles: this.scoutRabbitHoles.length,
       prospectorVenues: this.highValueSources.length,
-      pursuedTotal: this.pursuedList.length,
-      rabbitHolesFinal: this.rabbitHoles.length,
-      bestOpenScore: this.bestOpen,
-      topScores: this.topScores,
+      pursuedTotal: bs.pursuedList.length,
+      rabbitHolesFinal: bs.rabbitHoles.length,
+      bestOpenScore: bs.bestOpen,
+      topScores: bs.topScores,
       done: coord .stop.done,
-      sentinelReopensForced: this.sentinelReopensUsed,
       reportWritten: reportOk,
       confidence: reportOk ? synthesiserOut .confidence : null,
     };
@@ -3083,20 +3822,25 @@ class ResearchReport {
         args: CONFIG.rawArgs, // the COMPLETE set of arguments the run was launched with, verbatim
         query: CONFIG.query,
         mode: CONFIG.mode,
-        stopReason: this.stopReason,
-        topScores: this.topScores,
+        stopReason: bs.stopReason,
+        topScores: bs.topScores,
         highValueSources: this.highValueSources,
         rabbitHoles: rabbitHolesOut,
-        pursued: this.pursuedArchive,
+        pursued: bs.pursuedArchive,
       },
       null,
       2,
     );
 
     // CRAWL TREE — reconstruct the branching from the pursued-archive paths (the global trail record) and render it visually.
-                                                                                          
+                     
+                 
+                                      
+                           
+                    
+      
     const treeRoot           = { kw: CONFIG.query, children: new Map(), score: null };
-    for (const l of this.pursuedArchive) {
+    for (const l of bs.pursuedArchive) {
       let cur = treeRoot;
       for (const kw of [...(l.path || []), l.keyword]) {
         const k = norm(kw);
@@ -3107,26 +3851,31 @@ class ResearchReport {
         l.scoreHistory && l.scoreHistory.length
           ? l.scoreHistory[l.scoreHistory.length - 1].score
           : null;
+      if (l.note) cur.note = l.note; // B8: surface the per-lane directive on the tree leaf
     }
+    // treeLines + goalLine are FULL (unclipped) — they feed the persisted _tree.md and the returned `tree`; only the
+    // live terminal stream is clipped per-line (CONFIG.TREE_LOG_WIDTH) so the file keeps every keyword/note in full.
     const treeLines           = [];
     const walkTree = (node          , prefix        )       => {
       const kids = [...node.children.values()];
       kids.forEach((c, i) => {
         const last = i === kids.length - 1;
-        const kw = c.kw.length > 64 ? c.kw.slice(0, 61) + '…' : c.kw;
         treeLines.push(
-          prefix + (last ? '└─ ' : '├─ ') + kw + (c.score != null ? '  [' + c.score + ']' : ''),
+          prefix +
+            (last ? '└─ ' : '├─ ') +
+            c.kw +
+            (c.score != null ? '  [' + c.score + ']' : '') +
+            (c.note ? '  ‹' + c.note + '›' : ''),
         );
         walkTree(c, prefix + (last ? '   ' : '│  '));
       });
     };
     walkTree(treeRoot, '');
-    const goalLine =
-      'GOAL: ' + (CONFIG.query.length > 80 ? CONFIG.query.slice(0, 77) + '…' : CONFIG.query);
+    const goalLine = 'GOAL: ' + CONFIG.query;
     log('');
     log('🌳 CRAWL TREE — how it branched (goal → lanes pursued · [score]):');
-    log(goalLine);
-    treeLines.forEach((l) => log(l));
+    log(clip(goalLine, CONFIG.TREE_LOG_WIDTH));
+    treeLines.forEach((l) => log(clip(l, CONFIG.TREE_LOG_WIDTH)));
     this.files['_tree.md'] =
       '# Crawl tree — how the lanes branched\n\n```\n' +
       goalLine +
@@ -3138,108 +3887,567 @@ class ResearchReport {
       query: CONFIG.query,
       mode: CONFIG.mode,
       dir: CONFIG.DIR,
-      stopReason: this.stopReason,
+      stopReason: bs.stopReason,
       done: coord .stop.done,
       tree: [goalLine, ...treeLines],
       verdict: reportOk ? synthesiserOut .verdict : null,
       confidence: reportOk ? synthesiserOut .confidence : null,
       plan: reportOk ? synthesiserOut .plan : [],
       openQuestions: reportOk ? synthesiserOut .openQuestions : [],
-      pursued: this.pursuedList,
-      pursuedArchive: this.pursuedArchive,
+      pursued: bs.pursuedList,
+      pursuedArchive: bs.pursuedArchive,
       highValueSources: this.highValueSources,
       rabbitHoles: rabbitHolesOut,
-      resultSoFar: this.resultSoFar,
-      sentinelLog: this.sentinelLog,
-      waveLog: this.waveLog,
+      resultSoFar: bs.resultSoFar,
+      waveLog: bs.waveLog,
       metrics,
       files: this.files,
     };
   }
 
-  // DEBUG & ANALYSIS (last phase, opt-in via arg.debug): an Opus agent consolidates the run's diagnostics — corner-by-corner,
-  // prospector→researcher venue utilization, and any arg.debugPrompt question — then JS appends the verbatim metrics, run log,
-  // and raw agent I/O (exact prompt in / exact output out) into one shippable _debug.md.
-  async runDebug(metrics         )                {
-    phase(CONFIG.PHASE.debug);
+  // ═══════════════════════════════════════════════════════════════════════════════════════════════
+  // MULTI-BRAINER (maxParallelBrainers > 1) — the brainer tree. The single-brainer path above
+  // (runCrawl / runFinalize) is left UNTOUCHED so its proven behavior is preserved; this parallel
+  // orchestration runs only when the operator opts in. Shape: a global wave loop runs every ACTIVE
+  // brainer's wave concurrently; a brainer that declares done fires a speculative GATE (initiator →
+  // refine → judge) WITHOUT pausing the others; the FIRST gate the judge upholds wins → one more
+  // last wave → drain → the winner's report is result.md, the rest preserved as result-<name>.md.
+  // ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+  // the 01-scout.md artifact (shared/global; the single path writes its own inline copy).
+  writeScoutFile()       {
+    const s = this.scout ;
+    this.files['01-scout.md'] = withPrompt(
+      'scout',
+      '# 01 — Scout\n\n**Query:** ' +
+        CONFIG.query +
+        '\n\n## Landscape\n\n' +
+        s.landscape +
+        '\n\n## Sources\n\n' +
+        s.pages
+          .map(
+            (p, i) =>
+              '### ' +
+              (i + 1) +
+              ' — ' +
+              p.url +
+              '\n\n' +
+              p.summary +
+              '\n\n' +
+              (p.rabbitHoles || []).map((l) => '- **' + l.keyword + '** — ' + l.why).join('\n'),
+          )
+          .join('\n\n') +
+        '\n\n## Dead ends\n\n' +
+        ((s.deadEnds || []).map((d) => '- ' + d).join('\n') || '_none_') +
+        '\n',
+    );
+  }
+
+  // a brainer's INITIAL pick — one brainer call with NO preceding research (root: scores the scout seeds;
+  // child: re-scores its inherited store through its mandate) → sets its first lookupNext. Mirrors wave 0.
+  async pickFirst(
+    bs              ,
+    seedFindings           ,
+    gw        ,
+    phaseName        ,
+  )                {
+    bs.wave = gw;
+    const coord = await runBrainer(bs, gw, seedFindings, phaseName, {
+      canSpawn: false,
+      lastWave: false,
+    });
+    if (!coord) {
+      bs.status = 'drained';
+      log('  ✗ ' + bs.name + ' pick-first brainer died → drained');
+      return;
+    }
+    bs.coord = coord;
+    applyDeltas(bs, coord, gw);
+    if (coord.resultSoFar) bs.resultSoFar = coord.resultSoFar;
+    bs.resultLog.push({ wave: gw, resultSoFar: bs.resultSoFar });
+    bs.lookupNext = resolveLookupNext(bs, coord, gw, laneCount);
+    bs.topScores.push(
+      bs.lookupNext.length ? Math.max(...bs.lookupNext.map((p) => p.score ?? 0)) : 0,
+    );
+    bs.waveLog.push({
+      wave: gw,
+      pursued: [],
+      newRabbitHoles: 0,
+      rabbitHoles: bs.rabbitHoles.length,
+      topScore: bs.topScores[bs.topScores.length - 1],
+      done: coord.stop.done,
+      reason: coord.stop.reason,
+    });
+    this.files[bs.name + '/wave-' + gw + '.md'] = withPrompt(
+      'brainer-' + (bs.isRoot ? '' : bs.name + '-') + 'w' + gw,
+      waveMd(gw, coord, bs.lookupNext, seedFindings, bs.rabbitHoles),
+    );
+    if (coord.stop.lost && !bs.isRoot) bs.status = 'lost';
+    else if (coord.stop.done) bs.status = 'done';
+    else if (!bs.lookupNext.length) bs.status = 'drained';
+  }
+
+  // ONE research wave for ONE brainer: pursue its pending lanes → schedule → read → validate → re-coordinate.
+  // Mutates bs; sets bs.status (done / lost / drained) and leaves bs.coord (carrying any spawn) for the caller.
+  async runOneWave(
+    bs              ,
+    gw        ,
+    isLastWave         ,
+    phaseName        ,
+    canSpawn         ,
+  )                {
+    bs.wave = gw;
+    const toPursue = bs.lookupNext;
+    pursue(bs, toPursue);
+    const tag = (bs.isRoot ? '' : bs.name + '-') + 'w' + gw;
+    const schedule = await this.scheduleSources(bs, toPursue, tag, phaseName);
+    const raw = await runResearchers(bs, toPursue, schedule, tag, phaseName);
+    const waveStarved = [...schedule.values()].every((s) => !s || !s.length);
+    bs.starvedWaves = waveStarved ? bs.starvedWaves + 1 : 0;
+    const findings            = raw.map((r, i) => ({
+      rabbitHole: toPursue[i].keyword,
+      trail: trailOf(toPursue[i].path, toPursue[i].keyword),
+      summary: r ? r.summary : '(researcher failed)',
+    }));
+    if (CONFIG.debug)
+      raw.forEach((r, i) =>
+        this.laneRecords.push({
+          wave: gw,
+          keyword: bs.name + ':' + toPursue[i].keyword,
+          assignedVenues: toPursue[i].sources || [],
+          summary: r ? r.summary : null,
+          rabbitHoles: r ? (r.rabbitHoles || []).map((l) => l.keyword) : [],
+        }),
+      );
+    raw.forEach((r, i) => {
+      if (!r) return;
+      const par = [...(toPursue[i].path || []), toPursue[i].keyword];
+      for (const l of r.rabbitHoles || [])
+        addRabbitHole(bs, { keyword: l.keyword, why: l.why, path: par, wave: gw });
+      for (const s of r.nextSources || [])
+        addRabbitHole(bs, {
+          keyword: s.why,
+          why: 'followed citation',
+          path: par,
+          wave: gw,
+          ref: s.ref,
+        });
+    });
+    const anyNull = raw.some((r) => !r);
+    const anyThin = findings.some((f) => !f.summary || f.summary.length < CONFIG.VALIDATOR_THIN);
+    if (anyNull || anyThin) {
+      const requests = toPursue.map((p) => ({ id: p.id, keyword: p.keyword, why: p.why }));
+      const vFindings = findings.map((f) => ({
+        keyword: f.rabbitHole,
+        intro: (f.summary || '').slice(0, CONFIG.VALIDATOR_INTRO_CHARS),
+      }));
+      const nullLanes = toPursue.filter((p, i) => !raw[i]).map((p) => p.keyword);
+      const val = await runValidator(bs, gw, requests, vFindings, nullLanes);
+      const failedIds = new Set        ();
+      toPursue.forEach((p, i) => {
+        if (!raw[i]) failedIds.add(p.id);
+      });
+      if (val && Array.isArray(val.checks))
+        val.checks.forEach((c) => {
+          if (c && c.fulfilled === false && typeof c.id === 'number') failedIds.add(c.id);
+        });
+      const reopened           = [];
+      const cappedGaps           = [];
+      for (const id of failedIds) {
+        const rh = bs.pursuedArchive.find((r) => r.id === id);
+        if (!rh) continue;
+        if ((rh.failCount || 0) >= CONFIG.MAX_LANE_REFAILS) cappedGaps.push(rh.keyword);
+        else reopened.push(reopenRabbitHole(bs, rh).keyword);
+      }
+      bs.lastValidatorMissing = [
+        ...((val && val.missing) || []),
+        ...cappedGaps.map((k) => k + ' (lane retried twice — known gap)'),
+      ]
+        .join('; ')
+        .slice(0, CONFIG.VALIDATOR_MISSING_CHARS);
+      bs.validatorLog.push({
+        wave: gw,
+        enough: val ? val.enough : null,
+        reopened,
+        cappedGaps,
+        missing: (val && val.missing) || [],
+      });
+    } else bs.lastValidatorMissing = '';
+    const coord = await runBrainer(bs, gw, findings, phaseName, { canSpawn, lastWave: isLastWave });
+    if (!coord) {
+      bs.status = 'drained';
+      log('  ✗ ' + bs.name + ' brainer died w' + gw + ' → drained');
+      return;
+    }
+    bs.coord = coord;
+    applyDeltas(bs, coord, gw);
+    if (coord.resultSoFar) bs.resultSoFar = coord.resultSoFar;
+    bs.resultLog.push({ wave: gw, resultSoFar: bs.resultSoFar });
+    bs.lookupNext = isLastWave ? [] : resolveLookupNext(bs, coord, gw, laneCount);
+    bs.topScores.push(
+      bs.lookupNext.length ? Math.max(...bs.lookupNext.map((p) => p.score ?? 0)) : 0,
+    );
+    bs.waveLog.push({
+      wave: gw,
+      pursued: toPursue.map((p) => p.keyword),
+      newRabbitHoles: 0,
+      rabbitHoles: bs.rabbitHoles.length,
+      topScore: bs.topScores[bs.topScores.length - 1],
+      done: coord.stop.done,
+      reason: coord.stop.reason,
+    });
+    this.files[bs.name + '/wave-' + gw + '.md'] = withPrompt(
+      'brainer-' + (bs.isRoot ? '' : bs.name + '-') + 'w' + gw,
+      waveMd(gw, coord, bs.lookupNext, findings, bs.rabbitHoles),
+    );
     log(
-      '· debug & analysis · ' +
-        debugAnalyst.tier +
-        ' · over ' +
-        IO_LOG.length +
-        ' agent calls + ' +
-        LOG_BUFFER.length +
-        ' log lines + ' +
-        this.laneRecords.length +
-        ' lane records',
+      '  · ' +
+        bs.name +
+        ' w' +
+        gw +
+        ' · researchers=' +
+        raw.filter(Boolean).length +
+        '/' +
+        toPursue.length +
+        ' · open=' +
+        bs.rabbitHoles.length +
+        ' · done=' +
+        coord.stop.done +
+        (coord.stop.lost ? ' · LOST' : ''),
     );
-    const diag = await retryAgent         (
-      debugAnalyst.buildPrompt({
-        query: CONFIG.query,
-        focus: CONFIG.debugPrompt,
-        metrics,
-        waveLog: this.waveLog,
-        sentinelLog: this.sentinelLog,
-        resultLog: this.resultLog,
-        highValueSources: this.highValueSources,
-        laneRecords: this.laneRecords,
-      }),
-      {
-        label: 'debug-analyst',
-        phase: CONFIG.PHASE.debug,
-        model: debugAnalyst.tier,
-        effort: debugAnalyst.effort,
-        schema: debugAnalyst.schema,
-      },
-    );
-    const narrative =
-      (diag && diag.diagnosis) || '_(debug analyst failed — see raw sections below)_';
-    const rawIO = IO_LOG.map(
-      (e, i) =>
-        '### ' +
-        (i + 1) +
-        '. `' +
-        e.label +
-        '` · ' +
-        e.model +
-        ' · ' +
-        e.phase +
-        '\n\n**PROMPT**\n\n' +
-        (e.prompt || '') +
-        '\n\n**OUTPUT**' +
-        (e.error ? ' _(' + e.error + ')_' : '') +
+    if (coord.stop.lost && !bs.isRoot) bs.status = 'lost';
+    else if (isLastWave)
+      bs.status = 'drained'; // the last wave: collect, do not re-gate
+    else if (coord.stop.done) bs.status = 'done';
+    else if (bs.starvedWaves >= CONFIG.MAX_STARVED_WAVES) {
+      bs.status = 'drained';
+      bs.stopReason = 'scheduler-starved';
+    } else if (!bs.lookupNext.length) {
+      bs.status = 'drained';
+      bs.stopReason = 'rabbithole-dry';
+    } else if (CONFIG.mode === 'collect') {
+      const cs = bs.topScores.slice(1);
+      if (cs.length >= CONFIG.PLATEAU_MIN_WAVES) {
+        const peak = Math.max(...cs);
+        const win = cs.slice(-CONFIG.PLATEAU_WINDOW);
+        if (peak > 0 && win.every((s) => s <= peak * CONFIG.QUERY_PLATEAU)) {
+          bs.status = 'drained';
+          bs.stopReason = 'collect-dry-plateau';
+        }
+      }
+    }
+  }
+
+  // process a brainer's spawn delta (≤1) — spawn a focused child if the maxParallelBrainers / depth caps allow, then aim + seed it.
+  // Called SEQUENTIALLY after the parallel wave so the caps are race-free; delegate-and-release drops the branch.
+  async processSpawn(parent              , gw        , phaseName        )                {
+    const sp = parent.coord && parent.coord.spawn;
+    if (!sp || !sp.mandate) return;
+    const live = this.liveBrainers.filter(
+      (b) => b.status !== 'lost' && b.status !== 'drained',
+    ).length;
+    if (live >= CONFIG.maxParallelBrainers) {
+      log(
+        '  · ' +
+          parent.name +
+          ' spawn refused — maxParallelBrainers cap (' +
+          CONFIG.maxParallelBrainers +
+          ' live)',
+      );
+      return;
+    }
+    if (parent.depth + 1 > CONFIG.MAX_BRAINER_DEPTH) {
+      log('  · ' + parent.name + ' spawn refused — depth cap');
+      return;
+    }
+    let branch                        ;
+    if (typeof sp.id === 'number') branch = parent.rabbitHoles.find((r) => r.id === sp.id);
+    const trail = branch
+      ? [...(branch.path || []), branch.keyword].join('  →  ')
+      : (parent.trail ? parent.trail + '  →  ' : '') + (sp.keyword || sp.mandate);
+    const name = 'b' + this.liveBrainers.length + '-' + lab(sp.keyword || sp.mandate);
+    const child = spawnBrainer(parent, { name, mandate: sp.mandate, trail });
+    this.liveBrainers.push(child); // reserve the live slot synchronously (before the pickFirst await)
+    if (branch) parent.rabbitHoles = parent.rabbitHoles.filter((r) => r.id !== branch .id); // delegate-and-release
+    log('  ✚ ' + parent.name + ' spawned ' + name + ' — ‹' + clip(sp.mandate, 60) + '›');
+    await this.pickFirst(child, [], gw, phaseName); // the child's initial pick, aimed by its mandate
+  }
+
+  // the speculative GATE for a brainer that declared done — initiator → refine → judge (no synthesiser). Returns the
+  // judge verdict; caches the hardened facts so the winner's report reuses them. Namespaced artifacts; never pauses others.
+  async runGate(bs              )                           {
+    const rabbitHolesOut                  = bs.rabbitHoles
+      .map((f) => ({
+        id: f.id,
+        keyword: f.keyword,
+        why: f.why,
+        path: f.path || [],
+        score: lastScore(f),
+        scoreHistory: f.scoreHistory,
+        ...(f.note ? { note: f.note } : {}),
+      }))
+      .sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+    bs.rabbitHolesOut = rabbitHolesOut;
+    const topOpen = rabbitHolesOut.slice(0, CONFIG.FINALIZE_TOP_OPEN).map((f) => f.keyword);
+    const { facts, synthFocus, artifact: initiatorMd } = await runInitiator(bs, topOpen);
+    this.files[bs.name + '/initiator.md'] = initiatorMd;
+    const { cleanReports, artifact: refineMd } = await runRefine(bs, facts, '', '');
+    this.files[bs.name + '/refinement.md'] = refineMd;
+    const verdict = await runJudge(bs, cleanReports, synthFocus, 0);
+    bs.gateCache = { facts, synthFocus, cleanReports, topOpen };
+    if (verdict)
+      this.files[bs.name + '/judge.md'] =
+        '# Gate judge — ' +
+        bs.name +
+        '\n\n- goalMet: ' +
+        verdict.goalMet +
+        '\n- verificationSound: ' +
+        verdict.verificationSound +
+        '\n- computeSound: ' +
+        verdict.computeSound +
         '\n\n' +
-        (e.output == null ? '_(null)_' : JSON.stringify(e.output, null, 2)),
-    ).join('\n\n');
-    this.files['_debug.md'] =
-      '# RR debug & analysis — ' +
-      (CONFIG.query.length > 80 ? CONFIG.query.slice(0, 77) + '…' : CONFIG.query) +
-      (CONFIG.debugPrompt ? '\n\n**Debug prompt:** ' + CONFIG.debugPrompt : '') +
-      '\n\n## Analysis (debug-analyst · opus)\n\n' +
-      narrative +
-      '\n\n## Metrics\n\n```json\n' +
-      JSON.stringify(metrics, null, 2) +
-      '\n```' +
-      '\n\n## Run log (' +
-      LOG_BUFFER.length +
-      ' lines)\n\n```\n' +
-      LOG_BUFFER.join('\n') +
-      '\n```' +
-      '\n\n## Raw agent I/O — exact prompt in, exact output out (' +
-      IO_LOG.length +
-      ' calls)\n\n' +
-      (rawIO || '_(none captured)_') +
+        (verdict.reasoning || '') +
+        (verdict.directive ? '\n\n**Directive:** ' + verdict.directive : '') +
+        '\n';
+    return verdict;
+  }
+
+  // the WINNER's report — its gate already upheld the hardened facts, so reuse them and run the synthesiser → result.md.
+  async finalizeWinner(bs              )                {
+    phase(CONFIG.PHASE.finalize);
+    const gc = bs.gateCache;
+    if (!gc) {
+      log('  ✗ winner ' + bs.name + ' has no gate cache — falling back to full finalize');
+      await this.runFinalize(bs);
+      return;
+    }
+    const agg = await runSynthesiser(bs, gc.cleanReports, gc.synthFocus, gc.topOpen);
+    bs.synthesiserOut = agg;
+    bs.reportOk = !!(agg && agg.report);
+    if (bs.reportOk) {
+      this.files['result.md'] = runArgsMd() + agg .report;
+      log('· winner ' + bs.name + ' finalized · confidence=' + agg .confidence);
+    } else log('✗ winner ' + bs.name + ' finalize FAILED — no report');
+  }
+
+  // a non-winning brainer's wrapped-up state — preserved for later review (its living memory + gate verdict if any).
+  writeLoserResult(bs              )       {
+    this.files['result-' + bs.name + '.md'] =
+      '# ' +
+      bs.name +
+      ' — ' +
+      (bs.status === 'lost' ? 'LOST branch (dead end)' : 'wrapped up — not the winner') +
+      '\n\n_Mandate: ' +
+      (bs.mandate || '(root)') +
+      '_\n\n_Trail: ' +
+      (bs.trail || '(root)') +
+      '_\n\n' +
+      resultSoFarMd(bs.resultSoFar) +
       '\n';
-    log('· debug DONE · _debug.md written');
+  }
+
+  // _brainers.json + _brainers-tree.md — the brainer tree: who spawned whom, mandate, outcome, final status.
+  writeBrainerTree()       {
+    const recs = this.liveBrainers.map((b) => ({
+      name: b.name,
+      parent: b.parentName,
+      depth: b.depth,
+      status: b.status,
+      mandate: b.mandate,
+      trail: b.trail,
+      waves: b.waveLog.length,
+      topScores: b.topScores,
+      gate: b.gate
+        ? {
+            goalMet: b.gate.goalMet,
+            verificationSound: b.gate.verificationSound,
+            computeSound: b.gate.computeSound,
+          }
+        : null,
+      confidence: b.resultSoFar ? b.resultSoFar.confidence : null,
+      answer: b.resultSoFar ? clip(b.resultSoFar.answer || '', 400) : null,
+    }));
+    this.files['_brainers.json'] = JSON.stringify(
+      { winner: this.winner ? this.winner.name : null, brainers: recs },
+      null,
+      2,
+    );
+    const lines           = [];
+    const walk = (parentName               , pre        )       => {
+      const cs = this.liveBrainers.filter((b) => b.parentName === parentName);
+      cs.forEach((c, i) => {
+        const last = i === cs.length - 1;
+        const mark =
+          this.winner && c.name === this.winner.name
+            ? ' ⚑WINNER'
+            : c.status === 'lost'
+              ? ' ✗lost'
+              : ' (' + c.status + ')';
+        lines.push(
+          pre +
+            (last ? '└─ ' : '├─ ') +
+            c.name +
+            mark +
+            (c.mandate ? '  ‹' + clip(c.mandate, 60) + '›' : ''),
+        );
+        walk(c.name, pre + (last ? '   ' : '│  '));
+      });
+    };
+    walk(null, '');
+    log('');
+    log('🧠 BRAINER TREE:');
+    lines.forEach((l) => log(clip(l, CONFIG.TREE_LOG_WIDTH)));
+    this.files['_brainers-tree.md'] =
+      '# Brainer tree — the brainer-tree run\n\n```\n' +
+      (lines.join('\n') || '(root only)') +
+      '\n```\n';
+  }
+
+  // the GLOBAL multi-brainer loop (maxParallelBrainers > 1): run every active brainer's wave concurrently each global wave; a done brainer
+  // fires its gate without pausing the others; the first upheld gate wins → one last wave → drain.
+  async runCrawlMulti(root              , scoutRabbitHoles            )                {
+    this.writeScoutFile();
+    scoutRabbitHoles.forEach((l) =>
+      addRabbitHole(root, { keyword: l.keyword, why: l.why, path: l.path || [], wave: 0 }),
+    );
+    const seedFindings            = this.scout .pages.map((p) => ({
+      rabbitHole: p.url,
+      summary: p.summary,
+    }));
+    // brainer-0 (the root's first pick) belongs to the Scout phase, beside scout + prospector — NOT a crawl wave.
+    phase(CONFIG.PHASE.scout);
+    await this.pickFirst(root, seedFindings, 0, CONFIG.PHASE.scout);
+
+                                                                                  
+    const gates            = [];
+    const cap = CONFIG.maxWave === 'auto' ? CONFIG.HARD_CAP : CONFIG.maxWave;
+    let gw = 1;
+    while (gw <= Math.min(CONFIG.HARD_CAP, cap)) {
+      const isLastWave = this.lastWaveTriggered;
+      const active = this.liveBrainers.filter((b) => b.status === 'active' && b.lookupNext.length);
+      if (!active.length) {
+        const pending = gates.filter((g) => !g.settled);
+        if (pending.length) {
+          await Promise.race(pending.map((g) => g.promise));
+          continue; // a gate settled — it may have reactivated a brainer or set the winner; re-evaluate
+        }
+        break; // no active brainers and no gates in flight → the run is done
+      }
+      const phaseName = 'Research w' + gw;
+      phase(phaseName);
+      const canSpawnNow =
+        !isLastWave &&
+        this.liveBrainers.filter((b) => b.status !== 'lost' && b.status !== 'drained').length <
+          CONFIG.maxParallelBrainers;
+      log(
+        '— global wave ' +
+          gw +
+          ' · active=' +
+          active.length +
+          ' · live=' +
+          this.liveBrainers.length +
+          (isLastWave ? ' · LAST WAVE' : ''),
+      );
+      await parallel(
+        active.map((bs) => () => this.runOneWave(bs, gw, isLastWave, phaseName, canSpawnNow)),
+      );
+      // ── post-wave (sequential) — spawns first (cap-safe), then fire gates for brainers that declared done ──
+      for (const bs of active)
+        if (canSpawnNow && bs.status === 'active' && bs.coord && bs.coord.spawn)
+          await this.processSpawn(bs, gw, phaseName);
+      for (const bs of active) {
+        if (bs.status !== 'done') continue;
+        bs.status = 'finalizing';
+        const rec          = { bs, settled: false, promise: Promise.resolve() };
+        rec.promise = this.runGate(bs).then((verdict) => {
+          rec.settled = true;
+          bs.gate = verdict;
+          const upheld = !!(
+            verdict &&
+            verdict.goalMet &&
+            verdict.verificationSound &&
+            verdict.computeSound
+          );
+          if (upheld) {
+            if (!this.winner) {
+              this.winner = bs;
+              this.lastWaveTriggered = true;
+              log('  ⚑ ' + bs.name + ' GATE PASSED — winner; triggering the last wave');
+            }
+            bs.status = 'won';
+          } else {
+            const reopen = (verdict && verdict.reopenRabbitHoles) || [];
+            if (reopen.length) {
+              bs.lookupNext = resolveLookupNext(
+                bs,
+                {
+                  lookupNext: reopen.map((l) => ({
+                    keyword: l.keyword,
+                    why: l.why,
+                    score: CONFIG.INJECT_SCORE,
+                  })),
+                },
+                bs.wave,
+                laneCount,
+              );
+              bs.lastValidatorMissing = (verdict && verdict.directive) || '';
+              bs.status = bs.lookupNext.length ? 'active' : 'drained';
+              log(
+                '  ↺ ' +
+                  bs.name +
+                  ' gate REJECTED — ' +
+                  (bs.status === 'active' ? 'continuing on a flagged gap' : 'drained'),
+              );
+            } else {
+              bs.status = 'drained';
+              log('  ↺ ' + bs.name + ' gate REJECTED — no concrete gap → drained');
+            }
+          }
+        });
+        gates.push(rec);
+      }
+      if (isLastWave) break;
+      gw++;
+    }
+    await Promise.all(gates.map((g) => g.promise)); // DRAIN — let every in-flight gate settle
+    log(
+      '■ multi-crawl DONE · brainers=' +
+        this.liveBrainers.length +
+        ' · winner=' +
+        (this.winner ? this.winner.name : 'none'),
+    );
   }
 
   async run()                     {
-    const scoutRabbitHoles = await this.runScout();
-    await this.runProspect(); // name the high-value venues before the crawl
-    await this.runCrawl(scoutRabbitHoles);
-    await this.runFinalize();
-    const result = this.buildResult();
-    if (CONFIG.debug) await this.runDebug(result.metrics); // last phase, opt-in: Debug & Analysis agent → _debug.md
+    const scoutRabbitHoles = await runScout(this);
+    this.files['02-prospector.md'] = await runProspector(this); // name the high-value venues before the crawl
+    // the ROOT brainer — globals (scout + prospector) are now set, copied by reference into it; the root can never declare lost.
+    const root = new BrainerState(this, {
+      name: 'root',
+      parentName: null,
+      mandate: '',
+      trail: '',
+      depth: 0,
+    });
+    this.liveBrainers = [root];
+    let result           ;
+    if (CONFIG.maxParallelBrainers <= 1) {
+      // ── single-brainer (default) — the proven path, unchanged ──
+      await this.runCrawl(root, scoutRabbitHoles);
+      await this.runFinalize(root);
+      result = this.buildResult(root);
+    } else {
+      // ── multi-brainer brainer tree (opt-in via maxParallelBrainers > 1) ──
+      await this.runCrawlMulti(root, scoutRabbitHoles);
+      const winner = this.winner;
+      if (winner) await this.finalizeWinner(winner);
+      else await this.runFinalize(root); // no gate ever passed → full finalize on the root
+      for (const bs of this.liveBrainers) if (bs !== (winner || root)) this.writeLoserResult(bs);
+      this.writeBrainerTree();
+      result = this.buildResult(winner || root);
+    }
+    if (CONFIG.debug)
+      this.files['_debug.md'] = await runDebug(this, this.winner || root, result.metrics); // opt-in Debug & Analysis agent → _debug.md
     return result;
   }
 }

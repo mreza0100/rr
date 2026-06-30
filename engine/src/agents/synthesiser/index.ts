@@ -1,5 +1,6 @@
 // SYNTHESISER — writes the END report (always) from the hardened facts (source of truth) + the computed
 // derivation (verbatim) + the final resultSoFar. Tier: opus (final synthesis). Effort: xhigh.
+import { CONFIG } from '../../config.js';
 import { buildSynthesiser } from './prompts.js';
 import type { Agent, SynthesiserArgs, Schema } from '../../types/index.js';
 
@@ -8,7 +9,7 @@ export const REPORT: Schema = {
   properties: {
     report: {
       type: 'string',
-      description: 'the FULL report as markdown, all 7 sections in order per the contract',
+      description: 'the FULL report as markdown, all 8 sections in order per the contract',
     },
     verdict: { type: 'string', description: '1-3 sentence headline answer' },
     confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
@@ -23,8 +24,8 @@ export const REPORT: Schema = {
 };
 
 export const synthesiser: Agent<SynthesiserArgs> = {
-  tier: 'opus',
-  effort: 'xhigh',
+  tier: CONFIG.TIER.synthesiser,
+  effort: CONFIG.EFFORT.synthesiser,
   schema: REPORT,
   buildPrompt: buildSynthesiser,
 };

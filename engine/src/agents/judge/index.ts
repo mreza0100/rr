@@ -2,6 +2,7 @@
 // sees the hardened facts + the brain's resultSoFar + the goal/deliverable, and judges whether the answer
 // is sound (goal met, verification real, derivation valid). Drives a bounded remediation loop in the engine.
 // Tier: opus (adversarial judgment). Effort: xhigh.
+import { CONFIG } from '../../config.js';
 import { RABBITHOLE } from '../shared.js';
 import { buildJudge } from './prompts.js';
 import type { Agent, JudgeArgs, Schema } from '../../types/index.js';
@@ -48,8 +49,8 @@ export const JUDGE: Schema = {
 };
 
 export const judge: Agent<JudgeArgs> = {
-  tier: 'opus',
-  effort: 'xhigh',
+  tier: CONFIG.TIER.judge,
+  effort: CONFIG.EFFORT.judge,
   schema: JUDGE,
   buildPrompt: buildJudge,
 };

@@ -6,8 +6,8 @@ import {
   prospector,
   brainer,
   buildBrainerCompute,
-  sentinel,
   validator,
+  researchScheduler,
   researcher,
   initiator,
   refiner,
@@ -28,8 +28,8 @@ import type {
 const SCOUT_PROMPT = scout.buildPrompt;
 const PROSPECTOR_PROMPT = prospector.buildPrompt;
 const BRAINER_PROMPT = brainer.buildPrompt;
-const SENTINEL_PROMPT = sentinel.buildPrompt;
 const VALIDATOR_PROMPT = validator.buildPrompt;
+const SCHEDULER_PROMPT = researchScheduler.buildPrompt;
 const RESEARCHER_PROMPT = researcher.buildPrompt;
 const INITIATOR_PROMPT = initiator.buildPrompt;
 const REFINE_PROMPT = refiner.buildPrompt;
@@ -121,17 +121,6 @@ const cases = [
     }),
   ],
   [
-    'SENTINEL_PROMPT',
-    SENTINEL_PROMPT({
-      query: Q,
-      resultSoFar,
-      reason: 'done',
-      waveLog,
-      rabbitHoles: ['#1 [80] x — y'],
-      pursuedList: ['a'],
-    }),
-  ],
-  [
     'VALIDATOR_PROMPT',
     VALIDATOR_PROMPT({
       query: Q,
@@ -141,16 +130,34 @@ const cases = [
     }),
   ],
   [
+    'SCHEDULER_PROMPT',
+    SCHEDULER_PROMPT({
+      query: Q,
+      lanes: [
+        {
+          id: 1,
+          keyword: 'hnsw tuning',
+          why: 'recall knobs',
+          note: 'find ef/M build-vs-query tradeoffs; if absent, the default recall/latency curve',
+          venues,
+          ref: '',
+        },
+      ],
+    }),
+  ],
+  [
     'RESEARCHER_PROMPT',
     RESEARCHER_PROMPT({
-      net: NET,
       query: Q,
       trail: 'goal  →  x',
       keyword: 'x',
       why: 'w',
+      note: 'extract the recall numbers; fallback to latency if recall is absent',
       footer: FOOTER,
-      venues,
-      parallelSourcesPerLaneResearchAgent: 3,
+      reads: [{ source: 'https://a.com', cachePath: '/cache/a.txt', offset: 0, limit: 2000 }],
+      readerIndex: 2,
+      readerCount: 3,
+      priorAnswer: 'so far: pgvector recall ~0.96',
     }),
   ],
   [
@@ -165,6 +172,7 @@ const cases = [
       resultSoFar,
       cleanReports,
       focus: 'lead with cost',
+      openRabbitHoles: ['[70] multi-tenant isolation — unverified at scale'],
       compute: true,
     }),
   ],
@@ -196,9 +204,22 @@ const cases = [
     DEBUG_PROMPT({
       query: Q,
       focus: 'why?',
-      metrics: { a: 1 },
+      metrics: {
+        mode: 'goal',
+        dir: 'RR/x',
+        wavesRun: 1,
+        stopReason: 'brainer-done',
+        scoutRabbitHoles: 3,
+        prospectorVenues: 4,
+        pursuedTotal: 5,
+        rabbitHolesFinal: 2,
+        bestOpenScore: 80,
+        topScores: [80],
+        done: true,
+        reportWritten: true,
+        confidence: 'high',
+      },
       waveLog,
-      sentinelLog: [],
       resultLog: [],
       highValueSources: venues,
       laneRecords: [],
@@ -246,7 +267,7 @@ describe('prompt builders', () => {
 
 describe('researcherNote — the web-research/probe-agent passthrough', () => {
   const RN = 'Research note: prefer 2025 primary sources';
-  // the 5 recipients (scout, prospector, researcher, brainer, sentinel) — each carrying researcherNote
+  // the recipients (scout, prospector, scheduler, researcher, brainer) — each carrying researcherNote
   const recipients = {
     SCOUT_PROMPT: SCOUT_PROMPT({ query: Q, net: NET, footer: FOOTER, researcherNote: RN }),
     PROSPECTOR_PROMPT: PROSPECTOR_PROMPT({
@@ -255,15 +276,22 @@ describe('researcherNote — the web-research/probe-agent passthrough', () => {
       sources: ['https://a.com'],
       researcherNote: RN,
     }),
+    SCHEDULER_PROMPT: SCHEDULER_PROMPT({
+      query: Q,
+      lanes: [{ id: 1, keyword: 'x', why: 'w', note: 'n', venues, ref: '' }],
+      researcherNote: RN,
+    }),
     RESEARCHER_PROMPT: RESEARCHER_PROMPT({
-      net: NET,
       query: Q,
       trail: 'goal  →  x',
       keyword: 'x',
       why: 'w',
+      note: 'n',
       footer: FOOTER,
-      venues,
-      parallelSourcesPerLaneResearchAgent: 3,
+      reads: [{ source: 'https://a.com', cachePath: '/cache/a.txt', offset: 0, limit: 100 }],
+      readerIndex: 1,
+      readerCount: 1,
+      priorAnswer: '',
       researcherNote: RN,
     }),
     BRAINER_PROMPT: BRAINER_PROMPT({
@@ -282,20 +310,11 @@ describe('researcherNote — the web-research/probe-agent passthrough', () => {
       venues: [],
       researcherNote: RN,
     }),
-    SENTINEL_PROMPT: SENTINEL_PROMPT({
-      query: Q,
-      resultSoFar,
-      reason: 'done',
-      waveLog,
-      rabbitHoles: [],
-      pursuedList: [],
-      researcherNote: RN,
-    }),
   };
   for (const [label, out] of Object.entries(recipients)) {
     it(`${label} folds in researcherNote when supplied`, () => expect(out).toContain(RN));
   }
-  it('renders nothing when researcherNote is empty (the 5 recipients)', () => {
+  it('renders nothing when researcherNote is empty (the recipients)', () => {
     expect(SCOUT_PROMPT({ query: Q, net: NET, footer: FOOTER, researcherNote: '' })).not.toContain(
       'Research note',
     );
@@ -304,14 +323,16 @@ describe('researcherNote — the web-research/probe-agent passthrough', () => {
     ).not.toContain('Research note');
     expect(
       RESEARCHER_PROMPT({
-        net: NET,
         query: Q,
         trail: 't',
         keyword: 'x',
         why: 'w',
+        note: 'n',
         footer: FOOTER,
-        venues,
-        parallelSourcesPerLaneResearchAgent: 3,
+        reads: [{ source: 'https://a.com', cachePath: '/cache/a.txt', offset: 0, limit: 100 }],
+        readerIndex: 1,
+        readerCount: 1,
+        priorAnswer: '',
       }),
     ).not.toContain('Research note');
     expect(
@@ -329,16 +350,6 @@ describe('researcherNote — the web-research/probe-agent passthrough', () => {
         stop: 'S',
         mode: 'goal',
         venues: [],
-      }),
-    ).not.toContain('Research note');
-    expect(
-      SENTINEL_PROMPT({
-        query: Q,
-        resultSoFar,
-        reason: 'done',
-        waveLog,
-        rabbitHoles: [],
-        pursuedList: [],
       }),
     ).not.toContain('Research note');
   });
@@ -360,6 +371,7 @@ describe('researcherNote — the web-research/probe-agent passthrough', () => {
         resultSoFar,
         cleanReports,
         focus: 'f',
+        openRabbitHoles: [],
         compute: true,
         researcherNote: RN,
       } as JudgeArgs),
@@ -416,85 +428,35 @@ describe('multilingual routing — conditional, prospector → brainer → resea
     // empty languageGuidance is byte-identical to passing none at all
     expect(en).toBe(BRAINER_PROMPT({ ...brainerBase, venues }));
   });
-  it('a non-English venue triggers the researcher translate clause + lang tag', () => {
-    const out = RESEARCHER_PROMPT({
-      net: NET,
+  it('a non-English venue triggers the scheduler translate clause + lang tag (the scheduler now searches)', () => {
+    const out = SCHEDULER_PROMPT({
       query: Q,
-      trail: 'goal  →  x',
-      keyword: 'x',
-      why: 'w',
-      footer: FOOTER,
-      venues: nativeVenues,
-      parallelSourcesPerLaneResearchAgent: 3,
+      lanes: [{ id: 1, keyword: 'x', why: 'w', note: 'n', venues: nativeVenues, ref: '' }],
     });
     expect(out).toContain('CNKI [zh] (Chinese biomedical literature)');
-    expect(out).toContain('translate the query terms');
+    expect(out).toContain('translate its query terms');
   });
-  it('an all-English lane leaves the researcher prompt untouched (no translate clause, no lang tag)', () => {
-    const out = RESEARCHER_PROMPT({
-      net: NET,
+  it('an all-English lane leaves the scheduler prompt untouched (no translate clause, no lang tag)', () => {
+    const out = SCHEDULER_PROMPT({
       query: Q,
-      trail: 'goal  →  x',
-      keyword: 'x',
-      why: 'w',
-      footer: FOOTER,
-      venues,
-      parallelSourcesPerLaneResearchAgent: 3,
+      lanes: [{ id: 1, keyword: 'x', why: 'w', note: 'n', venues, ref: '' }],
     });
-    expect(out).not.toContain('translate the query terms');
+    expect(out).not.toContain('translate its query terms');
     expect(out).toContain('arXiv (site:arxiv.org) (ANN indexes)'); // un-tagged, exactly as before
   });
 });
 
-describe('follow-the-links — the researcher ref direct-fetch clause', () => {
-  const base = {
-    net: NET,
-    query: Q,
-    trail: 'goal  →  x',
-    keyword: 'x',
-    why: 'w',
-    footer: FOOTER,
-    venues,
-    parallelSourcesPerLaneResearchAgent: 3,
-  };
-  it('tells the lane to fetch a carried ref directly', () => {
-    const out = RESEARCHER_PROMPT({ ...base, ref: '10.1234/foo' });
-    expect(out).toContain('fetch 10.1234/foo directly');
-    expect(out).toContain('resolves DOIs');
+describe('follow-the-links — the scheduler takes a carried ref directly', () => {
+  const lane = { id: 1, keyword: 'x', why: 'w', note: 'n', venues };
+  it('surfaces a carried ref to the scheduler as a direct source', () => {
+    const out = SCHEDULER_PROMPT({ query: Q, lanes: [{ ...lane, ref: '10.1234/foo' }] });
+    expect(out).toContain('10.1234/foo');
+    expect(out).toContain('ref (fetch directly)');
   });
-  it('renders nothing (byte-identical) when no ref is carried', () => {
-    const none = RESEARCHER_PROMPT(base);
-    expect(none).not.toContain('fetch ');
-    expect(none).not.toContain('resolves DOIs');
-    expect(none).toBe(RESEARCHER_PROMPT({ ...base, ref: '' }));
-  });
-});
-
-describe('crawl-sentinel → brainer feedback (Change 1)', () => {
-  const base = {
-    wave: 2,
-    query: Q,
-    rubric: 'R',
-    landscape: 'L',
-    pursuedList: [],
-    open: [],
-    findings: [],
-    topScores: [],
-    resultSoFar: null,
-    assignSources: false,
-    stop: 'S',
-    mode: 'goal' as const,
-    venues: [],
-  };
-  const reason = 'left the multi-tenant isolation gap unanswered';
-  it('renders the standing rejection reminder when lastSentinelReason is set', () => {
-    const out = BRAINER_PROMPT({ ...base, lastSentinelReason: reason });
-    expect(out).toContain('PRIOR SENTINEL REJECTION — clear this before declaring done: ' + reason);
-  });
-  it('renders nothing (byte-identical) when there is no prior rejection', () => {
-    const none = BRAINER_PROMPT({ ...base, lastSentinelReason: '' });
-    expect(none).not.toContain('PRIOR SENTINEL REJECTION');
-    expect(none).toBe(BRAINER_PROMPT(base)); // empty is byte-identical to passing none at all
+  it('renders no ref line (byte-identical) when no ref is carried', () => {
+    const none = SCHEDULER_PROMPT({ query: Q, lanes: [{ ...lane, ref: '' }] });
+    expect(none).not.toContain('ref (fetch directly)');
+    expect(none).toBe(SCHEDULER_PROMPT({ query: Q, lanes: [lane] }));
   });
 });
 
@@ -544,16 +506,133 @@ describe('validator → brainer feedback', () => {
   });
 });
 
+describe('brainer — the working-derivation clause is gated on compute (A1a)', () => {
+  const base = {
+    wave: 1,
+    query: Q,
+    rubric: 'R',
+    landscape: 'L',
+    pursuedList: [],
+    open: [],
+    findings: [],
+    topScores: [],
+    resultSoFar: null,
+    assignSources: false,
+    stop: 'S',
+    mode: 'goal' as const,
+    venues: [],
+  };
+  it('compute ON ⇒ instructs growing the `working` derivation chain', () => {
+    const out = BRAINER_PROMPT({ ...base, compute: true });
+    expect(out).toContain('grow the `working` derivation chain');
+    expect(out).not.toContain('STATED UNCERTAINTY');
+  });
+  it('compute OFF ⇒ leave `working` empty + STATED UNCERTAINTY, never hand-roll a derivation', () => {
+    const out = BRAINER_PROMPT({ ...base, compute: false });
+    expect(out).toContain('STATED UNCERTAINTY');
+    expect(out).toContain('never hand-roll a derivation');
+    expect(out).not.toContain('grow the `working` derivation chain');
+    expect(out).not.toContain('COMPUTE TO STEER'); // the steering-compute block is also gated off
+  });
+});
+
+describe('synthesiser — the derivation mention is gated on compute (A1b)', () => {
+  const base = {
+    mode: 'goal' as const,
+    query: Q,
+    landscape: 'L',
+    resultSoFar, // carries working: 'cost=x'
+    waveLog,
+    cleanReports,
+    focus: 'lead with cost',
+    openRabbitHoles: ['x'],
+  };
+  it('compute ON (or unset) + a `working` derivation ⇒ presents it verbatim', () => {
+    expect(SYNTHESISER_PROMPT({ ...base, compute: true })).toContain('present it verbatim');
+    expect(SYNTHESISER_PROMPT(base)).toContain('present it verbatim'); // unset ⇒ present-when-derived default
+  });
+  it('compute OFF ⇒ never presents a derivation even when `working` is non-empty', () => {
+    const out = SYNTHESISER_PROMPT({ ...base, compute: false });
+    expect(out).not.toContain('present it verbatim');
+    expect(out).not.toContain('LEADING with the computed result');
+  });
+});
+
+describe('initiator — collect mode hardens breadth, not a single answer (A4)', () => {
+  const base = { query: Q, resultSoFar, waveLog, landscape: 'L', openRabbitHoles: ['x'] };
+  it('collect ⇒ harden BREADTH / completeness of the catalogue', () => {
+    const out = INITIATOR_PROMPT({ ...base, mode: 'collect' });
+    expect(out).toContain('COLLECT inventory');
+    expect(out).toContain('completeness of the catalogue');
+  });
+  it('goal (or unset) ⇒ no collect breadth clause', () => {
+    expect(INITIATOR_PROMPT({ ...base, mode: 'goal' })).not.toContain('COLLECT inventory');
+    expect(INITIATOR_PROMPT(base)).not.toContain('COLLECT inventory');
+  });
+});
+
+describe('judge — collect mode gates goalMet on inventory-completeness (A4)', () => {
+  const base = {
+    query: Q,
+    resultSoFar,
+    cleanReports,
+    focus: 'lead with cost',
+    openRabbitHoles: [],
+    compute: true,
+  };
+  it('collect ⇒ judge goalMet as INVENTORY COMPLETENESS', () => {
+    const out = JUDGE_PROMPT({ ...base, mode: 'collect' });
+    expect(out).toContain('INVENTORY COMPLETENESS');
+    expect(out).toContain('individually verified');
+  });
+  it('goal (or unset) ⇒ no inventory-completeness clause', () => {
+    expect(JUDGE_PROMPT({ ...base, mode: 'goal' })).not.toContain('INVENTORY COMPLETENESS');
+    expect(JUDGE_PROMPT(base)).not.toContain('INVENTORY COMPLETENESS');
+  });
+});
+
 describe('judge — the finalize compute switch', () => {
-  const base = { query: Q, resultSoFar, cleanReports, focus: 'lead with cost' };
+  const base = {
+    query: Q,
+    resultSoFar,
+    cleanReports,
+    focus: 'lead with cost',
+    openRabbitHoles: [],
+  };
   it('offers the derivation path when compute is on', () => {
     const out = JUDGE_PROMPT({ ...base, compute: true });
     expect(out).toContain('A derivation may be written and run');
     expect(out).not.toContain('Derivation is off');
   });
-  it('disables the derivation path when compute is off', () => {
+  it('disables the derivation path when compute is off but allows an HONEST needsCompute (A1c)', () => {
     const out = JUDGE_PROMPT({ ...base, compute: false });
     expect(out).toContain('Derivation is off for this run');
     expect(out).toContain('set needsCompute false');
+    // honesty path: the judge may still flag a genuinely-needed derivation as a stated limitation
+    expect(out).toContain('set needsCompute true');
+    expect(out).toContain('stated limitation');
+  });
+});
+
+describe('judge — the leftover open-rabbit-holes input (B1-refinement)', () => {
+  const base = {
+    query: Q,
+    resultSoFar,
+    cleanReports,
+    focus: 'lead with cost',
+    compute: true,
+  };
+  it('threads the leftover open rabbit-holes in and offers to reopen the crawl', () => {
+    const out = JUDGE_PROMPT({
+      ...base,
+      openRabbitHoles: ['[80] multi-tenant isolation — unverified'],
+    });
+    expect(out).toContain('LEFTOVER OPEN RABBIT-HOLES');
+    expect(out).toContain('multi-tenant isolation');
+    expect(out).toContain('reopen the crawl');
+  });
+  it('renders nothing (byte-identical) when there are no leftover rabbit-holes', () => {
+    const none = JUDGE_PROMPT({ ...base, openRabbitHoles: [] });
+    expect(none).not.toContain('LEFTOVER OPEN RABBIT-HOLES');
   });
 });

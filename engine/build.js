@@ -44,8 +44,8 @@ const ORDER = [
   'src/agents/scout/prompts.ts', 'src/agents/scout/index.ts',
   'src/agents/prospector/prompts.ts', 'src/agents/prospector/index.ts',
   'src/agents/brainer/prompts.ts', 'src/agents/brainer/index.ts',
-  'src/agents/sentinel/prompts.ts', 'src/agents/sentinel/index.ts',
   'src/agents/validator/prompts.ts', 'src/agents/validator/index.ts',
+  'src/agents/researchScheduler/prompts.ts', 'src/agents/researchScheduler/index.ts',
   'src/agents/researcher/prompts.ts', 'src/agents/researcher/index.ts',
   'src/agents/initiator/prompts.ts', 'src/agents/initiator/index.ts',
   'src/agents/refiner/prompts.ts', 'src/agents/refiner/index.ts',
@@ -53,7 +53,22 @@ const ORDER = [
   'src/agents/synthesiser/prompts.ts', 'src/agents/synthesiser/index.ts',
   'src/agents/debugAnalyst/prompts.ts', 'src/agents/debugAnalyst/index.ts',
   'src/store.ts',                // store reducers (pure functions over a state object)
-  'src/engine.ts',               // agent infra (retryAgent/log) + the ResearchReport class
+  'src/brainerState.ts',         // BrainerState — one brainer's private crawl state (a StoreState); before the run.ts modules that type their param on it
+  'src/runtime.ts',              // shared sub-agent caller (retryAgent) + debug I/O buffers — before the run.ts modules
+  // per-agent run.ts orchestration — buildPrompt → retryAgent → (artifact). Each AFTER its agent index/prompts
+  // (above) + config/utils/store/runtime, BEFORE engine.ts (the backbone that one-line-calls them).
+  'src/agents/scout/run.ts',
+  'src/agents/prospector/run.ts',
+  'src/agents/brainer/run.ts',
+  'src/agents/validator/run.ts',
+  'src/agents/researchScheduler/run.ts',
+  'src/agents/researcher/run.ts',
+  'src/agents/initiator/run.ts',
+  'src/agents/refiner/run.ts',
+  'src/agents/judge/run.ts',
+  'src/agents/synthesiser/run.ts',
+  'src/agents/debugAnalyst/run.ts',
+  'src/engine.ts',               // the ResearchReport class — orchestration backbone + every files[name] = … write
 ]
 const TAIL =
   '\n// ── entry — the Workflow harness wraps this file in an async scope and awaits its return ──\n' +

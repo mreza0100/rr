@@ -10,7 +10,7 @@ The answer + its evidence + \`working\` derivation (the run's living memory):
 {{resultSoFar}}
 Hardened facts (each adversarially fact-checked + source-corrected by a refine pass):
 {{cleanReports}}
-What the answer must deliver: {{focus}}
+What the answer must deliver: {{focus}}{{openClause}}{{modeClause}}
 Before upholding, actively try to disprove the load-bearing claim as hard as you can — \`verificationSound\` holds only when it survives every angle:
 - funding / conflict of interest — is the trial run or funded by the product's own seller?
 - independent replication — does a separate group confirm it, or does the headline rest on a single source?
@@ -32,19 +32,35 @@ export const buildJudge = ({
   resultSoFar,
   cleanReports,
   focus,
+  openRabbitHoles,
   compute,
-  computerNote,
+  mode,
+  computeNote,
   thinkerNote,
 }: JudgeArgs) => {
   const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
+  // collect mode ⇒ goalMet is INVENTORY COMPLETENESS + per-item verification, not whether one answer is reached.
+  const modeClause =
+    mode === 'collect'
+      ? `
+MODE = collect — judge goalMet as INVENTORY COMPLETENESS: every major sub-area of the landscape is catalogued AND each catalogued item is individually verified, not whether a single answer is reached.`
+      : '';
   const computeClause = compute
-    ? ` A derivation may be written and run (Python scientific stack).${computerNote ? '\n' + computerNote : ''}`
-    : ' Derivation is off for this run — set needsCompute false and computeSound true.';
+    ? ` A derivation may be written and run (Python scientific stack).${computeNote ? '\n' + computeNote : ''}`
+    : ' Derivation is off for this run — you cannot run any computation. If the answer is complete without one, set needsCompute false and computeSound true; if it genuinely rests on a quantitative derivation this run cannot perform, report that honestly — set needsCompute true and name the missing derivation in `directive` (it is surfaced as a stated limitation, never fabricated). Either way set computeSound true: no derivation is present to be unsound.';
+  const openClause =
+    openRabbitHoles && openRabbitHoles.length
+      ? `
+LEFTOVER OPEN RABBIT-HOLES — leads the crawl surfaced but never pursued (it stopped first). Decide whether any names a REAL gap the answer needs; if one does, set goalMet false and return it in reopenRabbitHoles to reopen the crawl on it — otherwise ignore them:
+${plain(openRabbitHoles)}`
+      : '';
   return render(JUDGE_TPL, {
     query,
     resultSoFar: plain(resultSoFar),
     cleanReports: plain(cleanReports),
     focus: focus || '(meet the goal as stated)',
+    openClause,
+    modeClause,
     computeClause,
     thinkerClause,
     FINISH,

@@ -2,6 +2,7 @@
 // research wave it asks, cheaply, whether every lane fulfilled its request; the engine re-opens any lane that
 // returned null or fulfilled:false (bounded by a per-lane failCount) so the next brainer can re-pursue it.
 // Tier: sonnet (a bounded, cheap per-wave check). Effort: medium.
+import { CONFIG } from '../../config.js';
 import { buildValidator } from './prompts.js';
 import type { Agent, Schema, ValidatorArgs } from '../../types/index.js';
 
@@ -39,8 +40,8 @@ export const VALIDATE: Schema = {
 };
 
 export const validator: Agent<ValidatorArgs> = {
-  tier: 'sonnet',
-  effort: 'medium',
+  tier: CONFIG.TIER.validator,
+  effort: CONFIG.EFFORT.validator,
   schema: VALIDATE,
   buildPrompt: buildValidator,
 };
