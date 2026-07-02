@@ -19,10 +19,11 @@ export async function runLineageClerk(
   const out = new Map<number, string[]>();
   if (!claims.length) return out;
   const chunks = chunk(claims, CONFIG.LINEAGE_BATCH);
+  // parallel() journals thunk results as JSON (a Set would come back as {}), so the thunk returns
+  // the bare agent result and the id set is rebuilt per chunk on the consumer side (order-aligned).
   const results = await parallel(
-    chunks.map((ch, i) => async () => {
-      const ids = new Set(ch.map((c) => c.id));
-      const res = await retryAgent<LineageClerkOut>(
+    chunks.map((ch, i) => () =>
+      retryAgent<LineageClerkOut>(
         lineageClerk.buildPrompt({
           items: ch.map((c) => ({ id: c.id, source: c.source, entities: c.entities })),
           knownKeys,
@@ -34,14 +35,14 @@ export async function runLineageClerk(
           effort: lineageClerk.effort,
           schema: lineageClerk.schema,
         },
-      );
-      return { res, ids };
-    }),
+      ),
+    ),
   );
-  for (const { res, ids } of results) {
-    if (!res) continue; // dead chunk — its claims fall back to lineageKeyOf
+  results.forEach((res, i) => {
+    if (!res) return; // dead chunk — its claims fall back to lineageKeyOf
+    const ids = new Set(chunks[i].map((c) => c.id));
     for (const l of res.links || [])
       if (l && ids.has(l.id) && Array.isArray(l.keys)) out.set(l.id, l.keys);
-  }
+  });
   return out;
 }

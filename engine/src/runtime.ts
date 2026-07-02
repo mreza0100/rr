@@ -17,7 +17,10 @@ export const LOG_BUFFER: string[] = [];
 const _log = globalThis.log;
 try {
   globalThis.log = (m?: unknown) => {
-    if (CONFIG.debug) LOG_BUFFER.push(typeof m === 'string' ? m : String(m));
+    const s = typeof m === 'string' ? m : String(m);
+    // per-wave checkpoint lines are a live-output/recovery mechanism, not a debug narrative — keep them
+    // OUT of _debug.md's Run log so a long run's checkpoint spam never bloats it.
+    if (CONFIG.debug && !s.startsWith(CONFIG.CHECKPOINT_MARK)) LOG_BUFFER.push(s);
     return _log(m);
   };
 } catch (e) {

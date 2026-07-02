@@ -74,6 +74,7 @@ export class Configs {
   SCOUT_PROBE_SOURCES: number;
   SCOUT_PAGES_CAP: number;
   GENERAL_PURPOSE: string;
+  CHECKPOINT_MARK: string;
   TIER: Record<string, Tier>;
   EFFORT: Record<string, Effort>;
   compute: boolean;
@@ -97,7 +98,7 @@ export class Configs {
   STOP: string;
 
   constructor(rawArgs: unknown) {
-    // args: { query, mode?, compute?, maxWave?, parallelLaneResearchAgentsPerWave?, parallelSourcesPerLaneResearchAgent?, debug?, debugPrompt? }
+    // args: { query, mode?, compute?, maxWave?, chaoCoverageStop?, parallelLaneResearchAgentsPerWave?, parallelSourcesPerLaneResearchAgent?, debug?, debugPrompt? }
     let parsed: unknown;
     try {
       parsed = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs;
@@ -183,7 +184,12 @@ export class Configs {
     this.CALIB_ALPHA = 0.3; // yieldCalib: EMA weight of the newest realized/predicted observation
     this.CALIB_LEAD_WEIGHT = 0.3; // yieldCalib: a lane's fresh (pre-dedup) leads count for this much of one audited-pass claim in the realized-yield formula
     this.CALIB_REALIZED_MAX = 2; // yieldCalib: ceiling on one wave's realized-yield observation before it feeds the EMA (an outlier lane never swings the ratio unboundedly)
-    this.CHAO_COVERAGE_STOP = 0.9; // collect DRY assist: plateau AND chao1 coverage ≥ this → dry
+    this.CHAO_COVERAGE_STOP =
+      typeof arg.chaoCoverageStop === 'number' &&
+      arg.chaoCoverageStop > 0 &&
+      arg.chaoCoverageStop <= 1
+        ? arg.chaoCoverageStop
+        : 0.9; // collect DRY assist: plateau AND chao1 coverage ≥ this → dry; optional arg (0,1], default 0.9
     // v3 STEERING knobs (batch 3) — the brainer's ledger/calibration/sensitivity-aware prompt sections + the scheduler's vocabulary clause.
     this.BRAINER_LEDGER_CAP = 120; // max ledger lines rendered into the CLAIM LEDGER section (utils ledgerLines); beyond this, a "(+N more)" tail
     this.CLAIM_LINE_CLIP = 120; // max chars of a claim's text on ONE ledger line (distinct from QUOTE_MAX_CHARS, which caps the underlying quote)
@@ -197,6 +203,7 @@ export class Configs {
     this.SCOUT_PROBE_SOURCES = 3; // max sources ONE probe fetches for its own angle (mirrors v2's single-scout ≤5, now split across probes)
     this.SCOUT_PAGES_CAP = 10; // max pages the merger (or its JS fallback) keeps in the final ScoutOut — the union of every probe's pages, strongest kept
     this.GENERAL_PURPOSE = 'general-purpose'; // the harness agentType handed to code-capable / tool-using sub-agents
+    this.CHECKPOINT_MARK = '⏺CKPT'; // per-wave crash-safety checkpoint log-line prefix: engine.ts emits `${CHECKPOINT_MARK} w<n> <json>` at wave end (zero-cost — no agent); runtime.ts's debug LOG_BUFFER filter skips lines starting with it so _debug.md never bloats
     // Per-agent model TIER + reasoning EFFORT — keyed by agent name; each src/agents/<agent>/ module reads its value
     // here (the tiering rationale travels in each agent's own comment). Brainer = ALWAYS Opus + xhigh (the global
     // brain/reducer); scout probes + researcher = Haiku (bounded summarize + extract — the page reading is the fixed
@@ -217,13 +224,11 @@ export class Configs {
       synthesiser: 'opus',
       debugAnalyst: 'opus',
       // v3 ledger clerks — mostly Haiku: each is a bounded, mechanical, batched-per-wave job (grep a
-      // quote, re-execute a stored script, write a checkpoint file). lineageClerk alone is promoted to
-      // Sonnet — fuzzy entity resolution against a growing canon (same-as spellings, merges) is judgment,
-      // not grep.
+      // quote, re-execute a stored script). lineageClerk alone is promoted to Sonnet — fuzzy entity
+      // resolution against a growing canon (same-as spellings, merges) is judgment, not grep.
       claimAuditor: 'haiku',
       lineageClerk: 'sonnet',
       rerunner: 'haiku',
-      scribe: 'haiku',
     };
     this.EFFORT = {
       scout: 'medium',
@@ -242,7 +247,6 @@ export class Configs {
       claimAuditor: 'medium',
       lineageClerk: 'medium',
       rerunner: 'low',
-      scribe: 'low',
     };
     // ANCHOR the reader budget (B10) — now that TIER is set: a reader-unit must FIT the researcher tier's context
     // window, and (in chars) EXCEED the overlap re-read so every split makes forward progress. Fail loudly otherwise.
@@ -300,7 +304,7 @@ export class Configs {
     this.AGENT_RETRIES = 2;
     this.INJECT_SCORE = 90; // score for judge-reopened gap rabbit-holes (finalize crawl-reopen) — high, so they top the store
     this.compute = coerceBool(arg.compute, true); // master switch for ALL derivation: false → the brainer runs as a plain subagent (no code) + no finalize derivation (the brainer/judge are told it is off). STRICT: "false"/0/"no" coerce to false, never silently default to true
-    this.checkpoint = coerceBool(arg.checkpoint, true); // per-wave scribe checkpoint (_checkpoint.json in DIR): false → the scribe never runs. STRICT coercion, same as compute
+    this.checkpoint = coerceBool(arg.checkpoint, true); // per-wave crash-safety checkpoint: gates a single CHECKPOINT_MARK log line (compactCheckpoint) emitted at the end of each wave — zero agent cost. false → the line never logs. STRICT coercion, same as compute
     this.computeNote = str(arg.computeNote, ''); // optional run-specific compute guidance; appended after the baked stack note (COMPUTE_NOTE) the compute-aware agents receive
     this.thinkerNote = str(arg.thinkerNote, ''); // optional operator run-steering (priorities/framing/constraints/audience); reaches the Opus reasoning tier ONLY (THINKER_NOTE), pure passthrough
     this.researcherNote = str(arg.researcherNote, ''); // optional operator note to the web-research/probe agents (RESEARCHER_NOTE); terse passthrough, reaches scout/prospector/researcher/brainer

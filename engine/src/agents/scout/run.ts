@@ -147,7 +147,7 @@ export async function runScout(rr: ResearchReport): Promise<SeedLead[]> {
       return { angle, out };
     }),
   );
-  const survivors = probeResults.filter((r): r is { angle: ScoutAngle; out: ScoutOut } => !!r.out);
+  const survivors = probeResults.filter((r): r is { angle: ScoutAngle; out: ScoutOut } => !!(r && r.out));
   survivors.forEach(({ angle, out }) =>
     log('· scout probe «' + angle.name + '» RETURN · pages=' + out.pages.length),
   );

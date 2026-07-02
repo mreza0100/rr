@@ -129,6 +129,9 @@ describe('Configs canonicalization', () => {
     expect(new Configs({ query: 'q', checkpoint: 1 }).checkpoint).toBe(true);
     expect(() => new Configs({ query: 'q', checkpoint: 'maybe' })).toThrow(/boolean/);
   });
+  it('holds the CHECKPOINT_MARK log-line prefix', () => {
+    expect(new Configs({ query: 'q' }).CHECKPOINT_MARK).toBe('⏺CKPT');
+  });
   it('holds the claim-ledger knobs (v3)', () => {
     const c = new Configs({ query: 'q' });
     expect(c.QUOTE_MAX_CHARS).toBe(300);
@@ -160,18 +163,16 @@ describe('Configs canonicalization', () => {
     const c = new Configs({ query: 'q' });
     expect(c.VENUE_WARN_MIN).toBe(2);
   });
-  it('tiers the v3 ledger clerks (claimAuditor/lineageClerk/rerunner/scribe)', () => {
+  it('tiers the v3 ledger clerks (claimAuditor/lineageClerk/rerunner)', () => {
     const c = new Configs({ query: 'q' });
     expect(c.TIER.claimAuditor).toBe('haiku');
     // lineageClerk alone is promoted to sonnet (finding J) — fuzzy entity resolution against a growing
     // canon (same-as spellings, merges) is judgment, not grep.
     expect(c.TIER.lineageClerk).toBe('sonnet');
     expect(c.TIER.rerunner).toBe('haiku');
-    expect(c.TIER.scribe).toBe('haiku');
     expect(c.EFFORT.claimAuditor).toBe('medium');
     expect(c.EFFORT.lineageClerk).toBe('medium');
     expect(c.EFFORT.rerunner).toBe('low');
-    expect(c.EFFORT.scribe).toBe('low');
   });
   it('holds the scout SWARM knobs + tiers scoutPlanner/scoutMerger (v3 batch 2s)', () => {
     const c = new Configs({ query: 'q' });

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { BrainerState } from '../src/brainerState.js';
+import { CONFIG } from '../src/config.js';
 import type { AgentOpts, Claim, JudgeOut, RunResult } from '../src/types/index.js';
 type AgentStub = (prompt: string, opts: AgentOpts) => unknown;
 
@@ -311,6 +312,11 @@ describe('ResearchReport.run — debug:true', () => {
     expect(dbg).toContain('Analysis (debug-analyst');
     expect(dbg).toContain('Raw agent I/O');
     expect(dbg).toContain('Debug prompt:');
+    expect(dbg).toContain('Run log');
+    // checkpoint:true is the default (not overridden above), so wave 1 emitted a ⏺CKPT log line — but
+    // it's recovery output, not debug narrative, so runtime.ts's LOG_BUFFER filter must keep it OUT of
+    // the Run log section entirely.
+    expect(dbg).not.toContain(CONFIG.CHECKPOINT_MARK);
   });
 });
 
@@ -1406,7 +1412,7 @@ function lineageClerkStub(prompt: string) {
   return { links };
 }
 
-function ledgerAgent(scribeCalls: string[]) {
+function ledgerAgent() {
   return (prompt: string, opts: AgentOpts) => {
     const L = opts.label;
     if (L === 'scout-probe:direct') return SCOUT_OUT_LEDGER;
@@ -1414,10 +1420,6 @@ function ledgerAgent(scribeCalls: string[]) {
     if (L === 'prospector') return PROSPECT_OUT;
     if (L === 'claim-audit-scout' || L === 'claim-audit-w1') return claimAuditStub(prompt);
     if (L === 'lineage-scout' || L === 'lineage-w1') return lineageClerkStub(prompt);
-    if (L.startsWith('scribe-')) {
-      scribeCalls.push(L);
-      return { ok: true };
-    }
     if (L === 'brainer-w0')
       return {
         resultSoFar: RSF,
@@ -1543,16 +1545,14 @@ function ledgerAgent(scribeCalls: string[]) {
 
 describe('ResearchReport.run — v3 claim-ledger ingestion', () => {
   it('ingests + dedupes + audits + clusters (incl. cross-wave merge) + runs attack bookkeeping + merges vocabulary + updates yieldCalib + writes the ledger artifacts', async () => {
-    const scribeCalls: string[] = [];
     const RR = await loadEngine(
       { query: 'v3 ledger test query', mode: 'goal', debug: false },
-      ledgerAgent(scribeCalls),
+      ledgerAgent(),
     );
     const rr = new RR();
     const result = await rr.run();
 
     expect(result.stopReason).toBe('brainer-done');
-    expect(scribeCalls).toContain('scribe-w1'); // the checkpoint ran concurrently with the wave-1 readers
 
     const ledger = JSON.parse(result.files['_claims.json']);
     const byText = (needle: string) =>
@@ -1618,14 +1618,31 @@ describe('ResearchReport.run — v3 claim-ledger ingestion', () => {
     expect(result.files[waveFile!]).toContain('⚡ SURPRISE');
   });
 
-  it('never calls the scribe when checkpoint:false', async () => {
-    const scribeCalls: string[] = [];
+  it('checkpoint:true (default) logs a ⏺CKPT line at the end of each wave — zero-cost, no agent', async () => {
+    const RR = await loadEngine(
+      { query: 'v3 ledger test query', mode: 'goal', debug: false },
+      ledgerAgent(),
+    );
+    const logs: string[] = [];
+    globalThis.log = (m?: unknown) => logs.push(typeof m === 'string' ? m : String(m));
+    await new RR().run();
+    const ckptLines = logs.filter((l) => l.startsWith(CONFIG.CHECKPOINT_MARK));
+    expect(ckptLines.length).toBeGreaterThan(0); // wave 1 (this fixture stops after one research wave)
+    expect(ckptLines[0]).toContain(' w1 ');
+    const payload = JSON.parse(ckptLines[0].slice(ckptLines[0].indexOf('{')));
+    expect(payload.wave).toBe(1);
+    expect(typeof payload.nullAttacks).toBe('number'); // a COUNT, not the array
+  });
+
+  it('checkpoint:false logs no ⏺CKPT line', async () => {
     const RR = await loadEngine(
       { query: 'v3 ledger test query', mode: 'goal', debug: false, checkpoint: false },
-      ledgerAgent(scribeCalls),
+      ledgerAgent(),
     );
+    const logs: string[] = [];
+    globalThis.log = (m?: unknown) => logs.push(typeof m === 'string' ? m : String(m));
     await new RR().run();
-    expect(scribeCalls).toEqual([]);
+    expect(logs.some((l) => l.startsWith(CONFIG.CHECKPOINT_MARK))).toBe(false);
   });
 });
 
@@ -1634,7 +1651,7 @@ describe('ResearchReport.run — v3 chao1 coverage estimate (collect mode)', () 
   it('computes bs.chao after a collect-mode wave with claims', async () => {
     const RR = await loadEngine(
       { query: 'collect ledger query', mode: 'collect', debug: false },
-      ledgerAgent([]),
+      ledgerAgent(),
     );
     const result = await new RR().run();
     expect(result.metrics.chao).not.toBeNull();

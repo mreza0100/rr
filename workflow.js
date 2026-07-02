@@ -13,6 +13,364 @@ export const meta = {
     },
   ],
 };
+// ╔══ module: src/config.ts ═══════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+// Configs — THE single source of truth for the whole engine. ALL configuration
+// lives here: tunable knobs, caps, char budgets, the per-agent model TIER + reasoning
+// EFFORT maps, and the run-derived prompt fragments. Nothing is hardcoded elsewhere —
+// engine.ts / utils / store / the agent modules READ every number and policy off the
+// CONFIG singleton. Change a value here and it changes everywhere; never re-introduce a
+// literal in another module.
+//
+// Configs also validates the injected JSON args (which can be ANYTHING) and fills safe
+// defaults in the constructor. One immutable CONFIG singleton holds the run. (Each agent's
+// schema + prompt-builder still live in src/agents/<agent>/; its tier/effort value lives
+// ONLY in the TIER/EFFORT maps below — the agent module reads it from CONFIG.)
+// ─────────────────────────────────────────────────────────────────────────────
+                                                                              
+
+class Configs {
+  // run config (validated + defaulted)
+  query        ;
+  mode      ;
+  maxWave                 ;
+  HARD_CAP        ;
+  maxParallelBrainers        ; // max LIVE brainers in the brainer tree (1 = today's single-brainer behavior; clamps to a hard ceiling of 5)
+  MAX_BRAINER_DEPTH        ; // safety cap on spawn-chain depth (a child of a child of … )
+  parallelLaneResearchAgentsPerWave                 ;
+  parallelSourcesPerLaneResearchAgent                 ;
+  PHASE          ;
+  MAX_JUDGE_PASSES        ;
+  MAX_LANE_REFAILS        ;
+  VALIDATOR_THIN        ;
+  VALIDATOR_INTRO_CHARS        ;
+  VALIDATOR_MISSING_CHARS        ;
+  QUERY_PLATEAU        ;
+  PLATEAU_MIN_WAVES        ;
+  PLATEAU_WINDOW        ;
+  AGENT_RETRIES        ;
+  INJECT_SCORE        ;
+  AUTO_CAP        ;
+  AUTO_SOURCE_DEFAULT        ;
+  NEAR_DUP        ;
+  FINALIZE_TOP_OPEN        ;
+  RESEARCHER_TOKEN_BUDGET        ;
+  BRAINER_LANE_CAP        ;
+  CHUNK_OVERLAP_CHARS        ;
+  CHARS_PER_TOKEN        ;
+  CONTEXT                      ;
+  MAX_SLICES_PER_READER        ;
+  MAX_SOURCES_PER_LANE        ;
+  HANDOFF_CHARS        ;
+  MAX_STARVED_WAVES        ;
+  TREE_LOG_WIDTH        ;
+  QUOTE_MAX_CHARS        ;
+  CLAIM_DIGEST_CAP        ;
+  CLAIM_DIGEST_CLIP        ;
+  CALIB_DEFAULT_SCORE        ;
+  AUDIT_BATCH        ;
+  LINEAGE_BATCH        ;
+  SETTLED_MIN_CLUSTERS        ;
+  VOI_SENS_THRESHOLD        ;
+  CALIB_CLAMP_LO        ;
+  CALIB_CLAMP_HI        ;
+  CALIB_NORM        ;
+  CALIB_ALPHA        ;
+  CALIB_LEAD_WEIGHT        ;
+  CALIB_REALIZED_MAX        ;
+  CHAO_COVERAGE_STOP        ;
+  BRAINER_LEDGER_CAP        ;
+  CLAIM_LINE_CLIP        ;
+  SENSITIVITY_CLIP        ;
+  TREE_ANSWER_CLIP        ;
+  MANDATE_CLIP        ;
+  SCHED_VOCAB_CAP        ;
+  VENUE_WARN_MIN        ;
+  SCOUT_PROBES        ;
+  SCOUT_PROBE_SOURCES        ;
+  SCOUT_PAGES_CAP        ;
+  GENERAL_PURPOSE        ;
+  CHECKPOINT_MARK        ;
+  TIER                      ;
+  EFFORT                        ;
+  compute         ;
+  checkpoint         ;
+  computeNote        ;
+  thinkerNote        ;
+  researcherNote        ;
+  debug         ;
+  debugPrompt        ;
+  tag        ;
+  slug        ;
+  DIR        ;
+  rawArgs         ; // the COMPLETE set of arguments the run was launched with, captured verbatim (persisted into the output)
+  // derived prompt fragments woven into the agent builders
+  FOOTER        ;
+  NET        ;
+  COMPUTE_NOTE        ;
+  THINKER_NOTE        ;
+  RESEARCHER_NOTE        ;
+  RUBRIC        ;
+  STOP        ;
+
+  constructor(rawArgs         ) {
+    // args: { query, mode?, compute?, maxWave?, chaoCoverageStop?, parallelLaneResearchAgentsPerWave?, parallelSourcesPerLaneResearchAgent?, debug?, debugPrompt? }
+    let parsed         ;
+    try {
+      parsed = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs;
+    } catch (e) {
+      throw new Error('RR: args is not valid JSON — ' + ((e && e.message) || e));
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('RR: args must be a JSON object { query, mode?, maxWave? }');
+    }
+    const arg = parsed           ;
+    if (typeof arg.query !== 'string' || arg.query.trim() === '') {
+      throw new Error('RR requires args { query: non-empty string, mode?, maxWave? }');
+    }
+    this.rawArgs = arg; // capture the COMPLETE launch args verbatim — persisted into the output files
+    // typed readers — keep the supplied value only when it is the right type, else fall back to the default
+    const str = (v         , d        )         => (typeof v === 'string' && v.length ? v : d);
+    const bool = (v         , d         )          => (typeof v === 'boolean' ? v : d);
+    // coerceBool — a STRICT boolean reader (B8): a real boolean passes; the common string/number truthy/falsy
+    // spellings coerce explicitly; absent ⇒ the default; ANYTHING else throws LOUDLY rather than silently
+    // defaulting. (A bare `bool()` would default "false"/0/"no" back to true — a foot-gun for `compute:false`.)
+    const coerceBool = (v         , d         )          => {
+      if (v === undefined || v === null) return d;
+      if (typeof v === 'boolean') return v;
+      if (typeof v === 'number') {
+        if (v === 1) return true;
+        if (v === 0) return false;
+        throw new Error('RR: expected a boolean, got number ' + v);
+      }
+      if (typeof v === 'string') {
+        const s = v.trim().toLowerCase();
+        if (s === 'true' || s === '1' || s === 'yes' || s === 'on') return true;
+        if (s === 'false' || s === '0' || s === 'no' || s === 'off') return false;
+        throw new Error('RR: expected a boolean-ish value, got string "' + v + '"');
+      }
+      throw new Error('RR: expected a boolean, got ' + typeof v);
+    };
+    const autoInt = (v         , lo        , hi        , d                 )                  =>
+      v === 'auto'
+        ? 'auto'
+        : Number.isInteger(v) && (v          ) > 0
+          ? Math.min(hi, Math.max(lo, v          ))
+          : d;
+
+    // ---- centralized constants (the single source of truth — no literal of these lives anywhere else) ----
+    this.AUTO_CAP = 5; // auto-mode hard cap on lanes/wave AND sources/lane (the brainer is never told the number); read by the lane+source autoInt bounds, utils laneCount, and the engine srcCount
+    this.AUTO_SOURCE_DEFAULT = 2; // auto-mode sources/lane when the brainer assigns none to a lane
+    this.NEAR_DUP = 0.85; // store dedup: Jaccard token-set overlap ≥ this counts as "the same lead, reworded"; kept high so distinct leads are never merged
+    this.FINALIZE_TOP_OPEN = 6; // finalize: how many top open rabbit-holes feed the initiator + synthesiser (Open questions)
+    this.VALIDATOR_INTRO_CHARS = 240; // crawl: char budget for each finding's intro handed to the validator gate
+    this.VALIDATOR_MISSING_CHARS = 300; // crawl: char budget for the validator's `missing` gaps threaded into the next brainer
+    this.PLATEAU_MIN_WAVES = 3; // collect DRY: minimum waves before the novelty-plateau stop can fire
+    this.PLATEAU_WINDOW = 2; // collect DRY: how many trailing top-scores must all sit ≤ QUERY_PLATEAU×peak to call it dry
+    // scheduler/reader knobs (B4/B5) — read by utils.packReaders + the engine lane threads
+    this.RESEARCHER_TOKEN_BUDGET = 130000; // one reader-unit budget: the calibrated safe ceiling a single reader may carry (the bin-pack unit)
+    this.BRAINER_LANE_CAP = 5; // lanes/wave — the wave bound (≥ this many lanes never run in one wave)
+    this.CHUNK_OVERLAP_CHARS = 2000; // overlap re-read at each split boundary when one source is packed across multiple reader-units
+    // CHARS_PER_TOKEN — inverts Harvester's size_only token heuristic (tokens ≈ chars/2 for prose, A6) so the
+    // engine's CHAR windows agree with the scheduler's TOKEN sizes: budget(tokens) × CHARS_PER_TOKEN = the char
+    // ceiling a reader-unit may span. The heuristic deliberately OVER-counts tokens (real prose is ~chars/4), so
+    // 130k heuristic-tokens ≈ ~65k real tokens — comfortably inside the worker context window with headroom.
+    this.CHARS_PER_TOKEN = 2;
+    // CONTEXT — each tier's real context window (Claude models, tokens). The reader budget is ANCHORED against the
+    // researcher tier's window below (a reader-unit can never be asked to ingest more than the model can hold).
+    this.CONTEXT = { haiku: 200000, sonnet: 200000, opus: 200000 };
+    this.MAX_SLICES_PER_READER = 8; // B7: max whole sources combined into ONE reader-unit (a lane of 40 tiny files never packs 40 into one turn)
+    this.MAX_SOURCES_PER_LANE = 12; // B7: max sources packed per lane per wave (caps a runaway scheduler lane before bin-packing)
+    this.HANDOFF_CHARS = 16000; // B7: cap the running-answer handoff carried between sequential readers (keeps read + handoff inside context)
+    this.MAX_STARVED_WAVES = 2; // B6: consecutive all-null / empty-schedule waves before the crawl breaks with stopReason scheduler-starved
+    this.MAX_BRAINER_DEPTH = 3; // safety cap on the spawn-chain depth (root=0); spawning past this depth is refused
+    this.TREE_LOG_WIDTH = 120; // crawl-tree render: per-line clip width for the LIVE TERMINAL log ONLY — the persisted _tree.md + returned tree keep full, unclipped lines
+    // claim-ledger knobs (v3) — read by utils claimStatus/chao1/updateCalib/calibFactor + the prompt builders
+    this.QUOTE_MAX_CHARS = 300; // max chars of the VERBATIM quote a claim pins (the FOOTER + reader schema ceiling)
+    this.CLAIM_DIGEST_CAP = 30; // max existing key-claim one-liners woven into a reader prompt (the stance targets)
+    this.CLAIM_DIGEST_CLIP = 90; // max chars of a claim's text on ONE claimDigestOf line (distinct from CLAIM_DIGEST_CAP, which caps the line COUNT)
+    this.CALIB_DEFAULT_SCORE = 50; // ingestWave: predicted-yield default when a pursued lead carries no score history yet (the neutral midpoint)
+    this.AUDIT_BATCH = 50; // claimAuditor: max claims per batched quote-audit call (chunks beyond this dispatch as separate concurrent calls)
+    this.LINEAGE_BATCH = 80; // lineageClerk: max claims per batched entity-canonicalization call (chunks beyond this dispatch as separate concurrent calls)
+    this.SETTLED_MIN_CLUSTERS = 2; // claimStatus: independent lineage clusters required before a claim can settle
+    this.VOI_SENS_THRESHOLD = 0.15; // VOI stop assist: a derivation input below this sensitivity share is not worth another lane
+    this.CALIB_CLAMP_LO = 0.5; // yieldCalib: floor on the per-kind selection multiplier (a cold kind is never zeroed out)
+    this.CALIB_CLAMP_HI = 1.5; // yieldCalib: ceiling on the per-kind selection multiplier (a hot kind never dominates)
+    this.CALIB_NORM = 4; // yieldCalib: realized-yield divisor — (auditedPassClaims + CALIB_LEAD_WEIGHT×freshLeads)/CALIB_NORM ≈ 1 on a good lane
+    this.CALIB_ALPHA = 0.3; // yieldCalib: EMA weight of the newest realized/predicted observation
+    this.CALIB_LEAD_WEIGHT = 0.3; // yieldCalib: a lane's fresh (pre-dedup) leads count for this much of one audited-pass claim in the realized-yield formula
+    this.CALIB_REALIZED_MAX = 2; // yieldCalib: ceiling on one wave's realized-yield observation before it feeds the EMA (an outlier lane never swings the ratio unboundedly)
+    this.CHAO_COVERAGE_STOP =
+      typeof arg.chaoCoverageStop === 'number' &&
+      arg.chaoCoverageStop > 0 &&
+      arg.chaoCoverageStop <= 1
+        ? arg.chaoCoverageStop
+        : 0.9; // collect DRY assist: plateau AND chao1 coverage ≥ this → dry; optional arg (0,1], default 0.9
+    // v3 STEERING knobs (batch 3) — the brainer's ledger/calibration/sensitivity-aware prompt sections + the scheduler's vocabulary clause.
+    this.BRAINER_LEDGER_CAP = 120; // max ledger lines rendered into the CLAIM LEDGER section (utils ledgerLines); beyond this, a "(+N more)" tail
+    this.CLAIM_LINE_CLIP = 120; // max chars of a claim's text on ONE ledger line (distinct from QUOTE_MAX_CHARS, which caps the underlying quote)
+    this.SENSITIVITY_CLIP = 60; // max chars of a backing claim's text on ONE sensitivityRanking line (utils sensitivityRanking)
+    this.TREE_ANSWER_CLIP = 400; // max chars of a brainer's resultSoFar.answer rendered into _brainers.json (the crawl-tree artifact)
+    this.MANDATE_CLIP = 60; // max chars of a trail label / spawn mandate on ONE log or tree line (utils trailOf; engine.ts spawn log + tree render)
+    this.SCHED_VOCAB_CAP = 20; // max community-vocabulary terms (by uses) rendered into the scheduler's COMMUNITY VOCABULARY clause
+    this.VENUE_WARN_MIN = 2; // venuesWithYieldWarn: min lane-assignments a venue must carry before a persistent 0-yield earns the ⚠ warning suffix
+    // scout SWARM knobs (v3 batch 2s) — the wave-0 seed is now a planner→probes→merger swarm, not one broad sweep.
+    this.SCOUT_PROBES = 5; // max search angles the planner may propose (≥3); each angle spawns exactly one probe
+    this.SCOUT_PROBE_SOURCES = 3; // max sources ONE probe fetches for its own angle (mirrors v2's single-scout ≤5, now split across probes)
+    this.SCOUT_PAGES_CAP = 10; // max pages the merger (or its JS fallback) keeps in the final ScoutOut — the union of every probe's pages, strongest kept
+    this.GENERAL_PURPOSE = 'general-purpose'; // the harness agentType handed to code-capable / tool-using sub-agents
+    this.CHECKPOINT_MARK = '⏺CKPT'; // per-wave crash-safety checkpoint log-line prefix: engine.ts emits `${CHECKPOINT_MARK} w<n> <json>` at wave end (zero-cost — no agent); runtime.ts's debug LOG_BUFFER filter skips lines starting with it so _debug.md never bloats
+    // Per-agent model TIER + reasoning EFFORT — keyed by agent name; each src/agents/<agent>/ module reads its value
+    // here (the tiering rationale travels in each agent's own comment). Brainer = ALWAYS Opus + xhigh (the global
+    // brain/reducer); scout probes + researcher = Haiku (bounded summarize + extract — the page reading is the fixed
+    // Haiku reader's job); escalate only on measured failure. scoutPlanner/scoutMerger = Sonnet + high: landscape
+    // sensing (grounded search-angle judgment) and cross-angle synthesis are reasoning jobs, not bounded extraction.
+    this.TIER = {
+      scout: 'haiku',
+      scoutPlanner: 'sonnet',
+      scoutMerger: 'sonnet',
+      prospector: 'opus',
+      brainer: 'opus',
+      validator: 'sonnet',
+      researcher: 'haiku',
+      researchScheduler: 'sonnet',
+      initiator: 'opus',
+      refiner: 'sonnet',
+      judge: 'opus',
+      synthesiser: 'opus',
+      debugAnalyst: 'opus',
+      // v3 ledger clerks — mostly Haiku: each is a bounded, mechanical, batched-per-wave job (grep a
+      // quote, re-execute a stored script). lineageClerk alone is promoted to Sonnet — fuzzy entity
+      // resolution against a growing canon (same-as spellings, merges) is judgment, not grep.
+      claimAuditor: 'haiku',
+      lineageClerk: 'sonnet',
+      rerunner: 'haiku',
+    };
+    this.EFFORT = {
+      scout: 'medium',
+      scoutPlanner: 'high',
+      scoutMerger: 'high',
+      prospector: 'high',
+      brainer: 'xhigh',
+      validator: 'medium',
+      researcher: 'medium',
+      researchScheduler: 'high',
+      initiator: 'xhigh',
+      refiner: 'high',
+      judge: 'xhigh',
+      synthesiser: 'xhigh',
+      debugAnalyst: 'high',
+      claimAuditor: 'medium',
+      lineageClerk: 'medium',
+      rerunner: 'low',
+    };
+    // ANCHOR the reader budget (B10) — now that TIER is set: a reader-unit must FIT the researcher tier's context
+    // window, and (in chars) EXCEED the overlap re-read so every split makes forward progress. Fail loudly otherwise.
+    if (this.RESEARCHER_TOKEN_BUDGET > this.CONTEXT[this.TIER.researcher])
+      throw new Error(
+        'RR config: RESEARCHER_TOKEN_BUDGET exceeds the researcher tier context window',
+      );
+    if (this.RESEARCHER_TOKEN_BUDGET * this.CHARS_PER_TOKEN <= this.CHUNK_OVERLAP_CHARS)
+      throw new Error(
+        'RR config: RESEARCHER_TOKEN_BUDGET (in chars) must exceed CHUNK_OVERLAP_CHARS',
+      );
+
+    // ---- run config (validated + defaulted) ----
+    this.query = arg.query;
+    // normalize mode (B8): trim + lowercase BEFORE the 'collect' test (so 'Collect'/' COLLECT ' canonicalize),
+    // and warn LOUDLY when a non-empty mode fails to match either canonical value instead of silently → goal.
+    const rawMode = arg.mode == null ? '' : String(arg.mode).trim().toLowerCase();
+    this.mode = rawMode === 'collect' ? 'collect' : 'goal'; // canonical mode; anything not 'collect' → 'goal'
+    if (rawMode && rawMode !== 'collect' && rawMode !== 'goal') {
+      try {
+        if (typeof log === 'function')
+          log('⚠ RR: unrecognized mode "' + String(arg.mode) + '" → defaulting to goal');
+      } catch (e) {
+        /* log not available at construction (unit test) → skip the warning */
+      }
+    }
+    this.maxWave = autoInt(arg.maxWave, 5, 15, 'auto'); // 'auto' (brainer-stopped, capped at HARD_CAP) or a clamped [5,15] override
+    this.HARD_CAP = 15; // absolute ceiling on waves — no run ever exceeds this
+    // maxParallelBrainers: max LIVE brainers in the brainer tree. A positive integer clamps to [1,5];
+    // anything else (absent / 'auto' / junk) defaults to 1 — today's single-brainer behavior, so the tree is strictly opt-in.
+    this.maxParallelBrainers =
+      Number.isInteger(arg.maxParallelBrainers) && (arg.maxParallelBrainers          ) > 0
+        ? Math.min(5, Math.max(1, arg.maxParallelBrainers          ))
+        : 1;
+    this.parallelLaneResearchAgentsPerWave = autoInt(
+      arg.parallelLaneResearchAgentsPerWave,
+      1,
+      this.AUTO_CAP,
+      'auto',
+    ); // lanes/wave: 'auto' (brainer-assigned, hidden cap AUTO_CAP) or clamped [1,AUTO_CAP]
+    this.parallelSourcesPerLaneResearchAgent = autoInt(
+      arg.parallelSourcesPerLaneResearchAgent,
+      1,
+      this.AUTO_CAP,
+      'auto',
+    ); // sources/lane: 'auto' (brainer-assigned, hidden cap AUTO_CAP) or clamped [1,AUTO_CAP]
+    this.PHASE = { scout: 'Scout', crawl: 'Research', finalize: 'Finalize', debug: 'Debug' };
+    this.MAX_JUDGE_PASSES = 2; // finalize: max remediation passes the judge may drive (brain-compute / re-refine / crawl-reopen) before the report is written — the judge runs at most MAX+1 times
+    this.MAX_LANE_REFAILS = 2; // crawl: max times the per-wave validator re-opens one lane after a null/thin return; after that it surfaces as a known gap (no infinite loop)
+    this.VALIDATOR_THIN = 120; // crawl: a finding shorter than this (chars) is "thin" → it (or any null lane) gates the validator to run that wave
+    this.QUERY_PLATEAU = 0.7; // collect-mode DRY: stop when top novelty-score stays ≤ this × the run's PEAK for 2 waves (no magic absolute floor)
+    // L7 robustness: RETRY a failed agent() call up to AGENT_RETRIES times (a fresh spawn). A single transient failure (e.g. StructuredOutput
+    // retry-cap exceeded on a JS-rendered page) often clears on a clean re-run; only after the retries are exhausted does it degrade to null
+    // (handled by the existing null-guards) instead of throwing and crashing the WHOLE workflow.
+    this.AGENT_RETRIES = 2;
+    this.INJECT_SCORE = 90; // score for judge-reopened gap rabbit-holes (finalize crawl-reopen) — high, so they top the store
+    this.compute = coerceBool(arg.compute, true); // master switch for ALL derivation: false → the brainer runs as a plain subagent (no code) + no finalize derivation (the brainer/judge are told it is off). STRICT: "false"/0/"no" coerce to false, never silently default to true
+    this.checkpoint = coerceBool(arg.checkpoint, true); // per-wave crash-safety checkpoint: gates a single CHECKPOINT_MARK log line (compactCheckpoint) emitted at the end of each wave — zero agent cost. false → the line never logs. STRICT coercion, same as compute
+    this.computeNote = str(arg.computeNote, ''); // optional run-specific compute guidance; appended after the baked stack note (COMPUTE_NOTE) the compute-aware agents receive
+    this.thinkerNote = str(arg.thinkerNote, ''); // optional operator run-steering (priorities/framing/constraints/audience); reaches the Opus reasoning tier ONLY (THINKER_NOTE), pure passthrough
+    this.researcherNote = str(arg.researcherNote, ''); // optional operator note to the web-research/probe agents (RESEARCHER_NOTE); terse passthrough, reaches scout/prospector/researcher/brainer
+    this.debug = bool(arg.debug, true); // last-phase Debug & Analysis agent → one _debug.md (raw agent I/O + run log + metrics); ON by default, pass debug:false to turn it off
+    this.debugPrompt = str(arg.debugPrompt, ''); // optional run-specific analysis question handed to the debug agent
+    this.tag = str(arg.tag, ''); // optional slug suffix so parallel variants of one query write to distinct dirs
+    const baseSlug = this.query
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 40);
+    this.slug = baseSlug + (this.tag ? '-' + this.tag : '');
+    this.DIR = 'RR/' + this.slug;
+
+    // ---- shared prompt fragments (woven into the builders below) ----
+    // FOOTER — the 6-channel return contract every reading agent appends: gap searches (in the source's
+    // own vocabulary) + attack queries, stance-tagged citations, quote-pinned claims, new terms, and a
+    // surprise flag. The do-not-pad discipline holds on every channel.
+    this.FOOTER = `Then append a section titled "Rabbit holes": 0-5 gap searches worth a researcher's time — the biggest things the content raises but does not explain, EACH PHRASED IN THE SOURCE'S OWN TERMINOLOGY (the community's words, not yours). Each: a concrete next web-search query and one line on why it matters. For any claim the page supports, also give the single strongest REALISTIC counter-evidence search, returned with kind:"attack". When a recurring author, venue, or dataset clearly matters to the topic, also give one search to follow their other work, returned with kind:"entity". If the page is a dead end or self-contained, give 1 or none — do not pad. Skip anything the page already explains.
+Then append a section titled "Next sources": up to 5 of the page's highest-value outbound citations or links as concrete fetch targets — each the exact URL or DOI the page points to, one line on why following it matters, and whether it is expected to SUPPORT or ATTACK a specific existing claim (name which) or is neutral. Give none when the page cites nothing worth following.
+Then append a section titled "Claims": each load-bearing fact the page carries — the fact in one line (with its value when it has one), a VERBATIM quote of at most ${this.QUOTE_MAX_CHARS} characters copied exactly from the page that pins it, and the source's entities (authors, funder, dataset, venue) when visible. Only facts the answer could rest on — do not pad.
+Then append a section titled "New terms": the community's terms of art the page uses that we did not — each with a one-line gloss. Give none when the page speaks our vocabulary.
+Then append a "Surprise" note ONLY when the page contradicts the current key claims: one line naming the contradiction. No section otherwise.`;
+    // L3 (directive A): primary tools are WebSearch + mcp__harvester__fetch, but agents MAY reach for any other tool that genuinely helps the rabbit-hole.
+    this.NET = `Primary tools: WebSearch + mcp__harvester__fetch — load WebSearch via ToolSearch "select:WebSearch" if absent (built-in WebFetch is hook-denied; fetch only through Harvester). You may also load any other tool that genuinely helps THIS rabbit-hole (e.g. context7 for library/API docs) via ToolSearch — pick the best tool for the question, not only web search. Prefer primary, recent sources; stay on-rabbit-hole.`;
+    // COMPUTE_NOTE — capability fragment for the compute-aware agents (mirrors NET). Names the scientific Python stack the compute
+    // environment ships so they reach for it over hand-rolled math; the optional computeNote arg appends per-run guidance after it.
+    this.COMPUTE_NOTE =
+      `The compute environment's python3 ships a scientific stack — prefer it over hand-rolled math: scipy (integration/ODEs, optimization, stats, linear algebra), sympy (symbolic math + dimensional/algebra checks), uncertainties or a numpy Monte-Carlo for error-bar propagation, pint for unit consistency, pandas + statsmodels + scikit-learn for data and statistics, networkx for graph/path reasoning, rdkit for molecular similarity. Import what fits the derivation instead of coding the method yourself.` +
+      (this.computeNote ? '\n' + this.computeNote : '');
+    // THINKER_NOTE — the operator's run-steering, labeled so the reasoning tier treats it as HOW to approach the run (priorities,
+    // framing, constraints, audience) rather than WHAT to research. Pure passthrough of the thinkerNote arg; empty ⇒ nothing renders.
+    this.THINKER_NOTE = this.thinkerNote
+      ? 'OPERATOR STEERING — how to approach THIS run (priorities, framing, constraints, audience), not additional questions to research:\n' +
+        this.thinkerNote
+      : '';
+    // RESEARCHER_NOTE — the operator's terse one-line note to the agents that DO web research/fetching (scout, prospector,
+    // researcher, brainer). Minimal framing — a short prefix then the note. Pure passthrough; empty ⇒ nothing renders.
+    this.RESEARCHER_NOTE = this.researcherNote ? 'Research note: ' + this.researcherNote : '';
+    this.RUBRIC =
+      this.mode === 'collect'
+        ? `MODE = collect (exhaustive): score each rabbit-hole by how much NEW information it adds about the subject; favour breadth.`
+        : `MODE = goal (directed): score each rabbit-hole by how much it improves or better-verifies the answer to the goal; favour rabbit-holes that close or verify it.`;
+    this.STOP =
+      this.mode === 'collect'
+        ? `done = true when the high-value material is collected and remaining rabbit-holes are only marginally novel — the novelty trajectory has fallen well below peak and plateaued. The subject need not be exhausted (a rich one never is); call it when further waves add footnotes, not substance.`
+        : `done = true only when the goal is answered AND pursuing the top remaining rabbit-holes would not materially improve or better-verify the answer.`;
+  }
+}
+const CONFIG = new Configs(args);
 // ╔══ module: src/agents/shared.ts ════════════════════════════════════════
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared cross-agent fragments — imported by the per-agent modules in this folder so a
@@ -236,360 +594,6 @@ const RESULT_SO_FAR         = {
   },
   required: ['answer', 'keyClaimIds', 'resolved', 'openGaps', 'tensions', 'working', 'confidence'],
 };
-// ╔══ module: src/config.ts ═══════════════════════════════════════════════
-// ─────────────────────────────────────────────────────────────────────────────
-// Configs — THE single source of truth for the whole engine. ALL configuration
-// lives here: tunable knobs, caps, char budgets, the per-agent model TIER + reasoning
-// EFFORT maps, and the run-derived prompt fragments. Nothing is hardcoded elsewhere —
-// engine.ts / utils / store / the agent modules READ every number and policy off the
-// CONFIG singleton. Change a value here and it changes everywhere; never re-introduce a
-// literal in another module.
-//
-// Configs also validates the injected JSON args (which can be ANYTHING) and fills safe
-// defaults in the constructor. One immutable CONFIG singleton holds the run. (Each agent's
-// schema + prompt-builder still live in src/agents/<agent>/; its tier/effort value lives
-// ONLY in the TIER/EFFORT maps below — the agent module reads it from CONFIG.)
-// ─────────────────────────────────────────────────────────────────────────────
-                                                                              
-
-class Configs {
-  // run config (validated + defaulted)
-  query        ;
-  mode      ;
-  maxWave                 ;
-  HARD_CAP        ;
-  maxParallelBrainers        ; // max LIVE brainers in the brainer tree (1 = today's single-brainer behavior; clamps to a hard ceiling of 5)
-  MAX_BRAINER_DEPTH        ; // safety cap on spawn-chain depth (a child of a child of … )
-  parallelLaneResearchAgentsPerWave                 ;
-  parallelSourcesPerLaneResearchAgent                 ;
-  PHASE          ;
-  MAX_JUDGE_PASSES        ;
-  MAX_LANE_REFAILS        ;
-  VALIDATOR_THIN        ;
-  VALIDATOR_INTRO_CHARS        ;
-  VALIDATOR_MISSING_CHARS        ;
-  QUERY_PLATEAU        ;
-  PLATEAU_MIN_WAVES        ;
-  PLATEAU_WINDOW        ;
-  AGENT_RETRIES        ;
-  INJECT_SCORE        ;
-  AUTO_CAP        ;
-  AUTO_SOURCE_DEFAULT        ;
-  NEAR_DUP        ;
-  FINALIZE_TOP_OPEN        ;
-  RESEARCHER_TOKEN_BUDGET        ;
-  BRAINER_LANE_CAP        ;
-  CHUNK_OVERLAP_CHARS        ;
-  CHARS_PER_TOKEN        ;
-  CONTEXT                      ;
-  MAX_SLICES_PER_READER        ;
-  MAX_SOURCES_PER_LANE        ;
-  HANDOFF_CHARS        ;
-  MAX_STARVED_WAVES        ;
-  TREE_LOG_WIDTH        ;
-  QUOTE_MAX_CHARS        ;
-  CLAIM_DIGEST_CAP        ;
-  CLAIM_DIGEST_CLIP        ;
-  CALIB_DEFAULT_SCORE        ;
-  AUDIT_BATCH        ;
-  LINEAGE_BATCH        ;
-  SETTLED_MIN_CLUSTERS        ;
-  VOI_SENS_THRESHOLD        ;
-  CALIB_CLAMP_LO        ;
-  CALIB_CLAMP_HI        ;
-  CALIB_NORM        ;
-  CALIB_ALPHA        ;
-  CALIB_LEAD_WEIGHT        ;
-  CALIB_REALIZED_MAX        ;
-  CHAO_COVERAGE_STOP        ;
-  BRAINER_LEDGER_CAP        ;
-  CLAIM_LINE_CLIP        ;
-  SENSITIVITY_CLIP        ;
-  TREE_ANSWER_CLIP        ;
-  MANDATE_CLIP        ;
-  SCHED_VOCAB_CAP        ;
-  VENUE_WARN_MIN        ;
-  SCOUT_PROBES        ;
-  SCOUT_PROBE_SOURCES        ;
-  SCOUT_PAGES_CAP        ;
-  GENERAL_PURPOSE        ;
-  TIER                      ;
-  EFFORT                        ;
-  compute         ;
-  checkpoint         ;
-  computeNote        ;
-  thinkerNote        ;
-  researcherNote        ;
-  debug         ;
-  debugPrompt        ;
-  tag        ;
-  slug        ;
-  DIR        ;
-  rawArgs         ; // the COMPLETE set of arguments the run was launched with, captured verbatim (persisted into the output)
-  // derived prompt fragments woven into the agent builders
-  FOOTER        ;
-  NET        ;
-  COMPUTE_NOTE        ;
-  THINKER_NOTE        ;
-  RESEARCHER_NOTE        ;
-  RUBRIC        ;
-  STOP        ;
-
-  constructor(rawArgs         ) {
-    // args: { query, mode?, compute?, maxWave?, parallelLaneResearchAgentsPerWave?, parallelSourcesPerLaneResearchAgent?, debug?, debugPrompt? }
-    let parsed         ;
-    try {
-      parsed = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs;
-    } catch (e) {
-      throw new Error('RR: args is not valid JSON — ' + ((e && e.message) || e));
-    }
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      throw new Error('RR: args must be a JSON object { query, mode?, maxWave? }');
-    }
-    const arg = parsed           ;
-    if (typeof arg.query !== 'string' || arg.query.trim() === '') {
-      throw new Error('RR requires args { query: non-empty string, mode?, maxWave? }');
-    }
-    this.rawArgs = arg; // capture the COMPLETE launch args verbatim — persisted into the output files
-    // typed readers — keep the supplied value only when it is the right type, else fall back to the default
-    const str = (v         , d        )         => (typeof v === 'string' && v.length ? v : d);
-    const bool = (v         , d         )          => (typeof v === 'boolean' ? v : d);
-    // coerceBool — a STRICT boolean reader (B8): a real boolean passes; the common string/number truthy/falsy
-    // spellings coerce explicitly; absent ⇒ the default; ANYTHING else throws LOUDLY rather than silently
-    // defaulting. (A bare `bool()` would default "false"/0/"no" back to true — a foot-gun for `compute:false`.)
-    const coerceBool = (v         , d         )          => {
-      if (v === undefined || v === null) return d;
-      if (typeof v === 'boolean') return v;
-      if (typeof v === 'number') {
-        if (v === 1) return true;
-        if (v === 0) return false;
-        throw new Error('RR: expected a boolean, got number ' + v);
-      }
-      if (typeof v === 'string') {
-        const s = v.trim().toLowerCase();
-        if (s === 'true' || s === '1' || s === 'yes' || s === 'on') return true;
-        if (s === 'false' || s === '0' || s === 'no' || s === 'off') return false;
-        throw new Error('RR: expected a boolean-ish value, got string "' + v + '"');
-      }
-      throw new Error('RR: expected a boolean, got ' + typeof v);
-    };
-    const autoInt = (v         , lo        , hi        , d                 )                  =>
-      v === 'auto'
-        ? 'auto'
-        : Number.isInteger(v) && (v          ) > 0
-          ? Math.min(hi, Math.max(lo, v          ))
-          : d;
-
-    // ---- centralized constants (the single source of truth — no literal of these lives anywhere else) ----
-    this.AUTO_CAP = 5; // auto-mode hard cap on lanes/wave AND sources/lane (the brainer is never told the number); read by the lane+source autoInt bounds, utils laneCount, and the engine srcCount
-    this.AUTO_SOURCE_DEFAULT = 2; // auto-mode sources/lane when the brainer assigns none to a lane
-    this.NEAR_DUP = 0.85; // store dedup: Jaccard token-set overlap ≥ this counts as "the same lead, reworded"; kept high so distinct leads are never merged
-    this.FINALIZE_TOP_OPEN = 6; // finalize: how many top open rabbit-holes feed the initiator + synthesiser (Open questions)
-    this.VALIDATOR_INTRO_CHARS = 240; // crawl: char budget for each finding's intro handed to the validator gate
-    this.VALIDATOR_MISSING_CHARS = 300; // crawl: char budget for the validator's `missing` gaps threaded into the next brainer
-    this.PLATEAU_MIN_WAVES = 3; // collect DRY: minimum waves before the novelty-plateau stop can fire
-    this.PLATEAU_WINDOW = 2; // collect DRY: how many trailing top-scores must all sit ≤ QUERY_PLATEAU×peak to call it dry
-    // scheduler/reader knobs (B4/B5) — read by utils.packReaders + the engine lane threads
-    this.RESEARCHER_TOKEN_BUDGET = 130000; // one reader-unit budget: the calibrated safe ceiling a single reader may carry (the bin-pack unit)
-    this.BRAINER_LANE_CAP = 5; // lanes/wave — the wave bound (≥ this many lanes never run in one wave)
-    this.CHUNK_OVERLAP_CHARS = 2000; // overlap re-read at each split boundary when one source is packed across multiple reader-units
-    // CHARS_PER_TOKEN — inverts Harvester's size_only token heuristic (tokens ≈ chars/2 for prose, A6) so the
-    // engine's CHAR windows agree with the scheduler's TOKEN sizes: budget(tokens) × CHARS_PER_TOKEN = the char
-    // ceiling a reader-unit may span. The heuristic deliberately OVER-counts tokens (real prose is ~chars/4), so
-    // 130k heuristic-tokens ≈ ~65k real tokens — comfortably inside the worker context window with headroom.
-    this.CHARS_PER_TOKEN = 2;
-    // CONTEXT — each tier's real context window (Claude models, tokens). The reader budget is ANCHORED against the
-    // researcher tier's window below (a reader-unit can never be asked to ingest more than the model can hold).
-    this.CONTEXT = { haiku: 200000, sonnet: 200000, opus: 200000 };
-    this.MAX_SLICES_PER_READER = 8; // B7: max whole sources combined into ONE reader-unit (a lane of 40 tiny files never packs 40 into one turn)
-    this.MAX_SOURCES_PER_LANE = 12; // B7: max sources packed per lane per wave (caps a runaway scheduler lane before bin-packing)
-    this.HANDOFF_CHARS = 16000; // B7: cap the running-answer handoff carried between sequential readers (keeps read + handoff inside context)
-    this.MAX_STARVED_WAVES = 2; // B6: consecutive all-null / empty-schedule waves before the crawl breaks with stopReason scheduler-starved
-    this.MAX_BRAINER_DEPTH = 3; // safety cap on the spawn-chain depth (root=0); spawning past this depth is refused
-    this.TREE_LOG_WIDTH = 120; // crawl-tree render: per-line clip width for the LIVE TERMINAL log ONLY — the persisted _tree.md + returned tree keep full, unclipped lines
-    // claim-ledger knobs (v3) — read by utils claimStatus/chao1/updateCalib/calibFactor + the prompt builders
-    this.QUOTE_MAX_CHARS = 300; // max chars of the VERBATIM quote a claim pins (the FOOTER + reader schema ceiling)
-    this.CLAIM_DIGEST_CAP = 30; // max existing key-claim one-liners woven into a reader prompt (the stance targets)
-    this.CLAIM_DIGEST_CLIP = 90; // max chars of a claim's text on ONE claimDigestOf line (distinct from CLAIM_DIGEST_CAP, which caps the line COUNT)
-    this.CALIB_DEFAULT_SCORE = 50; // ingestWave: predicted-yield default when a pursued lead carries no score history yet (the neutral midpoint)
-    this.AUDIT_BATCH = 50; // claimAuditor: max claims per batched quote-audit call (chunks beyond this dispatch as separate concurrent calls)
-    this.LINEAGE_BATCH = 80; // lineageClerk: max claims per batched entity-canonicalization call (chunks beyond this dispatch as separate concurrent calls)
-    this.SETTLED_MIN_CLUSTERS = 2; // claimStatus: independent lineage clusters required before a claim can settle
-    this.VOI_SENS_THRESHOLD = 0.15; // VOI stop assist: a derivation input below this sensitivity share is not worth another lane
-    this.CALIB_CLAMP_LO = 0.5; // yieldCalib: floor on the per-kind selection multiplier (a cold kind is never zeroed out)
-    this.CALIB_CLAMP_HI = 1.5; // yieldCalib: ceiling on the per-kind selection multiplier (a hot kind never dominates)
-    this.CALIB_NORM = 4; // yieldCalib: realized-yield divisor — (auditedPassClaims + CALIB_LEAD_WEIGHT×freshLeads)/CALIB_NORM ≈ 1 on a good lane
-    this.CALIB_ALPHA = 0.3; // yieldCalib: EMA weight of the newest realized/predicted observation
-    this.CALIB_LEAD_WEIGHT = 0.3; // yieldCalib: a lane's fresh (pre-dedup) leads count for this much of one audited-pass claim in the realized-yield formula
-    this.CALIB_REALIZED_MAX = 2; // yieldCalib: ceiling on one wave's realized-yield observation before it feeds the EMA (an outlier lane never swings the ratio unboundedly)
-    this.CHAO_COVERAGE_STOP = 0.9; // collect DRY assist: plateau AND chao1 coverage ≥ this → dry
-    // v3 STEERING knobs (batch 3) — the brainer's ledger/calibration/sensitivity-aware prompt sections + the scheduler's vocabulary clause.
-    this.BRAINER_LEDGER_CAP = 120; // max ledger lines rendered into the CLAIM LEDGER section (utils ledgerLines); beyond this, a "(+N more)" tail
-    this.CLAIM_LINE_CLIP = 120; // max chars of a claim's text on ONE ledger line (distinct from QUOTE_MAX_CHARS, which caps the underlying quote)
-    this.SENSITIVITY_CLIP = 60; // max chars of a backing claim's text on ONE sensitivityRanking line (utils sensitivityRanking)
-    this.TREE_ANSWER_CLIP = 400; // max chars of a brainer's resultSoFar.answer rendered into _brainers.json (the crawl-tree artifact)
-    this.MANDATE_CLIP = 60; // max chars of a trail label / spawn mandate on ONE log or tree line (utils trailOf; engine.ts spawn log + tree render)
-    this.SCHED_VOCAB_CAP = 20; // max community-vocabulary terms (by uses) rendered into the scheduler's COMMUNITY VOCABULARY clause
-    this.VENUE_WARN_MIN = 2; // venuesWithYieldWarn: min lane-assignments a venue must carry before a persistent 0-yield earns the ⚠ warning suffix
-    // scout SWARM knobs (v3 batch 2s) — the wave-0 seed is now a planner→probes→merger swarm, not one broad sweep.
-    this.SCOUT_PROBES = 5; // max search angles the planner may propose (≥3); each angle spawns exactly one probe
-    this.SCOUT_PROBE_SOURCES = 3; // max sources ONE probe fetches for its own angle (mirrors v2's single-scout ≤5, now split across probes)
-    this.SCOUT_PAGES_CAP = 10; // max pages the merger (or its JS fallback) keeps in the final ScoutOut — the union of every probe's pages, strongest kept
-    this.GENERAL_PURPOSE = 'general-purpose'; // the harness agentType handed to code-capable / tool-using sub-agents
-    // Per-agent model TIER + reasoning EFFORT — keyed by agent name; each src/agents/<agent>/ module reads its value
-    // here (the tiering rationale travels in each agent's own comment). Brainer = ALWAYS Opus + xhigh (the global
-    // brain/reducer); scout probes + researcher = Haiku (bounded summarize + extract — the page reading is the fixed
-    // Haiku reader's job); escalate only on measured failure. scoutPlanner/scoutMerger = Sonnet + high: landscape
-    // sensing (grounded search-angle judgment) and cross-angle synthesis are reasoning jobs, not bounded extraction.
-    this.TIER = {
-      scout: 'haiku',
-      scoutPlanner: 'sonnet',
-      scoutMerger: 'sonnet',
-      prospector: 'opus',
-      brainer: 'opus',
-      validator: 'sonnet',
-      researcher: 'haiku',
-      researchScheduler: 'sonnet',
-      initiator: 'opus',
-      refiner: 'sonnet',
-      judge: 'opus',
-      synthesiser: 'opus',
-      debugAnalyst: 'opus',
-      // v3 ledger clerks — mostly Haiku: each is a bounded, mechanical, batched-per-wave job (grep a
-      // quote, re-execute a stored script, write a checkpoint file). lineageClerk alone is promoted to
-      // Sonnet — fuzzy entity resolution against a growing canon (same-as spellings, merges) is judgment,
-      // not grep.
-      claimAuditor: 'haiku',
-      lineageClerk: 'sonnet',
-      rerunner: 'haiku',
-      scribe: 'haiku',
-    };
-    this.EFFORT = {
-      scout: 'medium',
-      scoutPlanner: 'high',
-      scoutMerger: 'high',
-      prospector: 'high',
-      brainer: 'xhigh',
-      validator: 'medium',
-      researcher: 'medium',
-      researchScheduler: 'high',
-      initiator: 'xhigh',
-      refiner: 'high',
-      judge: 'xhigh',
-      synthesiser: 'xhigh',
-      debugAnalyst: 'high',
-      claimAuditor: 'medium',
-      lineageClerk: 'medium',
-      rerunner: 'low',
-      scribe: 'low',
-    };
-    // ANCHOR the reader budget (B10) — now that TIER is set: a reader-unit must FIT the researcher tier's context
-    // window, and (in chars) EXCEED the overlap re-read so every split makes forward progress. Fail loudly otherwise.
-    if (this.RESEARCHER_TOKEN_BUDGET > this.CONTEXT[this.TIER.researcher])
-      throw new Error(
-        'RR config: RESEARCHER_TOKEN_BUDGET exceeds the researcher tier context window',
-      );
-    if (this.RESEARCHER_TOKEN_BUDGET * this.CHARS_PER_TOKEN <= this.CHUNK_OVERLAP_CHARS)
-      throw new Error(
-        'RR config: RESEARCHER_TOKEN_BUDGET (in chars) must exceed CHUNK_OVERLAP_CHARS',
-      );
-
-    // ---- run config (validated + defaulted) ----
-    this.query = arg.query;
-    // normalize mode (B8): trim + lowercase BEFORE the 'collect' test (so 'Collect'/' COLLECT ' canonicalize),
-    // and warn LOUDLY when a non-empty mode fails to match either canonical value instead of silently → goal.
-    const rawMode = arg.mode == null ? '' : String(arg.mode).trim().toLowerCase();
-    this.mode = rawMode === 'collect' ? 'collect' : 'goal'; // canonical mode; anything not 'collect' → 'goal'
-    if (rawMode && rawMode !== 'collect' && rawMode !== 'goal') {
-      try {
-        if (typeof log === 'function')
-          log('⚠ RR: unrecognized mode "' + String(arg.mode) + '" → defaulting to goal');
-      } catch (e) {
-        /* log not available at construction (unit test) → skip the warning */
-      }
-    }
-    this.maxWave = autoInt(arg.maxWave, 5, 15, 'auto'); // 'auto' (brainer-stopped, capped at HARD_CAP) or a clamped [5,15] override
-    this.HARD_CAP = 15; // absolute ceiling on waves — no run ever exceeds this
-    // maxParallelBrainers: max LIVE brainers in the brainer tree. A positive integer clamps to [1,5];
-    // anything else (absent / 'auto' / junk) defaults to 1 — today's single-brainer behavior, so the tree is strictly opt-in.
-    this.maxParallelBrainers =
-      Number.isInteger(arg.maxParallelBrainers) && (arg.maxParallelBrainers          ) > 0
-        ? Math.min(5, Math.max(1, arg.maxParallelBrainers          ))
-        : 1;
-    this.parallelLaneResearchAgentsPerWave = autoInt(
-      arg.parallelLaneResearchAgentsPerWave,
-      1,
-      this.AUTO_CAP,
-      'auto',
-    ); // lanes/wave: 'auto' (brainer-assigned, hidden cap AUTO_CAP) or clamped [1,AUTO_CAP]
-    this.parallelSourcesPerLaneResearchAgent = autoInt(
-      arg.parallelSourcesPerLaneResearchAgent,
-      1,
-      this.AUTO_CAP,
-      'auto',
-    ); // sources/lane: 'auto' (brainer-assigned, hidden cap AUTO_CAP) or clamped [1,AUTO_CAP]
-    this.PHASE = { scout: 'Scout', crawl: 'Research', finalize: 'Finalize', debug: 'Debug' };
-    this.MAX_JUDGE_PASSES = 2; // finalize: max remediation passes the judge may drive (brain-compute / re-refine / crawl-reopen) before the report is written — the judge runs at most MAX+1 times
-    this.MAX_LANE_REFAILS = 2; // crawl: max times the per-wave validator re-opens one lane after a null/thin return; after that it surfaces as a known gap (no infinite loop)
-    this.VALIDATOR_THIN = 120; // crawl: a finding shorter than this (chars) is "thin" → it (or any null lane) gates the validator to run that wave
-    this.QUERY_PLATEAU = 0.7; // collect-mode DRY: stop when top novelty-score stays ≤ this × the run's PEAK for 2 waves (no magic absolute floor)
-    // L7 robustness: RETRY a failed agent() call up to AGENT_RETRIES times (a fresh spawn). A single transient failure (e.g. StructuredOutput
-    // retry-cap exceeded on a JS-rendered page) often clears on a clean re-run; only after the retries are exhausted does it degrade to null
-    // (handled by the existing null-guards) instead of throwing and crashing the WHOLE workflow.
-    this.AGENT_RETRIES = 2;
-    this.INJECT_SCORE = 90; // score for judge-reopened gap rabbit-holes (finalize crawl-reopen) — high, so they top the store
-    this.compute = coerceBool(arg.compute, true); // master switch for ALL derivation: false → the brainer runs as a plain subagent (no code) + no finalize derivation (the brainer/judge are told it is off). STRICT: "false"/0/"no" coerce to false, never silently default to true
-    this.checkpoint = coerceBool(arg.checkpoint, true); // per-wave scribe checkpoint (_checkpoint.json in DIR): false → the scribe never runs. STRICT coercion, same as compute
-    this.computeNote = str(arg.computeNote, ''); // optional run-specific compute guidance; appended after the baked stack note (COMPUTE_NOTE) the compute-aware agents receive
-    this.thinkerNote = str(arg.thinkerNote, ''); // optional operator run-steering (priorities/framing/constraints/audience); reaches the Opus reasoning tier ONLY (THINKER_NOTE), pure passthrough
-    this.researcherNote = str(arg.researcherNote, ''); // optional operator note to the web-research/probe agents (RESEARCHER_NOTE); terse passthrough, reaches scout/prospector/researcher/brainer
-    this.debug = bool(arg.debug, true); // last-phase Debug & Analysis agent → one _debug.md (raw agent I/O + run log + metrics); ON by default, pass debug:false to turn it off
-    this.debugPrompt = str(arg.debugPrompt, ''); // optional run-specific analysis question handed to the debug agent
-    this.tag = str(arg.tag, ''); // optional slug suffix so parallel variants of one query write to distinct dirs
-    const baseSlug = this.query
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 40);
-    this.slug = baseSlug + (this.tag ? '-' + this.tag : '');
-    this.DIR = 'RR/' + this.slug;
-
-    // ---- shared prompt fragments (woven into the builders below) ----
-    // FOOTER — the 6-channel return contract every reading agent appends: gap searches (in the source's
-    // own vocabulary) + attack queries, stance-tagged citations, quote-pinned claims, new terms, and a
-    // surprise flag. The do-not-pad discipline holds on every channel.
-    this.FOOTER = `Then append a section titled "Rabbit holes": 0-5 gap searches worth a researcher's time — the biggest things the content raises but does not explain, EACH PHRASED IN THE SOURCE'S OWN TERMINOLOGY (the community's words, not yours). Each: a concrete next web-search query and one line on why it matters. For any claim the page supports, also give the single strongest REALISTIC counter-evidence search, returned with kind:"attack". When a recurring author, venue, or dataset clearly matters to the topic, also give one search to follow their other work, returned with kind:"entity". If the page is a dead end or self-contained, give 1 or none — do not pad. Skip anything the page already explains.
-Then append a section titled "Next sources": up to 5 of the page's highest-value outbound citations or links as concrete fetch targets — each the exact URL or DOI the page points to, one line on why following it matters, and whether it is expected to SUPPORT or ATTACK a specific existing claim (name which) or is neutral. Give none when the page cites nothing worth following.
-Then append a section titled "Claims": each load-bearing fact the page carries — the fact in one line (with its value when it has one), a VERBATIM quote of at most ${this.QUOTE_MAX_CHARS} characters copied exactly from the page that pins it, and the source's entities (authors, funder, dataset, venue) when visible. Only facts the answer could rest on — do not pad.
-Then append a section titled "New terms": the community's terms of art the page uses that we did not — each with a one-line gloss. Give none when the page speaks our vocabulary.
-Then append a "Surprise" note ONLY when the page contradicts the current key claims: one line naming the contradiction. No section otherwise.`;
-    // L3 (directive A): primary tools are WebSearch + mcp__harvester__fetch, but agents MAY reach for any other tool that genuinely helps the rabbit-hole.
-    this.NET = `Primary tools: WebSearch + mcp__harvester__fetch — load WebSearch via ToolSearch "select:WebSearch" if absent (built-in WebFetch is hook-denied; fetch only through Harvester). You may also load any other tool that genuinely helps THIS rabbit-hole (e.g. context7 for library/API docs) via ToolSearch — pick the best tool for the question, not only web search. Prefer primary, recent sources; stay on-rabbit-hole.`;
-    // COMPUTE_NOTE — capability fragment for the compute-aware agents (mirrors NET). Names the scientific Python stack the compute
-    // environment ships so they reach for it over hand-rolled math; the optional computeNote arg appends per-run guidance after it.
-    this.COMPUTE_NOTE =
-      `The compute environment's python3 ships a scientific stack — prefer it over hand-rolled math: scipy (integration/ODEs, optimization, stats, linear algebra), sympy (symbolic math + dimensional/algebra checks), uncertainties or a numpy Monte-Carlo for error-bar propagation, pint for unit consistency, pandas + statsmodels + scikit-learn for data and statistics, networkx for graph/path reasoning, rdkit for molecular similarity. Import what fits the derivation instead of coding the method yourself.` +
-      (this.computeNote ? '\n' + this.computeNote : '');
-    // THINKER_NOTE — the operator's run-steering, labeled so the reasoning tier treats it as HOW to approach the run (priorities,
-    // framing, constraints, audience) rather than WHAT to research. Pure passthrough of the thinkerNote arg; empty ⇒ nothing renders.
-    this.THINKER_NOTE = this.thinkerNote
-      ? 'OPERATOR STEERING — how to approach THIS run (priorities, framing, constraints, audience), not additional questions to research:\n' +
-        this.thinkerNote
-      : '';
-    // RESEARCHER_NOTE — the operator's terse one-line note to the agents that DO web research/fetching (scout, prospector,
-    // researcher, brainer). Minimal framing — a short prefix then the note. Pure passthrough; empty ⇒ nothing renders.
-    this.RESEARCHER_NOTE = this.researcherNote ? 'Research note: ' + this.researcherNote : '';
-    this.RUBRIC =
-      this.mode === 'collect'
-        ? `MODE = collect (exhaustive): score each rabbit-hole by how much NEW information it adds about the subject; favour breadth.`
-        : `MODE = goal (directed): score each rabbit-hole by how much it improves or better-verifies the answer to the goal; favour rabbit-holes that close or verify it.`;
-    this.STOP =
-      this.mode === 'collect'
-        ? `done = true when the high-value material is collected and remaining rabbit-holes are only marginally novel — the novelty trajectory has fallen well below peak and plateaued. The subject need not be exhausted (a rich one never is); call it when further waves add footnotes, not substance.`
-        : `done = true only when the goal is answered AND pursuing the top remaining rabbit-holes would not materially improve or better-verify the answer.`;
-  }
-}
-const CONFIG = new Configs(args);
 // ╔══ module: src/utils/index.ts ══════════════════════════════════════════
 
              
@@ -597,6 +601,7 @@ const CONFIG = new Configs(args);
         
                 
               
+             
              
              
           
@@ -993,6 +998,67 @@ function sensitivityRanking(
       );
     })
     .join('\n');
+}
+
+// compactCheckpoint — the per-wave crash-safety recovery snapshot (replaces the old scribe-agent
+// checkpoint file): LEAN by design — a human or a resuming agent needs the open frontier, the running
+// answer, and the ledger's LOAD-BEARING shape, not its full evidentiary backing (the harness's own
+// per-agent journal + the persisted _claims.json already hold quotes/cachePaths/entities in full, so
+// none of those ride here). The caller (engine.ts) logs this JSON-stringified behind CONFIG.CHECKPOINT_MARK
+// at the END of a wave, after the brainer's deltas have landed — so it reflects the wave's FINAL state.
+                                     
+               
+                                  
+                                                                                 
+                    
+           
+               
+                  
+                   
+                   
+                        
+                    
+      
+                      
+                                                                                  
+ 
+function compactCheckpoint(bs   
+               
+                                  
+                                                                                              
+                        
+                  
+                            
+                                
+ )                     {
+  return {
+    wave: bs.wave,
+    resultSoFar: bs.resultSoFar,
+    open: bs.rabbitHoles.map((r) => ({
+      id: r.id,
+      keyword: r.keyword,
+      score: lastScore(r),
+      kind: r.kind,
+    })),
+    pursued: bs.pursuedList,
+    claims: bs.claims
+      .filter((c) => !c.retracted)
+      .map((c) => ({
+        id: c.id,
+        claim: clip(c.claim, CONFIG.CLAIM_LINE_CLIP),
+        value: c.value,
+        source: c.source,
+        status: c.status,
+        cluster: c.cluster,
+      })),
+    nullAttacks: bs.nullAttacks.length,
+    derivation: bs.derivation
+      ? {
+          inputs: bs.derivation.inputs.map((i) => i.name),
+          lastRun: bs.derivation.lastRun ? bs.derivation.lastRun.quantiles : null,
+        }
+      : null,
+  };
 }
 
 // venuesWithYieldWarn — per-wave copy of the prospector venues for the brainer prompt, with a
@@ -2860,7 +2926,7 @@ Walk it phase by phase — scout → prospector → each research wave → final
 Prospector→researcher utilization (run this check): the prospector named these venues:
 {{highValueSources}}
 Each lane in laneRecords carries the \`assignedVenues\` the brainer gave it; from that lane's summary + rabbitHoles, judge whether the researcher actually drew on those venues. Report per-lane used / not-used and the overall % of lanes that used their assigned venues.{{focusClause}}
-v3 ledger machinery to sanity-check: claims are quote-pinned + audited by a claimAuditor (dead auditor ⇒ claims stuck pending), clustered by a lineageClerk (bad clustering ⇒ wrong settled/tentative), derivations rerun by a rerunner, checkpoints by a scribe — all degrade to null. Check metrics.claimsTotal / nullAttacksTotal / citationsBogus / chao for anomalies (e.g. all claims pending, zero nullAttacks on a contested topic, bogus citations stripped).
+v3 ledger machinery to sanity-check: claims are quote-pinned + audited by a claimAuditor (dead auditor ⇒ claims stuck pending), clustered by a lineageClerk (bad clustering ⇒ wrong settled/tentative), derivations rerun by a rerunner — all degrade to null. Check metrics.claimsTotal / nullAttacksTotal / citationsBogus / chao for anomalies (e.g. all claims pending, zero nullAttacks on a contested topic, bogus citations stripped).
 Metrics:
 {{metrics}}
 Lane records (wave, keyword, assignedVenues, summary, rabbitHoles):
@@ -3087,44 +3153,6 @@ const rerunner                      = {
   effort: CONFIG.EFFORT.rerunner,
   schema: RERUN,
   buildPrompt: buildRerunner,
-};
-// ╔══ module: src/agents/scribe/prompts.ts ════════════════════════════════
-// SCRIBE prompts — the crash-safety checkpoint template + its assembly function. Template strings are
-// module-level consts; buildScribe only assembles/substitutes the dir + content.
-
-
-                                                       
-
-const SCRIBE_TPL = `{{! scribe — per-wave crash-safety checkpoint: write the given content verbatim to _checkpoint.json }}
-You are the SCRIBE. Write a crash-safety checkpoint — the content below arrives ready to write exactly as given; never clip, reformat, or otherwise alter it.
-Directory: {{dir}}
-Content — write VERBATIM:
-{{content}}
-Steps: mkdir -p {{dir}}; write the content above VERBATIM to {{dir}}/_checkpoint.json via a Bash heredoc with a QUOTED delimiter (e.g. <<'EOF', so shell metacharacters inside the content are never expanded) or python3 -c — never truncate it; then verify the write with \`wc -c\` on the file.
-Return ok:true once verified.{{FINISH}}
-`;
-
-const buildScribe = ({ content, dir }            ) =>
-  render(SCRIBE_TPL, { content, dir, FINISH });
-// ╔══ module: src/agents/scribe/index.ts ══════════════════════════════════
-// SCRIBE — per-wave crash-safety checkpoint. Writes the given content VERBATIM to dir/_checkpoint.json via
-// Bash; runs INSIDE the same parallel() as the lane readers (zero extra wall-clock cost). Tier: haiku (a
-// bounded mechanical file write). Effort: low. Dies → no checkpoint that wave (the last one on disk stands).
-
-
-                                                                      
-
-const SCRIBE         = {
-  type: 'object',
-  properties: { ok: { type: 'boolean' } },
-  required: ['ok'],
-};
-
-const scribe                    = {
-  tier: CONFIG.TIER.scribe,
-  effort: CONFIG.EFFORT.scribe,
-  schema: SCRIBE,
-  buildPrompt: buildScribe,
 };
 // ╔══ module: src/store.ts ════════════════════════════════════════════════
 
@@ -3566,7 +3594,10 @@ const LOG_BUFFER           = [];
 const _log = globalThis.log;
 try {
   globalThis.log = (m          ) => {
-    if (CONFIG.debug) LOG_BUFFER.push(typeof m === 'string' ? m : String(m));
+    const s = typeof m === 'string' ? m : String(m);
+    // per-wave checkpoint lines are a live-output/recovery mechanism, not a debug narrative — keep them
+    // OUT of _debug.md's Run log so a long run's checkpoint spam never bloats it.
+    if (CONFIG.debug && !s.startsWith(CONFIG.CHECKPOINT_MARK)) LOG_BUFFER.push(s);
     return _log(m);
   };
 } catch (e) {
@@ -3764,7 +3795,7 @@ async function runScout(rr                )                      {
       return { angle, out };
     }),
   );
-  const survivors = probeResults.filter((r)                                            => !!r.out);
+  const survivors = probeResults.filter((r)                                            => !!(r && r.out));
   survivors.forEach(({ angle, out }) =>
     log('· scout probe «' + angle.name + '» RETURN · pages=' + out.pages.length),
   );
@@ -4649,10 +4680,11 @@ async function runClaimAuditor(
   const auditable = claims.filter((c) => !!c.cachePath); // only claims that can actually be greped
   if (!auditable.length) return out;
   const chunks = chunk(auditable, CONFIG.AUDIT_BATCH);
+  // parallel() journals thunk results as JSON (a Set would come back as {}), so the thunk returns
+  // the bare agent result and the id set is rebuilt per chunk on the consumer side (order-aligned).
   const results = await parallel(
-    chunks.map((ch, i) => async () => {
-      const ids = new Set(ch.map((c) => c.id));
-      const res = await retryAgent               (
+    chunks.map((ch, i) => () =>
+      retryAgent               (
         claimAuditor.buildPrompt({
           items: ch.map((c) => ({
             id: c.id,
@@ -4669,16 +4701,16 @@ async function runClaimAuditor(
           agentType: CONFIG.GENERAL_PURPOSE,
           schema: claimAuditor.schema,
         },
-      );
-      return { res, ids };
-    }),
+      ),
+    ),
   );
-  for (const { res, ids } of results) {
-    if (!res) continue; // dead chunk — its claims stay 'pending'
+  results.forEach((res, i) => {
+    if (!res) return; // dead chunk — its claims stay 'pending'
+    const ids = new Set(chunks[i].map((c) => c.id));
     for (const c of res.checks || [])
       if (c && ids.has(c.id) && (c.verdict === 'pass' || c.verdict === 'fail'))
         out.set(c.id, { verdict: c.verdict, note: c.note });
-  }
+  });
   return out;
 }
 // ╔══ module: src/agents/lineageClerk/run.ts ══════════════════════════════
@@ -4703,10 +4735,11 @@ async function runLineageClerk(
   const out = new Map                  ();
   if (!claims.length) return out;
   const chunks = chunk(claims, CONFIG.LINEAGE_BATCH);
+  // parallel() journals thunk results as JSON (a Set would come back as {}), so the thunk returns
+  // the bare agent result and the id set is rebuilt per chunk on the consumer side (order-aligned).
   const results = await parallel(
-    chunks.map((ch, i) => async () => {
-      const ids = new Set(ch.map((c) => c.id));
-      const res = await retryAgent                 (
+    chunks.map((ch, i) => () =>
+      retryAgent                 (
         lineageClerk.buildPrompt({
           items: ch.map((c) => ({ id: c.id, source: c.source, entities: c.entities })),
           knownKeys,
@@ -4718,15 +4751,15 @@ async function runLineageClerk(
           effort: lineageClerk.effort,
           schema: lineageClerk.schema,
         },
-      );
-      return { res, ids };
-    }),
+      ),
+    ),
   );
-  for (const { res, ids } of results) {
-    if (!res) continue; // dead chunk — its claims fall back to lineageKeyOf
+  results.forEach((res, i) => {
+    if (!res) return; // dead chunk — its claims fall back to lineageKeyOf
+    const ids = new Set(chunks[i].map((c) => c.id));
     for (const l of res.links || [])
       if (l && ids.has(l.id) && Array.isArray(l.keys)) out.set(l.id, l.keys);
-  }
+  });
   return out;
 }
 // ╔══ module: src/agents/rerunner/run.ts ══════════════════════════════════
@@ -4759,33 +4792,7 @@ async function runRerunner(
   if (!out || !out.ok) return null;
   return { quantiles: out.quantiles || {}, sensitivity: out.sensitivity || {} };
 }
-// ╔══ module: src/agents/scribe/run.ts ════════════════════════════════════
-// SCRIBE dispatch — crash-safety checkpoint: writes `content` VERBATIM to dir/_checkpoint.json. Skips (no
-// agent spawned) on empty content; degrades to false on a dead agent or ok:false (no checkpoint that wave).
-
-
-
-                                                      
-
-async function runScribe(
-  content        ,
-  dir        ,
-  tag        ,
-  phaseName        ,
-)                   {
-  if (!content) return false;
-  const out = await retryAgent           (scribe.buildPrompt({ content, dir }), {
-    label: 'scribe-' + tag,
-    phase: phaseName,
-    model: scribe.tier,
-    effort: scribe.effort,
-    agentType: CONFIG.GENERAL_PURPOSE,
-    schema: scribe.schema,
-  });
-  return !!(out && out.ok);
-}
 // ╔══ module: src/engine.ts ═══════════════════════════════════════════════
-
 
 
 
@@ -5358,26 +5365,7 @@ class ResearchReport {
       const toPursue = lookupNext;
       const tag = 'w' + wave;
       const schedule = await this.scheduleSources(bs, toPursue, tag, CONFIG.PHASE.crawl);
-      // the scribe checkpoint runs CONCURRENTLY with the lane readers (zero extra wall-clock cost); its content
-      // is the PREVIOUS wave's end state (bs is not yet mutated by this wave) — correct by construction.
-      const [raw] = await Promise.all([
-        runResearchers(bs, toPursue, schedule, tag, CONFIG.PHASE.crawl),
-        CONFIG.checkpoint
-          ? runScribe(
-              JSON.stringify({
-                wave,
-                claims: bs.claims,
-                rabbitHoles: bs.rabbitHoles,
-                pursuedList: bs.pursuedList,
-                resultSoFar: bs.resultSoFar,
-                nullAttacks: bs.nullAttacks,
-              }),
-              CONFIG.DIR,
-              tag,
-              CONFIG.PHASE.crawl,
-            )
-          : Promise.resolve(false),
-      ]);
+      const raw = await runResearchers(bs, toPursue, schedule, tag, CONFIG.PHASE.crawl);
       await this.ingestWave(bs, toPursue, raw, wave, CONFIG.PHASE.crawl); // v3: claim-ledger ingest (mutates raw's text fields + bs)
       await this.maybeRerunDerivation(bs, wave, CONFIG.PHASE.crawl); // v3 STEERING: rerun the stored derivation iff dirty or an input claim changed
       // B6 — guard scheduler-DEATH starvation: a wave is "starved" when the scheduler returned NO usable sources at
@@ -5542,6 +5530,10 @@ class ResearchReport {
       applyDeltas(bs, coord, wave);
       this.applyDerivation(bs, coord);
       if (coord.resultSoFar) this.adoptResultSoFar(bs, coord.resultSoFar);
+      // crash-safety checkpoint — a single zero-cost log line, the wave's FINAL state (after the brainer's
+      // deltas have landed): recoverable from the workflow's live output, off the critical path.
+      if (CONFIG.checkpoint)
+        log(CONFIG.CHECKPOINT_MARK + ' w' + wave + ' ' + JSON.stringify(compactCheckpoint(bs)));
       bs.resultLog.push({ wave, resultSoFar: bs.resultSoFar });
       lookupNext = resolveLookupNext(bs, coord, wave, laneCount);
       bs.topScores.push(lookupNext.length ? Math.max(...lookupNext.map((p) => p.score ?? 0)) : 0);
@@ -6375,26 +6367,7 @@ class ResearchReport {
     pursue(bs, toPursue);
     const tag = (bs.isRoot ? '' : bs.name + '-') + 'w' + gw;
     const schedule = await this.scheduleSources(bs, toPursue, tag, phaseName);
-    // the scribe checkpoint runs CONCURRENTLY with the lane readers (zero extra wall-clock cost); its
-    // content is the PREVIOUS wave's end state (bs is not yet mutated by this wave) — correct by construction.
-    const [raw] = await Promise.all([
-      runResearchers(bs, toPursue, schedule, tag, phaseName),
-      CONFIG.checkpoint
-        ? runScribe(
-            JSON.stringify({
-              wave: gw,
-              claims: bs.claims,
-              rabbitHoles: bs.rabbitHoles,
-              pursuedList: bs.pursuedList,
-              resultSoFar: bs.resultSoFar,
-              nullAttacks: bs.nullAttacks,
-            }),
-            CONFIG.DIR,
-            tag,
-            phaseName,
-          )
-        : Promise.resolve(false),
-    ]);
+    const raw = await runResearchers(bs, toPursue, schedule, tag, phaseName);
     await this.ingestWave(bs, toPursue, raw, gw, phaseName); // v3: claim-ledger ingest (mutates raw's text fields + bs)
     await this.maybeRerunDerivation(bs, gw, phaseName); // v3 STEERING: rerun the stored derivation iff dirty or an input claim changed
     const waveStarved = [...schedule.values()].every((s) => !s || !s.length);
@@ -6504,6 +6477,10 @@ class ResearchReport {
     applyDeltas(bs, coord, gw);
     this.applyDerivation(bs, coord);
     if (coord.resultSoFar) this.adoptResultSoFar(bs, coord.resultSoFar);
+    // crash-safety checkpoint — a single zero-cost log line, the wave's FINAL state (after the brainer's
+    // deltas have landed): recoverable from the workflow's live output, off the critical path.
+    if (CONFIG.checkpoint)
+      log(CONFIG.CHECKPOINT_MARK + ' w' + gw + ' ' + JSON.stringify(compactCheckpoint(bs)));
     bs.resultLog.push({ wave: gw, resultSoFar: bs.resultSoFar });
     bs.lookupNext = isLastWave ? [] : resolveLookupNext(bs, coord, gw, laneCount);
     bs.topScores.push(

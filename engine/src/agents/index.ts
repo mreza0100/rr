@@ -25,5 +25,3 @@ export { lineageClerk } from './lineageClerk/index.js';
 export { runLineageClerk } from './lineageClerk/run.js';
 export { rerunner } from './rerunner/index.js';
 export { runRerunner } from './rerunner/run.js';
-export { scribe } from './scribe/index.js';
-export { runScribe } from './scribe/run.js';

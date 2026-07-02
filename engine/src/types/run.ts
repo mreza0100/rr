@@ -24,6 +24,7 @@ export interface RawArgs {
   thinkerNote?: unknown;
   researcherNote?: unknown;
   maxWave?: unknown;
+  chaoCoverageStop?: unknown;
   maxParallelBrainers?: unknown;
   parallelLaneResearchAgentsPerWave?: unknown;
   parallelSourcesPerLaneResearchAgent?: unknown;

@@ -20,6 +20,7 @@ import {
   computedConfidence,
   minConfidence,
   lintCitations,
+  compactCheckpoint,
 } from './utils/index.js';
 import { brainer, refiner } from './agents/index.js';
 import { runScout } from './agents/scout/run.js';
@@ -36,7 +37,6 @@ import { runDebug } from './agents/debugAnalyst/run.js';
 import { runClaimAuditor } from './agents/claimAuditor/run.js';
 import { runLineageClerk } from './agents/lineageClerk/run.js';
 import { runRerunner } from './agents/rerunner/run.js';
-import { runScribe } from './agents/scribe/run.js';
 import {
   addRabbitHole,
   applyDeltas,
@@ -599,26 +599,7 @@ export class ResearchReport {
       const toPursue = lookupNext;
       const tag = 'w' + wave;
       const schedule = await this.scheduleSources(bs, toPursue, tag, CONFIG.PHASE.crawl);
-      // the scribe checkpoint runs CONCURRENTLY with the lane readers (zero extra wall-clock cost); its content
-      // is the PREVIOUS wave's end state (bs is not yet mutated by this wave) — correct by construction.
-      const [raw] = await Promise.all([
-        runResearchers(bs, toPursue, schedule, tag, CONFIG.PHASE.crawl),
-        CONFIG.checkpoint
-          ? runScribe(
-              JSON.stringify({
-                wave,
-                claims: bs.claims,
-                rabbitHoles: bs.rabbitHoles,
-                pursuedList: bs.pursuedList,
-                resultSoFar: bs.resultSoFar,
-                nullAttacks: bs.nullAttacks,
-              }),
-              CONFIG.DIR,
-              tag,
-              CONFIG.PHASE.crawl,
-            )
-          : Promise.resolve(false),
-      ]);
+      const raw = await runResearchers(bs, toPursue, schedule, tag, CONFIG.PHASE.crawl);
       await this.ingestWave(bs, toPursue, raw, wave, CONFIG.PHASE.crawl); // v3: claim-ledger ingest (mutates raw's text fields + bs)
       await this.maybeRerunDerivation(bs, wave, CONFIG.PHASE.crawl); // v3 STEERING: rerun the stored derivation iff dirty or an input claim changed
       // B6 — guard scheduler-DEATH starvation: a wave is "starved" when the scheduler returned NO usable sources at
@@ -783,6 +764,10 @@ export class ResearchReport {
       applyDeltas(bs, coord, wave);
       this.applyDerivation(bs, coord);
       if (coord.resultSoFar) this.adoptResultSoFar(bs, coord.resultSoFar);
+      // crash-safety checkpoint — a single zero-cost log line, the wave's FINAL state (after the brainer's
+      // deltas have landed): recoverable from the workflow's live output, off the critical path.
+      if (CONFIG.checkpoint)
+        log(CONFIG.CHECKPOINT_MARK + ' w' + wave + ' ' + JSON.stringify(compactCheckpoint(bs)));
       bs.resultLog.push({ wave, resultSoFar: bs.resultSoFar });
       lookupNext = resolveLookupNext(bs, coord, wave, laneCount);
       bs.topScores.push(lookupNext.length ? Math.max(...lookupNext.map((p) => p.score ?? 0)) : 0);
@@ -1616,26 +1601,7 @@ export class ResearchReport {
     pursue(bs, toPursue);
     const tag = (bs.isRoot ? '' : bs.name + '-') + 'w' + gw;
     const schedule = await this.scheduleSources(bs, toPursue, tag, phaseName);
-    // the scribe checkpoint runs CONCURRENTLY with the lane readers (zero extra wall-clock cost); its
-    // content is the PREVIOUS wave's end state (bs is not yet mutated by this wave) — correct by construction.
-    const [raw] = await Promise.all([
-      runResearchers(bs, toPursue, schedule, tag, phaseName),
-      CONFIG.checkpoint
-        ? runScribe(
-            JSON.stringify({
-              wave: gw,
-              claims: bs.claims,
-              rabbitHoles: bs.rabbitHoles,
-              pursuedList: bs.pursuedList,
-              resultSoFar: bs.resultSoFar,
-              nullAttacks: bs.nullAttacks,
-            }),
-            CONFIG.DIR,
-            tag,
-            phaseName,
-          )
-        : Promise.resolve(false),
-    ]);
+    const raw = await runResearchers(bs, toPursue, schedule, tag, phaseName);
     await this.ingestWave(bs, toPursue, raw, gw, phaseName); // v3: claim-ledger ingest (mutates raw's text fields + bs)
     await this.maybeRerunDerivation(bs, gw, phaseName); // v3 STEERING: rerun the stored derivation iff dirty or an input claim changed
     const waveStarved = [...schedule.values()].every((s) => !s || !s.length);
@@ -1745,6 +1711,10 @@ export class ResearchReport {
     applyDeltas(bs, coord, gw);
     this.applyDerivation(bs, coord);
     if (coord.resultSoFar) this.adoptResultSoFar(bs, coord.resultSoFar);
+    // crash-safety checkpoint — a single zero-cost log line, the wave's FINAL state (after the brainer's
+    // deltas have landed): recoverable from the workflow's live output, off the critical path.
+    if (CONFIG.checkpoint)
+      log(CONFIG.CHECKPOINT_MARK + ' w' + gw + ' ' + JSON.stringify(compactCheckpoint(bs)));
     bs.resultLog.push({ wave: gw, resultSoFar: bs.resultSoFar });
     bs.lookupNext = isLastWave ? [] : resolveLookupNext(bs, coord, gw, laneCount);
     bs.topScores.push(

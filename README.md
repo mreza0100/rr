@@ -36,7 +36,7 @@ Scout swarm:
         claim changes, and its variance decomposition steers which leads get read next (a
         value-of-information stop test). Lead selection is self-calibrating (predicted-vs-
         realized yield per lead kind). A per-wave validator (sonnet) checks coverage and reopens
-        thin lanes; a haiku scribe checkpoints the ledger to disk each wave, off the critical path.
+        thin lanes; each wave also logs a zero-cost ⏺CKPT recovery line — no agent involved.
   → Finalize: initiator groups the load-bearing facts → refine adversarially hardens each
         group against the sources, folding every counter-search outcome into the ledger → an
         Opus JUDGE (the sole terminal skeptic) stress-tests the hardened answer — goal met?
@@ -68,16 +68,27 @@ The brainer never re-emits the whole frontier — it returns **deltas** (rescore
 | **collect** | `mode: 'collect'` | Exhaustive — inventories breadth until saturation (a landscape or roster) |
 | **fast** | `rr fast <query>` | Skips the background run — a **Sonnet** lead nests parallel **Haiku** diggers down the rabbit-holes and answers inline, right now |
 
-## Installation
+## Install anywhere
 
-As a Claude Code skill — copy the runtime files into your project:
+**Per-project** — clone, then copy the 3 runtime files in (`engine/` is dev-only, not needed at runtime):
 
 ```bash
-mkdir -p .claude/skills/rr
-cp SKILL.md workflow.js persist.js .claude/skills/rr/
+git clone https://github.com/mreza0100/rr
+mkdir -p <project>/.claude/skills/rr
+cp rr/{SKILL.md,workflow.js,persist.js} <project>/.claude/skills/rr/
 ```
 
-RR fetches through the **Harvester** MCP server ([github.com/mreza0100/harvester-web-mcp](https://github.com/mreza0100/harvester-web-mcp)) — install and connect it first; without it, every fetch errors and the run is snippet-only. Then in Claude Code: `RR <question>`, `research <topic>`, `look into <topic>`, or `rr fast <query>`.
+**Global** (every project on the machine) — same 3 files into `~/.claude/skills/rr/` instead.
+
+**Requirements:**
+
+- Claude Code with the Workflow tool.
+- The **Harvester** MCP server ([github.com/mreza0100/harvester-web-mcp](https://github.com/mreza0100/harvester-web-mcp)) connected — without it, every fetch errors and the run is snippet-only.
+- `python3` with a scientific stack (scipy, sympy, uncertainties, pandas) for compute/derivation — optional, pass `compute: false` without it.
+
+**Verify:** in Claude Code say `rr fast <any question>` (instant, no Workflow needed), then `RR <question>` for a full background run. Results persist to `RR/{slug}/`.
+
+**Updating:** re-copy the 3 files from a fresh clone/pull — `SKILL.md`'s version pins compatibility.
 
 ## Launch + results
 
@@ -90,7 +101,7 @@ Workflow({ scriptPath: "<skill-base-dir>/workflow.js",   // absolute — the CWD
 - `maxParallelBrainers` defaults `1` — raise to `2`–`5` to let the brainer spawn focused children for independent investigations (the brainer tree).
 - `thinkerNote` steers the Opus reasoning tier (priorities, framing, audience); `researcherNote` steers the web agents (which sources to favour); `computeNote` adds run-specific guidance for derivations.
 
-The run returns its artifacts in the completion output; persist them with `node <skill-base-dir>/persist.js <output-file>` → `RR/{slug}/result.md` (read this first) plus `_claims.json` / `_claims.md` (the full claim ledger + nullAttacks), `_rabbitHoles.json`, `_tree.md`, and the per-wave/initiator/refinement/judge trail. With `debug: true` (default) it also writes `_debug.md`. A multi-brainer run additionally writes `_brainers.json` + `_brainers-tree.md` and each non-winning brainer's `result-<name>.md`. `_checkpoint.json` is a separate case — the scribe writes it straight to `RR/{slug}/` on disk *during* the run (crash-safety, `checkpoint: true` by default), not through the completion payload, so it is already there before `persist.js` even runs.
+The run returns its artifacts in the completion output; persist them with `node <skill-base-dir>/persist.js <output-file>` → `RR/{slug}/result.md` (read this first) plus `_claims.json` / `_claims.md` (the full claim ledger + nullAttacks), `_rabbitHoles.json`, `_tree.md`, and the per-wave/initiator/refinement/judge trail. With `debug: true` (default) it also writes `_debug.md`. A multi-brainer run additionally writes `_brainers.json` + `_brainers-tree.md` and each non-winning brainer's `result-<name>.md`. Crash-safety no longer writes a file: each wave logs a `⏺CKPT` recovery line straight into the workflow's live output (`checkpoint: true` by default), recoverable mid-run from the logs; the harness also journals every agent result natively and supports `resumeFromRunId` for a true resume.
 
 ## Build & development
 
@@ -115,7 +126,7 @@ Edit `engine/src/` — one directory per agent under `src/agents/<agent>/` (a `p
 - **One brainer, delta-driven — that can fork.** A single Opus brain scores and steers an id-keyed rabbit-hole store via deltas and carries a structured running answer; for a goal with independent branches it can spawn focused child brainers (the brainer tree) that race to the first judge-upheld answer, merging their evidence back into the winner's ledger either way.
 - **Separate the deriver from the judge.** A per-wave validator, attack lanes that hunt counter-evidence as claims settle, and a terminal Opus judge with retraction power pressure-test the work; none of them is the brain that produced it, so the answer is never self-certified.
 - **Fetch through Harvester.** All fetching routes through the Harvester MCP — legal open-access resolution, PDF / book / image parsing, and a wall-bypass chain — so the readers reach primary literature, not just snippets.
-- **Tiered models.** Haiku scout probes + readers + claimAuditor + rerunner + scribe; Sonnet scout planner/merger + scheduler + validator + refine + lineageClerk; Opus brainer / prospector / initiator / judge / synthesiser / debug-analyst.
+- **Tiered models.** Haiku scout probes + readers + claimAuditor + rerunner; Sonnet scout planner/merger + scheduler + validator + refine + lineageClerk; Opus brainer / prospector / initiator / judge / synthesiser / debug-analyst.
 - **Prompts as code.** Each agent is a `src/agents/<agent>/` module — a backtick prompt template plus its schema and tier; the build inlines them into the bundle.
 
 ## License

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 // Descriptor + prompt-builder tests are PURE — static imports (mirrors agents.test.ts / prompts.test.ts).
-import { claimAuditor, lineageClerk, rerunner, scribe } from '../src/agents/index.js';
+import { claimAuditor, lineageClerk, rerunner } from '../src/agents/index.js';
 import { FINISH } from '../src/agents/shared.js';
 import { BrainerState } from '../src/brainerState.js';
 import type { AgentOpts, Claim, Derivation } from '../src/types/index.js';
@@ -67,15 +67,6 @@ async function loadRerunner(agent: AgentStub) {
   vi.resetModules();
   return import('../src/agents/rerunner/run.js');
 }
-async function loadScribe(agent: AgentStub) {
-  globalThis.args = { query: 'q' };
-  globalThis.agent = async (p: string, o: AgentOpts) => agent(p, o);
-  globalThis.log = () => {};
-  globalThis.phase = () => {};
-  globalThis.parallel = DEFAULT_PARALLEL;
-  vi.resetModules();
-  return import('../src/agents/scribe/run.js');
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 describe('v3 ledger clerks — descriptor shape', () => {
@@ -99,13 +90,6 @@ describe('v3 ledger clerks — descriptor shape', () => {
     expect(rerunner.schema.type).toBe('object');
     expect(rerunner.schema.required).toEqual(['ok']);
     expect(typeof rerunner.buildPrompt).toBe('function');
-  });
-  it('scribe: haiku/low, schema requires ok', () => {
-    expect(scribe.tier).toBe('haiku');
-    expect(scribe.effort).toBe('low');
-    expect(scribe.schema.type).toBe('object');
-    expect(scribe.schema.required).toEqual(['ok']);
-    expect(typeof scribe.buildPrompt).toBe('function');
   });
 });
 
@@ -141,12 +125,6 @@ describe('v3 ledger clerks — prompt builders', () => {
     const out = rerunner.buildPrompt({ code: 'print("hi")', inputsJson: '{"a":1}' });
     expect(out).toContain('print("hi")');
     expect(out).toContain('{"a":1}');
-    expect(out).toContain(FINISH.trim());
-  });
-  it('scribe renders the dir + content + FINISH', () => {
-    const out = scribe.buildPrompt({ content: '{"wave":1}', dir: 'RR/x' });
-    expect(out).toContain('{"wave":1}');
-    expect(out).toContain('RR/x');
     expect(out).toContain(FINISH.trim());
   });
 });
@@ -344,37 +322,5 @@ describe('rerunner — run fn', () => {
     const derivation: Derivation = { code: 'x', inputs: [], lastRun: null };
     const out = await mod.runRerunner(mkBs(derivation), 'Research');
     expect(out).toBeNull();
-  });
-});
-
-describe('scribe — run fn', () => {
-  it('empty content → false, no agent spawned', async () => {
-    const { stub, calls } = countingStub(() => ({ ok: true }));
-    const mod = await loadScribe(stub);
-    const out = await mod.runScribe('', 'RR/x', 'w1', 'Research');
-    expect(out).toBe(false);
-    expect(calls.length).toBe(0);
-  });
-  it('ok:true → true, label scribe-<tag>', async () => {
-    const { stub, calls } = countingStub(() => ({ ok: true }));
-    const mod = await loadScribe(stub);
-    const out = await mod.runScribe('{"wave":1}', 'RR/x', 'w2', 'Research');
-    expect(out).toBe(true);
-    expect(calls.length).toBe(1);
-    expect(calls[0].opts.label).toBe('scribe-w2');
-  });
-  it('ok:false → false', async () => {
-    const { stub } = countingStub(() => ({ ok: false }));
-    const mod = await loadScribe(stub);
-    const out = await mod.runScribe('{"wave":1}', 'RR/x', 'w3', 'Research');
-    expect(out).toBe(false);
-  });
-  it('a dead agent (throws) degrades to false', async () => {
-    const { stub } = countingStub(() => {
-      throw new Error('agent died');
-    });
-    const mod = await loadScribe(stub);
-    const out = await mod.runScribe('{"wave":1}', 'RR/x', 'w4', 'Research');
-    expect(out).toBe(false);
   });
 });

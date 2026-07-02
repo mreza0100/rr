@@ -20,10 +20,11 @@ export async function runClaimAuditor(
   const auditable = claims.filter((c) => !!c.cachePath); // only claims that can actually be greped
   if (!auditable.length) return out;
   const chunks = chunk(auditable, CONFIG.AUDIT_BATCH);
+  // parallel() journals thunk results as JSON (a Set would come back as {}), so the thunk returns
+  // the bare agent result and the id set is rebuilt per chunk on the consumer side (order-aligned).
   const results = await parallel(
-    chunks.map((ch, i) => async () => {
-      const ids = new Set(ch.map((c) => c.id));
-      const res = await retryAgent<ClaimAuditOut>(
+    chunks.map((ch, i) => () =>
+      retryAgent<ClaimAuditOut>(
         claimAuditor.buildPrompt({
           items: ch.map((c) => ({
             id: c.id,
@@ -40,15 +41,15 @@ export async function runClaimAuditor(
           agentType: CONFIG.GENERAL_PURPOSE,
           schema: claimAuditor.schema,
         },
-      );
-      return { res, ids };
-    }),
+      ),
+    ),
   );
-  for (const { res, ids } of results) {
-    if (!res) continue; // dead chunk — its claims stay 'pending'
+  results.forEach((res, i) => {
+    if (!res) return; // dead chunk — its claims stay 'pending'
+    const ids = new Set(chunks[i].map((c) => c.id));
     for (const c of res.checks || [])
       if (c && ids.has(c.id) && (c.verdict === 'pass' || c.verdict === 'fail'))
         out.set(c.id, { verdict: c.verdict, note: c.note });
-  }
+  });
   return out;
 }

@@ -424,12 +424,3 @@ export interface RerunnerOut {
   sensitivity?: Record<string, number>;
   note?: string; // the error message when ok is false
 }
-
-// ── scribe — per-wave crash-safety checkpoint (v3 ledger clerk) ──
-export interface ScribeArgs {
-  content: string; // arrives ready to write verbatim — the agent clips/reformats nothing
-  dir: string;
-}
-export interface ScribeOut {
-  ok: boolean;
-}

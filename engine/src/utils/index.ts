@@ -5,6 +5,7 @@ import type {
   ClaimEntities,
   ClaimStatus,
   Confidence,
+  Derivation,
   DerivInput,
   Finding,
   LeadKind,
@@ -400,6 +401,67 @@ export function sensitivityRanking(
       );
     })
     .join('\n');
+}
+
+// compactCheckpoint — the per-wave crash-safety recovery snapshot (replaces the old scribe-agent
+// checkpoint file): LEAN by design — a human or a resuming agent needs the open frontier, the running
+// answer, and the ledger's LOAD-BEARING shape, not its full evidentiary backing (the harness's own
+// per-agent journal + the persisted _claims.json already hold quotes/cachePaths/entities in full, so
+// none of those ride here). The caller (engine.ts) logs this JSON-stringified behind CONFIG.CHECKPOINT_MARK
+// at the END of a wave, after the brainer's deltas have landed — so it reflects the wave's FINAL state.
+export interface CheckpointSnapshot {
+  wave: number;
+  resultSoFar: ResultSoFar | null;
+  open: { id: number; keyword: string; score: number | null; kind?: LeadKind }[];
+  pursued: string[];
+  claims: {
+    id: number;
+    claim: string;
+    value?: string;
+    source: string;
+    status: ClaimStatus;
+    cluster: number;
+  }[];
+  nullAttacks: number;
+  derivation: { inputs: string[]; lastRun: Record<string, number> | null } | null;
+}
+export function compactCheckpoint(bs: {
+  wave: number;
+  resultSoFar: ResultSoFar | null;
+  rabbitHoles: { id: number; keyword: string; scoreHistory: ScoreEntry[]; kind?: LeadKind }[];
+  pursuedList: string[];
+  claims: Claim[];
+  nullAttacks: NullAttack[];
+  derivation: Derivation | null;
+}): CheckpointSnapshot {
+  return {
+    wave: bs.wave,
+    resultSoFar: bs.resultSoFar,
+    open: bs.rabbitHoles.map((r) => ({
+      id: r.id,
+      keyword: r.keyword,
+      score: lastScore(r),
+      kind: r.kind,
+    })),
+    pursued: bs.pursuedList,
+    claims: bs.claims
+      .filter((c) => !c.retracted)
+      .map((c) => ({
+        id: c.id,
+        claim: clip(c.claim, CONFIG.CLAIM_LINE_CLIP),
+        value: c.value,
+        source: c.source,
+        status: c.status,
+        cluster: c.cluster,
+      })),
+    nullAttacks: bs.nullAttacks.length,
+    derivation: bs.derivation
+      ? {
+          inputs: bs.derivation.inputs.map((i) => i.name),
+          lastRun: bs.derivation.lastRun ? bs.derivation.lastRun.quantiles : null,
+        }
+      : null,
+  };
 }
 
 // venuesWithYieldWarn — per-wave copy of the prospector venues for the brainer prompt, with a

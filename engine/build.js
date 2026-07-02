@@ -33,8 +33,8 @@ const OUT = join(SRC, '..', 'workflow.js');
 // (`const CONFIG = new Configs(args)`, `const laneCount = CONFIG.…`) resolve identically.
 const ORDER = [
   'src/meta.ts', // keeps `export const meta` — the ONE surviving export, at the very top
-  'src/agents/shared.ts', // shared prompt fragments (FINISH/WEB_ONLY) + shared schema bricks (pure literals, no deps)
-  'src/config.ts', // Configs class + `const CONFIG = new Configs(args)`
+  'src/config.ts', // Configs class + `const CONFIG = new Configs(args)` — before shared: its schema bricks render CONFIG knobs
+  'src/agents/shared.ts', // shared prompt fragments (FINISH/WEB_ONLY) + shared schema bricks (render CONFIG knobs into descriptions)
   'src/utils/index.ts', // pure helpers + PROMPT_LOG/withPrompt + the local render() (depend on CONFIG)
   // per-agent modules — one DIRECTORY per agent: `prompts.ts` (template consts + the assembly fn) then
   // `index.ts` (the schema literal + the agent object referencing the assembly fn). prompts BEFORE index so
@@ -70,8 +70,6 @@ const ORDER = [
   'src/agents/lineageClerk/index.ts',
   'src/agents/rerunner/prompts.ts',
   'src/agents/rerunner/index.ts',
-  'src/agents/scribe/prompts.ts',
-  'src/agents/scribe/index.ts',
   'src/store.ts', // store reducers (pure functions over a state object)
   'src/brainerState.ts', // BrainerState — one brainer's private crawl state (a StoreState); before the run.ts modules that type their param on it
   'src/runtime.ts', // shared sub-agent caller (retryAgent) + debug I/O buffers — before the run.ts modules
@@ -91,7 +89,6 @@ const ORDER = [
   'src/agents/claimAuditor/run.ts',
   'src/agents/lineageClerk/run.ts',
   'src/agents/rerunner/run.ts',
-  'src/agents/scribe/run.ts',
   'src/engine.ts', // the ResearchReport class — orchestration backbone + every files[name] = … write
 ];
 const TAIL =

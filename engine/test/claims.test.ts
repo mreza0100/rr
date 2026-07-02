@@ -14,9 +14,11 @@ import {
   vocabSummary,
   lintCitations,
   sensitivityRanking,
+  compactCheckpoint,
 } from '../src/utils/index.js';
 import type {
   Claim,
+  Derivation,
   DerivInput,
   NullAttack,
   ResultSoFar,
@@ -483,5 +485,116 @@ describe('sensitivityRanking — the initiator SENSITIVITY RANKING body (v3 batc
     const inputs: DerivInput[] = [{ name: 'x', dist: 'wide', claimIds: [1], prior: false }];
     const out = sensitivityRanking({ inputs, sensitivity: { x: 0.5 } }, claims);
     expect(out).toBe('- x (0.50)');
+  });
+});
+
+// compactCheckpoint replaces the old scribe-agent checkpoint file: a LEAN per-wave recovery snapshot,
+// logged behind CONFIG.CHECKPOINT_MARK — no quotes, no cachePaths, no entities (the journal + _claims.json
+// already hold the full evidentiary backing; this is the human/agent-readable recovery line).
+describe('compactCheckpoint — the per-wave crash-safety recovery snapshot', () => {
+  it('shapes open leads (id/keyword/lastScore/kind), the pursued list, and nullAttacks as a COUNT', () => {
+    const bs = {
+      wave: 3,
+      resultSoFar: RSF_MIN,
+      rabbitHoles: [
+        {
+          id: 1,
+          keyword: 'hnsw tuning',
+          scoreHistory: [{ wave: 1, score: 80 }],
+          kind: 'gap' as const,
+        },
+        { id: 2, keyword: 'no score yet', scoreHistory: [] },
+      ],
+      pursuedList: ['hnsw tuning'],
+      claims: [] as Claim[],
+      nullAttacks: [
+        { topic: 't', claimIds: [1], queries: ['q'], wave: 1, phase: 'Research' },
+      ] as NullAttack[],
+      derivation: null,
+    };
+    const snap = compactCheckpoint(bs);
+    expect(snap.wave).toBe(3);
+    expect(snap.resultSoFar).toBe(RSF_MIN);
+    expect(snap.open).toEqual([
+      { id: 1, keyword: 'hnsw tuning', score: 80, kind: 'gap' },
+      { id: 2, keyword: 'no score yet', score: null, kind: undefined },
+    ]);
+    expect(snap.pursued).toEqual(['hnsw tuning']);
+    expect(snap.nullAttacks).toBe(1); // a COUNT, not the array
+  });
+  it('carries only LEAN claim fields (id/claim/value/source/status/cluster) — no quote, cachePath, or entities — and drops retracted claims', () => {
+    const long = 'x'.repeat(150);
+    const claims = [
+      claim({
+        id: 1,
+        claim: long,
+        value: '0.98',
+        source: 'https://a.com',
+        status: 'settled',
+        cluster: 2,
+        quote: 'a verbatim quote never pinned to the checkpoint line',
+        cachePath: '/cache/1.txt',
+        entities: { funder: 'Acme Corp' },
+      }),
+      claim({ id: 2, claim: 'gone', retracted: true }),
+    ];
+    const bs = {
+      wave: 1,
+      resultSoFar: null,
+      rabbitHoles: [],
+      pursuedList: [],
+      claims,
+      nullAttacks: [] as NullAttack[],
+      derivation: null,
+    };
+    const snap = compactCheckpoint(bs);
+    expect(snap.claims.length).toBe(1); // the retracted claim is excluded
+    expect(snap.claims[0]).toEqual({
+      id: 1,
+      claim: long.slice(0, 117) + '…', // clipped to CONFIG.CLAIM_LINE_CLIP (120), same rule as ledgerLines
+      value: '0.98',
+      source: 'https://a.com',
+      status: 'settled',
+      cluster: 2,
+    });
+    expect(Object.keys(snap.claims[0]).sort()).toEqual(
+      ['id', 'claim', 'value', 'source', 'status', 'cluster'].sort(),
+    );
+    const json = JSON.stringify(snap);
+    expect(json).not.toContain('verbatim quote');
+    expect(json).not.toContain('cachePath');
+    expect(json).not.toContain('/cache/1.txt');
+    expect(json).not.toContain('Acme Corp');
+  });
+  it('summarizes a derivation to input NAMES + lastRun QUANTILES only — no sensitivity, no wave', () => {
+    const derivation: Derivation = {
+      code: 'print(1)',
+      inputs: [{ name: 'x', dist: 'normal', claimIds: [1], prior: false }],
+      lastRun: { quantiles: { p50: 1.5 }, sensitivity: { x: 0.9 }, wave: 2 },
+    };
+    const bs = {
+      wave: 2,
+      resultSoFar: null,
+      rabbitHoles: [],
+      pursuedList: [],
+      claims: [] as Claim[],
+      nullAttacks: [] as NullAttack[],
+      derivation,
+    };
+    expect(compactCheckpoint(bs).derivation).toEqual({ inputs: ['x'], lastRun: { p50: 1.5 } });
+  });
+  it('a derivation authored but not yet rerun → lastRun null; no derivation → null outright', () => {
+    const authored: Derivation = { code: 'x', inputs: [], lastRun: null };
+    const bsAuthored = {
+      wave: 1,
+      resultSoFar: null,
+      rabbitHoles: [],
+      pursuedList: [],
+      claims: [] as Claim[],
+      nullAttacks: [] as NullAttack[],
+      derivation: authored,
+    };
+    expect(compactCheckpoint(bsAuthored).derivation).toEqual({ inputs: [], lastRun: null });
+    expect(compactCheckpoint({ ...bsAuthored, derivation: null }).derivation).toBeNull();
   });
 });

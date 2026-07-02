@@ -71,7 +71,6 @@ working, confidence). `RabbitHole.kind: 'seed'|'gap'|'citation'|'attack'|'entity
 | **claimAuditor** | haiku | Batched per wave: for each new claim with a cachePath, verify (Bash/python grep) the quote EXISTS in the cache file and carries the claim on its own → `{id, verdict: pass\|fail, note?}`. Dies → claims stay `pending` (treated as unpinned downstream). |
 | **lineageClerk** | haiku | Batched per wave: canonicalize new claims' entities against the known entity list → same-as links; JS union-finds clusters. Dies → deterministic JS fallback: cluster by `norm(funder \|\| venue \|\| source-domain)`; claims with nothing resolvable → cluster 0 (shared unknown). |
 | **rerunner** | haiku | Execute `bs.derivation.code` (pure, seeded) with current inputs via Bash python3 → `{quantiles, sensitivity}`. Contract: script reads one JSON arg, prints one JSON result. Dies → lastRun kept stale; brainer told it is stale. |
-| **scribe** | haiku | Per-wave checkpoint: writes `_checkpoint.json` (claims + open store + resultSoFar + wave) into CONFIG.DIR via Bash. Runs INSIDE the same parallel() as the lane readers — zero wall-clock cost. Dies → no checkpoint that wave. |
 
 ## The 6-channel footer (CONFIG.FOOTER + reader/scout schemas)
 
@@ -84,12 +83,15 @@ Readers return alongside `runningAnswer`:
 
 ## Per-wave engine order (ONE shared helper used by runCrawl AND runOneWave — kill the duplication)
 
-schedule → parallel(lane readers + scribe) → collect claims (JS assigns ids, dedups near-identical
+schedule → lane readers → collect claims (JS assigns ids, dedups near-identical
 quotes) → parallel(claimAuditor batch, lineageClerk batch) → JS: union-find clusters, compute
 statuses, update chao + yieldCalib + vocabulary → rerunner (iff derivation && inputs changed) →
 validator (unchanged) → brainer (new prompt sections) → applyDeltas + store derivation updates →
 attack-lane bookkeeping (lane kind 'attack' with no counter-evidence → nullAttack; with counter →
 target claim contested + `counter` set).
+
+checkpoint = a ⏺CKPT log line, zero-cost — no agent. Logged last, after applyDeltas, so it
+captures the wave's final state (CONFIG.checkpoint gates it; default true).
 
 **Status (utils/claimStatus, pure):** `fail`/`retracted` → excluded. `contested` iff an unretracted
 attacking claim targets it. `settled` iff supporting clusters ≥ SETTLED_MIN_CLUSTERS AND
@@ -141,9 +143,10 @@ change it; engine stores + reruns it (replaces v2's inline COMPUTE TO STEER).
 
 ## Config additions
 
-`TIER/EFFORT` for claimAuditor, lineageClerk, rerunner, scribe. Knobs: `QUOTE_MAX_CHARS=300`,
+`TIER/EFFORT` for claimAuditor, lineageClerk, rerunner. Knobs: `QUOTE_MAX_CHARS=300`,
 `CLAIM_DIGEST_CAP=30`, `SETTLED_MIN_CLUSTERS=2`, `VOI_SENS_THRESHOLD=0.15`, `CALIB_CLAMP_LO=0.5`,
-`CALIB_CLAMP_HI=1.5`, `CALIB_NORM=4`, `CHAO_COVERAGE_STOP=0.9`, `checkpoint=true` (arg-controllable).
+`CALIB_CLAMP_HI=1.5`, `CALIB_NORM=4`, `CHAO_COVERAGE_STOP=0.9`, `checkpoint=true` (arg-controllable),
+`CHECKPOINT_MARK='⏺CKPT'`.
 Version → 3.0.0.
 
 ## Non-negotiables (from the judges)

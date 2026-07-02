@@ -1071,7 +1071,6 @@ describe('debugAnalyst — v3 ledger machinery sanity-check clause (finding I)',
     expect(out).toContain('claimAuditor');
     expect(out).toContain('lineageClerk');
     expect(out).toContain('rerunner');
-    expect(out).toContain('scribe');
     expect(out).toContain('metrics.claimsTotal');
     expect(out).toContain('nullAttacksTotal');
     expect(out).toContain('citationsBogus');
