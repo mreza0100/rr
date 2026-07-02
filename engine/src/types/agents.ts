@@ -4,12 +4,22 @@
 import type { Schema } from './schema.js';
 import type { Metrics } from './run.js';
 import type {
+  ChaoStats,
+  ClaimEntities,
+  ClaimSeed,
+  DerivInput,
+  DerivationDelta,
+  TermSeed,
+  YieldCalib,
+} from './claims.js';
+import type {
   Confidence,
   CleanReport,
   Effort,
   FactToHarden,
   Finding,
   LaneRecord,
+  LeadKind,
   LookupItem,
   Mode,
   NextSource,
@@ -37,17 +47,66 @@ export interface Agent<Args> {
   buildPrompt: (args: Args) => string;
 }
 
-// ── scout ──
+// ── scout swarm (v3 batch 2s): scoutPlanner decomposes the query + proposes search angles → a `scout`
+// probe sweeps each angle → scoutMerger folds every probe into the FINAL, same-shape ScoutOut ──
+
+// stage 1 — scoutPlanner: senses the landscape (1-2 quick WebSearches) then decomposes + proposes angles.
+export interface ScoutPlannerArgs {
+  query: string;
+  mode: Mode;
+  net: string;
+  researcherNote?: string;
+}
+// one search angle the planner proposes; each spawns exactly one probe.
+export interface ScoutAngle {
+  name: string;
+  searchQuery: string; // a concrete, distinct query for THIS angle
+  why: string;
+  lens?: string; // the interpretive lens this probe reads its sources through
+}
+export interface ScoutPlannerOut {
+  decomposition: string; // the query's distinct axes, one line each
+  angles: ScoutAngle[];
+}
+
+// stage 2 — scout: one PROBE of the swarm, scoped to a single angle (schema unchanged from v2's single
+// scout — field-compatible so the merger + both fallback paths can reuse the exact same shape).
 export interface ScoutArgs {
   query: string;
   net: string;
   footer: string;
+  angleName: string;
+  angleWhy: string;
+  angleLens: string;
+  searchQuery: string;
+  index: number; // 1-based: probe i of total
+  total: number;
   researcherNote?: string;
 }
 export interface ScoutOut {
-  landscape: string;
+  landscape: string; // 2-3 sentences on what THIS ANGLE revealed (a probe); the merger's FINAL landscape weaves every angle's note into one paragraph
   pages: Page[];
   deadEnds?: string[];
+  claims?: ClaimSeed[]; // union of the fetched pages' load-bearing facts, each pinned to a verbatim quote (no digest yet — never carries `stance`)
+  nextSources?: NextSource[]; // union of the fetched pages' highest-value outbound citations — no ledger exists yet, so never carries expect/target
+  newTerms?: TermSeed[]; // union of the community terms of art the fetched pages use that we did not
+}
+
+// stage 3 — scoutMerger: folds every surviving probe's ScoutOut into ONE final ScoutOut (same schema);
+// no tools — a plain subagent reducing material the probes already gathered.
+export interface ScoutProbeResult {
+  name: string; // the angle name
+  landscape: string; // the probe's angle note
+  pages: Page[];
+  claims?: ClaimSeed[];
+  nextSources?: NextSource[];
+  newTerms?: TermSeed[];
+  deadEnds?: string[];
+}
+export interface ScoutMergerArgs {
+  query: string;
+  decomposition: string;
+  probes: ScoutProbeResult[];
 }
 
 // ── prospector ──
@@ -75,7 +134,6 @@ export interface BrainerArgs {
   findings: Finding[];
   topScores: number[];
   resultSoFar: ResultSoFar | null;
-  assignSources: boolean;
   stop: string;
   mode: Mode;
   venues: Venue[];
@@ -92,6 +150,17 @@ export interface BrainerArgs {
   trail?: string; // the branch path this child came from
   canSpawn?: boolean; // spawning is still permitted this wave (caps not yet hit) — only then may it emit spawn
   lastWave?: boolean; // last wave: wrap up the answer, request no new research
+  // ── v3 STEERING (batch 3) — the ledger-aware frontier; each degrades to '' / undefined / null when its
+  // engine-side state is empty, omitting the clause entirely (see buildBrainer) ──
+  ledger?: string; // pre-rendered CLAIM LEDGER lines (utils ledgerLines), '' before any claim is ledgered
+  calib?: YieldCalib; // predicted-vs-realized lead-yield EMA per kind — the CALIBRATION section (only kinds with n>0 render)
+  derivation?: {
+    quantiles: Record<string, number>;
+    sensitivity: Record<string, number>;
+    inputs: DerivInput[];
+    stale: boolean;
+  } | null; // set only once the rerunner has produced a lastRun; null/undefined ⇒ no DERIVATION STATE / STOP TEST clause
+  chao?: ChaoStats | null; // collect-mode coverage estimate — the COVERAGE clause
 }
 export interface Coord {
   resultSoFar: ResultSoFar;
@@ -101,6 +170,7 @@ export interface Coord {
   rename?: RenameItem[];
   drop?: number[];
   spawn?: Spawn; // OPTIONAL, ≤1 per wave: spawn a focused child brainer onto a branch (engine honors the maxParallelBrainers / depth / 1-per-wave caps)
+  derivation?: DerivationDelta; // OPTIONAL: author (or re-author) the stored derivation artifact — the engine stores it + reruns it (see engine.ts applyDerivation)
   stop: Stop;
 }
 
@@ -131,6 +201,7 @@ export interface ResearchSchedulerArgs {
   query: string;
   lanes: SchedulerLaneInput[];
   researcherNote?: string;
+  vocabulary?: string; // pre-rendered top community terms of art (utils vocabSummary), '' when bs.vocabulary is empty
 }
 export interface SchedulerOut {
   lanes: SchedulerLane[]; // the chosen, sized sources grouped per lane id
@@ -148,13 +219,18 @@ export interface ResearcherArgs {
   readerIndex: number; // 1-based: reader i of N on this lane
   readerCount: number; // N — total readers on this lane
   priorAnswer: string; // the running answer handed forward from the earlier readers ('' for reader 1) — renders LAST
+  claimDigest: string; // 'c12 claim' one-liners of the existing KEY CLAIMS this reader may target with a stance ('' before any claim exists)
+  laneKind?: LeadKind; // this lane's origin channel (RabbitHole.kind); 'attack' ⇒ the reader's primary output is counter-evidence
   researcherNote?: string;
 }
-// one reader's StructuredOutput: the updated running answer + the leads the slice surfaced.
+// one reader's StructuredOutput: the updated running answer + the leads/claims the slice surfaced.
 export interface ReaderOut {
   runningAnswer: string; // the accumulated lane answer after merging this slice into the prior one
   rabbitHoles?: RabbitHoleSeed[];
   nextSources?: NextSource[];
+  claims?: ClaimSeed[];
+  newTerms?: TermSeed[];
+  surprise?: string; // set ONLY when this slice contradicts one of the KEY CLAIMS in the digest
   deadEnds?: string[];
 }
 // the lane thread's aggregated return (final running answer as `summary` + the collected leads) — what runResearchers yields.
@@ -162,6 +238,9 @@ export interface ResearchOut {
   summary: string;
   rabbitHoles?: RabbitHoleSeed[];
   nextSources?: NextSource[]; // top outbound citations the next lane fetches directly
+  claims?: ClaimSeed[];
+  newTerms?: TermSeed[];
+  surprise?: string; // the FIRST non-empty contradiction note across the lane's readers
   deadEnds?: string[];
 }
 
@@ -174,6 +253,9 @@ export interface InitiatorArgs {
   openRabbitHoles: string[];
   mode?: Mode; // collect ⇒ harden breadth/coverage, not the shape of a single answer
   thinkerNote?: string;
+  // ── v3 FINALIZE (batch 4) — the ledger-fed, sensitivity-ranked initiator ──
+  ledger?: string; // pre-rendered CLAIM LEDGER digest (utils ledgerLines); '' before any claim is ledgered
+  sensitivity?: string; // pre-rendered SENSITIVITY RANKING body (utils sensitivityRanking); '' when no derivation rerun has completed
 }
 export interface InitiatorOut {
   refinement: { facts: FactToHarden[] };
@@ -187,9 +269,15 @@ export interface RefineArgs {
   fact: string;
   why: string;
   directive?: string; // on a re-run, the judge's precise re-check directive; '' on the first pass
+  // ── v3 FINALIZE (batch 4) — the claim this fact is pinned to, when the initiator named one ──
+  claimQuote?: string; // the ledger claim's verbatim quote (THE CLAIM AS PINNED)
+  claimSource?: string; // the ledger claim's source
 }
 export interface RefineOut {
   report: string;
+  queriesTried: string[]; // the exact counter-searches run — attack-recording, not just fact-hardening
+  counterFound: boolean; // true only when a real counter-example/contradiction turned up
+  counterNote?: string; // what the counter-evidence was, when counterFound is true
 }
 
 // ── judge — the sole terminal skeptic (FINALIZE phase) ──
@@ -203,6 +291,12 @@ export interface JudgeArgs {
   mode?: Mode; // collect ⇒ gate goalMet on inventory-completeness + per-item verification, not a single-answer goal
   computeNote?: string;
   thinkerNote?: string;
+  // ── v3 FINALIZE (batch 4) — reconcile + retraction powers + independence discipline ──
+  ledger?: string; // pre-rendered CLAIM LEDGER digest (utils ledgerLines); '' before any claim is ledgered
+  survivedAttacks?: string[]; // "topic → cN (queries: …)" lines — challenged AND survived (completed counter-searches that found nothing)
+  neverChallenged?: string[]; // key claims with no nullAttack and no attacksSurvived — never put to the test
+  computedConfidence?: Confidence; // the machinery-computed confidence over the current key claims (lower-only discipline)
+  stop?: { done: boolean; reason: string }; // THE CRAWL'S LAST WORD — the crawl's own final stop, so the judge cannot silently override remaining work
 }
 export interface JudgeOut {
   goalMet: boolean;
@@ -213,6 +307,7 @@ export interface JudgeOut {
   directive?: string; // the precise fix/derivation to perform when not satisfied; '' when satisfied
   reopenRabbitHoles?: RabbitHoleSeed[]; // only for a genuine evidence/coverage gap that needs the crawl; else empty
   computeLimitation?: string; // engine-applied (not from the model): the compute-off stated limitation runJudge returns for the engine to fold into openGaps
+  retractClaimIds?: number[]; // ledger claim ids whose evidence is discredited (retraction/fabrication/misattribution) — the engine retracts them and recomputes everything downstream
 }
 
 // ── validator — the per-wave crawl coverage gate (distinct from the terminal judge) ──
@@ -254,6 +349,10 @@ export interface SynthesiserArgs {
   openRabbitHoles: string[];
   compute?: boolean; // false ⇒ no derivation was run; never present a `working` derivation even if one leaked into resultSoFar
   thinkerNote?: string;
+  // ── v3 FINALIZE (batch 4) — cite the ledger, confidence lower-only ──
+  ledger?: string; // pre-rendered CLAIM LEDGER digest (utils ledgerLines); '' before any claim is ledgered
+  nullAttacksSummary?: string[]; // "topic → cN" one-liners — challenged and survived, for the report's own honesty
+  computedConfidence?: Confidence; // the machinery-computed confidence over the current key claims (lower-only discipline)
 }
 export interface ReportOut {
   report: string;
@@ -275,4 +374,62 @@ export interface DebugAnalystArgs {
 }
 export interface DiagOut {
   diagnosis: string;
+}
+
+// ── claimAuditor — batched mechanical quote audit (v3 ledger clerk) ──
+export interface ClaimAuditItem {
+  id: number;
+  claim: string;
+  quote: string;
+  cachePath: string;
+}
+export interface ClaimAuditArgs {
+  items: ClaimAuditItem[];
+}
+export interface ClaimAuditCheck {
+  id: number;
+  verdict: 'pass' | 'fail';
+  note?: string;
+}
+export interface ClaimAuditOut {
+  checks: ClaimAuditCheck[];
+}
+
+// ── lineageClerk — canonicalizes provenance entities for JS union-find clustering (v3 ledger clerk) ──
+export interface LineageClerkItem {
+  id: number;
+  source: string;
+  entities?: ClaimEntities;
+}
+export interface LineageClerkArgs {
+  items: LineageClerkItem[];
+  knownKeys: string[]; // canonical keys already in use this run — same-as spellings must reuse them
+}
+export interface LineageLink {
+  id: number;
+  keys: string[];
+}
+export interface LineageClerkOut {
+  links: LineageLink[];
+}
+
+// ── rerunner — re-executes the stored derivation artifact with current inputs (v3 ledger clerk) ──
+export interface RerunnerArgs {
+  code: string;
+  inputsJson: string; // bs.derivation.inputs, JSON-stringified verbatim — the script's one JSON argument
+}
+export interface RerunnerOut {
+  ok: boolean;
+  quantiles?: Record<string, number>;
+  sensitivity?: Record<string, number>;
+  note?: string; // the error message when ok is false
+}
+
+// ── scribe — per-wave crash-safety checkpoint (v3 ledger clerk) ──
+export interface ScribeArgs {
+  content: string; // arrives ready to write verbatim — the agent clips/reformats nothing
+  dir: string;
+}
+export interface ScribeOut {
+  ok: boolean;
 }

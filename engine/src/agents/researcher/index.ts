@@ -6,7 +6,7 @@
 // vector-DB run). Effort: medium. (Both read from the central CONFIG.TIER/EFFORT maps.) The reader runs as a
 // code-capable general-purpose agent so it can read its char window off disk + resolve a wall.
 import { CONFIG } from '../../config.js';
-import { RABBITHOLE } from '../shared.js';
+import { CLAIM_ITEM_STANCE, RABBITHOLE, TERM_SEED } from '../shared.js';
 import { buildResearcher } from './prompts.js';
 import type { Agent, ResearcherArgs, Schema } from '../../types/index.js';
 
@@ -30,14 +30,44 @@ export const RESEARCH: Schema = {
             description: 'an exact url or DOI the content points to, worth fetching directly',
           },
           why: { type: 'string', description: 'one line on why following it advances the goal' },
+          expect: {
+            type: 'string',
+            enum: ['support', 'attack', 'neutral'],
+            description:
+              'whether following it is expected to SUPPORT or ATTACK `target`, or is neutral',
+          },
+          target: {
+            type: 'number',
+            description: 'id of the existing claim this source is expected to support or attack',
+          },
         },
         required: ['ref', 'why'],
       },
       description:
         "up to 5 of the content's highest-value outbound citations/links as concrete fetch targets — a later lane fetches each directly",
     },
+    claims: {
+      type: 'array',
+      items: CLAIM_ITEM_STANCE,
+      description:
+        'load-bearing facts this slice carries — each pinned to a verbatim quote; only facts the answer could rest on, never a transcript of everything read',
+    },
+    newTerms: {
+      type: 'array',
+      items: TERM_SEED,
+      description:
+        "the community's terms of art this slice uses that the digest/query does not — empty when the slice speaks our vocabulary",
+    },
+    surprise: {
+      type: 'string',
+      description:
+        'one line naming the contradiction — set ONLY when this slice contradicts one of the KEY CLAIMS in the digest',
+    },
     deadEnds: { type: 'array', items: { type: 'string' } },
   },
+  // claims/newTerms are NOT required — a reader may legitimately surface neither on a thin/off-topic
+  // slice; the engine's `|| []` guards (ingestWave, mergeVocabulary) already treat their absence as
+  // empty. This matches ReaderOut's TS optionality (types/agents.ts) — the schema no longer over-requires.
   required: ['runningAnswer'],
 };
 

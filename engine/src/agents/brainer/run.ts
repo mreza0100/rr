@@ -1,7 +1,7 @@
 import { CONFIG } from '../../config.js';
 import { brainer, BRAIN_COMPUTE, buildBrainerCompute } from './index.js';
 import { retryAgent } from '../../runtime.js';
-import { openLine } from '../../utils/index.js';
+import { ledgerLines, openLine, venuesWithYieldWarn } from '../../utils/index.js';
 import type { BrainerState } from '../../brainerState.js';
 import type { BrainComputeOut, CleanReport, Coord, Finding } from '../../types/index.js';
 
@@ -16,6 +16,18 @@ export async function runBrainer(
   ctx?: { canSpawn?: boolean; lastWave?: boolean },
 ): Promise<Coord | null> {
   const open = bs.rabbitHoles.map(openLine);
+  // v3 STEERING — the ledger digest + calibration/sensitivity/coverage state, computed here (pure reads off
+  // bs) and handed to buildBrainer, which decides per-clause whether there is anything to say.
+  const ledger = ledgerLines(bs, CONFIG.BRAINER_LEDGER_CAP);
+  const derivation =
+    bs.derivation && bs.derivation.lastRun
+      ? {
+          quantiles: bs.derivation.lastRun.quantiles,
+          sensitivity: bs.derivation.lastRun.sensitivity,
+          inputs: bs.derivation.inputs,
+          stale: !!bs.derivationStale,
+        }
+      : undefined;
   return retryAgent<Coord>(
     brainer.buildPrompt({
       wave,
@@ -27,16 +39,19 @@ export async function runBrainer(
       findings,
       topScores: bs.topScores,
       resultSoFar: bs.resultSoFar,
-      assignSources: CONFIG.parallelSourcesPerLaneResearchAgent === 'auto',
       stop: CONFIG.STOP,
       mode: CONFIG.mode,
-      venues: bs.highValueSources,
+      venues: venuesWithYieldWarn(bs.highValueSources, bs.venueStats),
       languageGuidance: bs.languageGuidance,
       lastValidatorMissing: bs.lastValidatorMissing,
       compute: CONFIG.compute,
       computeNote: CONFIG.COMPUTE_NOTE,
       thinkerNote: CONFIG.THINKER_NOTE,
       researcherNote: CONFIG.RESEARCHER_NOTE,
+      ledger,
+      calib: bs.yieldCalib,
+      derivation,
+      chao: bs.chao,
       // brainer-tree context — identity off the brainer, per-wave permissions off ctx (both inert in single-brainer runs)
       isChild: !bs.isRoot,
       parentName: bs.parentName || undefined,

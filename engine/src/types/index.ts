@@ -3,5 +3,6 @@
 // auto-included via tsconfig — not re-exported here.)
 export type { Schema } from './schema.js';
 export type * from './domain.js';
+export type * from './claims.js';
 export type * from './agents.js';
 export type * from './run.js';

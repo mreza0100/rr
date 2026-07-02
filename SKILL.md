@@ -1,8 +1,8 @@
 ---
 name: rr
-version: "2.3.0"
+version: "3.0.0"
 repo: "https://github.com/mreza0100/rr"
-description: Launches Research and Report (RR) — a deterministic background Workflow that runs an unbounded, best-first, brainer-steered web crawl, DERIVES an answer (computing it when the answer must be built), and writes a cited multi-section report with a verdict and plan. Use when the user wants a researched answer or a topic landscape ("research X", "look into X", "RR X", "rr fast X") and a single web search is not enough. Modes: goal (answer one question) and collect (inventory a topic); "rr fast X" answers inline now via one quick sub-agent instead of the background Workflow. Runs in the background, returns a completion notification, and persists to RR/{slug}/.
+description: Launches Research and Report (RR) — a deterministic background Workflow that runs an unbounded, best-first, brainer-steered web crawl, DERIVES an answer over a quote-pinned, independence-clustered claim ledger with computed confidence (computing it when the answer must be built), and writes a cited multi-section report with a verdict and plan. Use when the user wants a researched answer or a topic landscape ("research X", "look into X", "RR X", "rr fast X") and a single web search is not enough. Modes: goal (answer one question) and collect (inventory a topic); "rr fast X" answers inline now via one quick sub-agent instead of the background Workflow. Runs in the background, returns a completion notification, and persists to RR/{slug}/.
 ---
 
 # Research and Report (RR)
@@ -15,13 +15,15 @@ It never stops because a fact wasn't found. A missing piece is a reason to gathe
 
 ## How it works
 
-One Opus **brainer** drives the whole run; everything else is its instrument.
+One Opus **brainer** drives the whole run; everything else is its instrument. Evidence lives in an append-only **claim ledger**, not in prose — every claim is pinned to a verbatim quote, mechanically audited, and clustered by independent lineage; a claim's status (settled/tentative/contested) and the report's confidence are **computed** from ledger topology — models may lower confidence, never raise it.
 
-1. **Scout** (haiku) — one broad web sweep maps the landscape and seeds the first rabbit-holes.
+1. **Scout swarm** — a sonnet **planner** runs a couple of grounding searches, decomposes the query, and proposes 3–5 distinct search angles (always including a direct angle, a **skeptic** angle hunting counter-evidence, and a **recent** angle); a haiku **probe** sweeps each angle in parallel (search → fetch ≤3 sources); a sonnet **merger** folds every surviving probe into one landscape, explicitly naming the tensions between angles. Each stage degrades to a deterministic fallback (single direct probe / plain JS merge) if its agent dies.
 2. **Prospector** (opus) — names the high-value authoritative source venues, and when the topic is more active in another language, the native venues to search in (tagged by language).
-3. **Research waves** — the brainer scores the open rabbit-holes, picks the lanes worth pursuing (≤5 per wave), and authors a per-lane **`note`** — the research directive plus ranked fallbacks. A **researchScheduler** (sonnet) runs batched discovery for all lanes: every web-search in one parallel round, then `mcp__harvester__fetch size_only` on every candidate in a second parallel round, returning the highest-value sources grouped per lane (`{source, path, size}`). Code **bin-packs** each lane's sources into ≤130k-token reader-units — small sources combine into one reader, a large source splits across several — and spawns **one sequential reader thread per lane** (haiku), parallel across lanes. Each reader reads its assigned slices straight from the Harvester cache file (via code) and digests into a running answer handed to the next reader; it can resolve a walled source itself (DOI → `fetch`/`findWorks`) and view an image via `fetchImage`. A per-wave **validator** (sonnet) checks coverage and reopens thin lanes; the brainer folds the lane answers into its running answer and decides when the answer is solid.
-4. **Finalize** — an **initiator** groups the load-bearing facts → a **refine** pass hardens each group against the sources → an Opus **judge**, the sole terminal skeptic in both goal and collect modes, stress-tests the hardened answer and sees the leftover open rabbit-holes, steering a bounded remediation loop: the brain derives the answer when one is needed (running code, propagating error bars), refine re-checks a flagged fact, or the crawl reopens on a real gap → a **synthesiser** writes the report.
-5. **Debug** (opt-in) — a final analyst writes `_debug.md` with metrics + raw agent I/O.
+3. **Research waves** — the brainer steers an id-keyed rabbit-hole frontier: it scores the open leads, picks the lanes worth pursuing (≤5 per wave), and authors a per-lane **`note`** (the research directive plus ranked fallbacks). A **researchScheduler** (sonnet) batch-discovers + sizes the best sources per lane; code bin-packs each lane into ≤130k-token reader-units and runs **one sequential haiku reader thread per lane**, parallel across lanes. Every read yields quote-pinned **claims** into the ledger, which a haiku **claimAuditor** mechanically quote-audits (greps the cache for the verbatim quote) and a sonnet **lineageClerk** clusters by independent provenance (authors/funder/dataset, union-find) — corroboration counts **clusters**, not sources. Attack lanes hunt counter-evidence for tentative claims; a counter-search that finds nothing is recorded as a survived challenge (a `nullAttack`), not silence. For build-the-answer queries the brainer authors a stored, seeded Python **derivation** once; a haiku **rerunner** re-executes it each wave the moment an input claim changes, and its variance decomposition steers which leads get read next (a value-of-information stop test). Lead selection is self-calibrating — a per-kind predicted-vs-realized yield table tempers scores. A per-wave **validator** (sonnet) checks coverage and reopens thin lanes; a haiku **scribe** writes a crash-safety `_checkpoint.json` each wave, off the critical path.
+4. **Finalize** — an **initiator** groups the load-bearing facts → a **refine** pass hardens each group against the sources, folding every counter-search outcome into the ledger (contested mark or another `nullAttack`) → an Opus **judge**, the sole terminal skeptic in both goal and collect modes, stress-tests the hardened answer, sees the leftover open rabbit-holes, and can **retract** a discredited ledger claim (recomputing every downstream status/confidence), steering a bounded remediation loop: the brain derives the answer when one is needed (running code, propagating error bars), refine re-checks a flagged fact, or the crawl reopens on a real gap → a **synthesiser** writes the report; its `[cN]` citations are linted against the ledger (unknown ids stripped) and its stated confidence is floored by the computed one (never raised).
+5. **Collect mode** additionally gets a Chao1 coverage estimate (species = near-duplicate claim groups, abundance = distinct sources) that gates the novelty-plateau dry stop — a plateau alone does not stop the crawl while a lot of ground estimably remains unseen.
+6. **The brainer tree** (`maxParallelBrainers`) is unchanged in shape — a brainer may spawn a focused child onto a rich branch; the first whose answer the judge upholds wins. Every other brainer's non-retracted claims MERGE back into the winner's ledger before it finalizes, so a losing branch's evidence still reaches the report.
+7. **Debug** (opt-in) — a final analyst writes `_debug.md` with metrics + raw agent I/O.
 
 ## Launch
 
@@ -43,11 +45,15 @@ Workflow({
 
 - `query` (required) — the research question (goal) or collect-target. The crawl sees only this string.
 - `mode` — `'goal'` (default) or `'collect'`. See Modes.
-- `maxParallelBrainers` — `1` (default) … `5`. The brainer-tree width. `1` is the single global brainer. With `2`–`5`, a brainer may SPAWN a focused child onto a rich branch; the children run in parallel, the first whose answer the judge upholds wins (its report becomes `result.md`), and a child may abandon a dead-end branch. More brainers ≈ proportionally more cost — raise it only for a goal with several deep, separable branches.
-- `compute` — `true` (default) or `false`. The master switch for derivation: `false` runs no compute agents (no mid-wave compute, no finalize brain-derive) for a faster, gather-and-reason-only run.
+- `maxWave` — `'auto'` (default, brainer-stopped, hard-capped at 15) or an integer clamped to `[5,15]`. The wave-cap override; leave `'auto'` unless you need to force a shorter or longer crawl.
+- `maxParallelBrainers` — `1` (default) … `5`. The brainer-tree width. `1` is the single global brainer. With `2`–`5`, a brainer may SPAWN a focused child onto a rich branch; the children run in parallel, the first whose answer the judge upholds wins (its report becomes `result.md`), a child may abandon a dead-end branch, and every other brainer's evidence still merges into the winner's ledger. More brainers ≈ proportionally more cost — raise it only for a goal with several deep, separable branches.
+- `parallelLaneResearchAgentsPerWave` — `'auto'` (default, brainer-assigned, hidden cap of 5) or an integer clamped to `[1,5]`. How many lanes (rabbit-holes) a wave pursues at once.
+- `parallelSourcesPerLaneResearchAgent` — `'auto'` (default, brainer-assigned, hidden cap of 5) or an integer clamped to `[1,5]`. How many sources one lane's reader thread reads.
+- `compute` — `true` (default) or `false`. The master switch for derivation: `false` runs no compute agents (no stored/rerun derivation mid-wave, no finalize brain-derive) for a faster, gather-and-reason-only run.
 - `computeNote` (optional) — extra run-specific guidance for the compute-aware agents (a method to use, a constraint to respect). Appends to the always-present note that the compute environment ships a scientific Python stack (scipy, sympy, uncertainties, pandas, statsmodels, scikit-learn, networkx, pint, rdkit).
 - `thinkerNote` (optional) — operator run-steering for the Opus reasoning tier: priorities, framing, constraints, audience. Shapes HOW the run is approached and what the report emphasizes — not additional questions to research. Reaches the reasoning agents only, never the cheap workers.
 - `researcherNote` (optional) — a terse one-line note (≈6-7 words) to the web-research agents — scout, prospector, brainer, researchScheduler, and researcher. Steers HOW they search and fetch (which sources to favour, what to skip). Passthrough, injected verbatim.
+- `checkpoint` — `true` (default) or `false`. Per-wave crash-safety: a haiku scribe writes the live claim ledger + store + resultSoFar straight to `_checkpoint.json` on disk each wave, off the critical path. `false` turns the scribe off.
 - `tag` (optional) — suffixes the output dir so parallel variants of one query write to distinct dirs.
 - `debug` (optional, default `true`) — writes `_debug.md` (run log + metrics + raw agent I/O); ON by default, pass `debug: false` to turn it off. Pair with `debugPrompt` (string) to focus it on a question.
 
@@ -85,9 +91,11 @@ node <skill-base-dir>/persist.js <completion-output-file>
 This writes to `RR/{slug}/`:
 
 - `result.md` — the deliverable. Read this first; it opens with a compact **Run arguments** record (the complete launch args).
+- `_claims.json`, `_claims.md` — the full claim ledger: every quote-pinned claim with its status/cluster/audit verdict and the `nullAttacks` log, machine- and human-readable.
 - `_rabbitHoles.json`, `_tree.md` — the rabbit-holes (with the run's launch `args` at the top) + the crawl tree; diagnostics.
+- per-wave files (`03-wave-0.md`, `04-wave-1.md`, …), plus `NN-validator.md`, `NN-initiator.md`, `NN-refinement.md`, `NN-judge.md`, and `_finalize-compute.md` when the judge sent the brain to derive — the full prompt/response trail of the run.
 - `_brainers.json`, `_brainers-tree.md`, `result-<name>.md` — only when `maxParallelBrainers > 1`: the brainer tree (who spawned whom, the winner) plus each non-winning brainer's preserved partial.
-- `_compute-*.md` / `_compute-*.py` — any derivations with their code, when compute ran.
+- `_checkpoint.json` — written straight to `RR/{slug}/` by the scribe *during* the run (crash-safety), not through the completion payload — it is already on disk once the run ends, `checkpoint: true` by default.
 - `_debug.md` — when launched with `debug: true`.
 
 ## Writing the query
@@ -111,7 +119,7 @@ Why: the collect frame + named dimensions give a saturation target, not an open 
 
 <example>
 Good (goal, derive): { query: "Estimate the distance to the nearest yet-undetected stellar-mass black hole, with error bars, and say which method (Gaia astrometry, microlensing, X-ray, radial velocity) finds it first and roughly when." }
-Why: no single source holds this — RR gathers the components and computes the answer (compute defaults on).
+Why: no single source holds this — the brainer authors a stored, seeded Python derivation once, a rerunner re-executes it every wave as evidence lands, and its variance decomposition steers which components get chased next (compute defaults on).
 </example>
 
 ## Build & maintenance

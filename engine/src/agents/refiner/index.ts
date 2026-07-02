@@ -13,8 +13,21 @@ export const REFINE: Schema = {
       description:
         'markdown: the clean / corrected claim(s) for this fact after adversarial fact-checking against the sources',
     },
+    queriesTried: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'the exact counter-searches you ran',
+    },
+    counterFound: {
+      type: 'boolean',
+      description: 'true only when a real counter-example/contradiction turned up',
+    },
+    counterNote: {
+      type: 'string',
+      description: 'what the counter-evidence was, when counterFound is true',
+    },
   },
-  required: ['report'],
+  required: ['report', 'queriesTried', 'counterFound'],
 };
 
 export const refiner: Agent<RefineArgs> = {

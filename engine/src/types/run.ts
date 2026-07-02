@@ -12,6 +12,7 @@ import type {
   Venue,
   WaveLogEntry,
 } from './domain.js';
+import type { ChaoStats } from './claims.js';
 
 // the injected JSON args — anything until validated, so every field is `unknown`.
 export interface RawArgs {
@@ -19,6 +20,7 @@ export interface RawArgs {
   mode?: unknown;
   compute?: unknown;
   computeNote?: unknown;
+  checkpoint?: unknown;
   thinkerNote?: unknown;
   researcherNote?: unknown;
   maxWave?: unknown;
@@ -82,6 +84,10 @@ export interface Metrics {
   done: boolean;
   reportWritten: boolean;
   confidence: Confidence | null;
+  claimsTotal: number; // size of the claim ledger at finalize
+  nullAttacksTotal: number; // completed counter-searches that found nothing
+  chao: ChaoStats | null; // collect-mode coverage estimate; null outside collect mode / before the first estimate
+  citationsBogus: number; // synthesiser citation lint: [cN] markers stripped because the id was unknown/retracted
 }
 
 // a rabbit-hole flattened for the finalize report / _rabbitHoles.json.

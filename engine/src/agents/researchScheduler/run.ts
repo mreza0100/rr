@@ -1,7 +1,7 @@
 import { CONFIG } from '../../config.js';
 import { researchScheduler } from './index.js';
 import { retryAgent } from '../../runtime.js';
-import { venuesFor } from '../../utils/index.js';
+import { venuesFor, vocabSummary } from '../../utils/index.js';
 import type { BrainerState } from '../../brainerState.js';
 import type { RabbitHole, SchedulerOut, SchedulerSource } from '../../types/index.js';
 
@@ -29,6 +29,7 @@ export async function runScheduler(
         ref: p.ref,
       })),
       researcherNote: CONFIG.RESEARCHER_NOTE,
+      vocabulary: vocabSummary(bs.vocabulary, CONFIG.SCHED_VOCAB_CAP),
     }),
     {
       label: 'scheduler-' + tag,

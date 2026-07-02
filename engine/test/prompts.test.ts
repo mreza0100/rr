@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 // The aliases below keep the case table + snapshot KEYS byte-identical, so these snapshots remain the prompt byte-equivalence proof.
 import {
   scout,
+  scoutMerger,
   prospector,
   brainer,
   buildBrainerCompute,
@@ -49,6 +50,7 @@ const resultSoFar: ResultSoFar = {
   answer: 'pgvector',
   confidence: 'medium',
   evidence: [{ fact: 'recall', value: '0.98', source: 'arxiv', status: 'settled' }],
+  keyClaimIds: [1],
   resolved: ['idx'],
   openGaps: ['mt'],
   tensions: [],
@@ -58,10 +60,19 @@ const waveLog: WaveLogEntry[] = [
   { wave: 0, pursued: [], topScore: 0, done: false, reason: 'seed' },
 ];
 const cleanReports: CleanReport[] = [{ fact: 'recall', why: 'lb', clean: '0.96 ± 0.02' }];
+// scout is now one PROBE of the swarm, scoped to a single angle — a representative angle for the builder tests.
+const SCOUT_ANGLE_ARGS = {
+  angleName: 'skeptic',
+  angleWhy: 'surfaces counter-evidence',
+  angleLens: 'critical',
+  searchQuery: Q + ' criticism',
+  index: 1,
+  total: 3,
+};
 
 // each builder on a representative input → { label, output }
 const cases = [
-  ['SCOUT_PROMPT', SCOUT_PROMPT({ query: Q, net: NET, footer: FOOTER })],
+  ['SCOUT_PROMPT', SCOUT_PROMPT({ query: Q, net: NET, footer: FOOTER, ...SCOUT_ANGLE_ARGS })],
   [
     'PROSPECTOR_PROMPT',
     PROSPECTOR_PROMPT({ query: Q, landscape: 'L', sources: ['https://a.com'] }),
@@ -78,7 +89,6 @@ const cases = [
       findings: [],
       topScores: [],
       resultSoFar: null,
-      assignSources: false,
       stop: 'STOP',
       mode: 'goal',
       venues: [],
@@ -96,7 +106,6 @@ const cases = [
       findings: [{ rabbitHole: 'x', summary: 's' }],
       topScores: [90, 70, 50],
       resultSoFar,
-      assignSources: true,
       stop: 'STOP',
       mode: 'goal',
       venues,
@@ -114,7 +123,6 @@ const cases = [
       findings: [],
       topScores: [60, 40],
       resultSoFar,
-      assignSources: false,
       stop: 'STOP',
       mode: 'collect',
       venues,
@@ -158,6 +166,7 @@ const cases = [
       readerIndex: 2,
       readerCount: 3,
       priorAnswer: 'so far: pgvector recall ~0.96',
+      claimDigest: 'c1 pgvector recall is 0.98 on the LAION benchmark',
     }),
   ],
   [
@@ -218,6 +227,10 @@ const cases = [
         done: true,
         reportWritten: true,
         confidence: 'high',
+        claimsTotal: 0,
+        nullAttacksTotal: 0,
+        chao: null,
+        citationsBogus: 0,
       },
       waveLog,
       resultLog: [],
@@ -240,7 +253,7 @@ describe('prompt builders', () => {
     });
   }
   it('the query anchors the prompts that take it', () => {
-    expect(SCOUT_PROMPT({ query: Q, net: NET, footer: FOOTER })).toContain(Q);
+    expect(SCOUT_PROMPT({ query: Q, net: NET, footer: FOOTER, ...SCOUT_ANGLE_ARGS })).toContain(Q);
     expect(REFINE_PROMPT({ net: NET, query: Q, fact: 'F', why: 'W' })).toContain(Q);
   });
   it('FINISH / WEB_ONLY guard clauses ride into the right prompts', () => {
@@ -255,7 +268,6 @@ describe('prompt builders', () => {
         findings: [],
         topScores: [],
         resultSoFar: null,
-        assignSources: false,
         stop: 'S',
         mode: 'goal',
         venues: [],
@@ -269,7 +281,13 @@ describe('researcherNote — the web-research/probe-agent passthrough', () => {
   const RN = 'Research note: prefer 2025 primary sources';
   // the recipients (scout, prospector, scheduler, researcher, brainer) — each carrying researcherNote
   const recipients = {
-    SCOUT_PROMPT: SCOUT_PROMPT({ query: Q, net: NET, footer: FOOTER, researcherNote: RN }),
+    SCOUT_PROMPT: SCOUT_PROMPT({
+      query: Q,
+      net: NET,
+      footer: FOOTER,
+      ...SCOUT_ANGLE_ARGS,
+      researcherNote: RN,
+    }),
     PROSPECTOR_PROMPT: PROSPECTOR_PROMPT({
       query: Q,
       landscape: 'L',
@@ -292,6 +310,7 @@ describe('researcherNote — the web-research/probe-agent passthrough', () => {
       readerIndex: 1,
       readerCount: 1,
       priorAnswer: '',
+      claimDigest: '',
       researcherNote: RN,
     }),
     BRAINER_PROMPT: BRAINER_PROMPT({
@@ -304,7 +323,6 @@ describe('researcherNote — the web-research/probe-agent passthrough', () => {
       findings: [],
       topScores: [],
       resultSoFar: null,
-      assignSources: false,
       stop: 'S',
       mode: 'goal',
       venues: [],
@@ -315,9 +333,9 @@ describe('researcherNote — the web-research/probe-agent passthrough', () => {
     it(`${label} folds in researcherNote when supplied`, () => expect(out).toContain(RN));
   }
   it('renders nothing when researcherNote is empty (the recipients)', () => {
-    expect(SCOUT_PROMPT({ query: Q, net: NET, footer: FOOTER, researcherNote: '' })).not.toContain(
-      'Research note',
-    );
+    expect(
+      SCOUT_PROMPT({ query: Q, net: NET, footer: FOOTER, ...SCOUT_ANGLE_ARGS, researcherNote: '' }),
+    ).not.toContain('Research note');
     expect(
       PROSPECTOR_PROMPT({ query: Q, landscape: 'L', sources: ['https://a.com'] }),
     ).not.toContain('Research note');
@@ -333,6 +351,7 @@ describe('researcherNote — the web-research/probe-agent passthrough', () => {
         readerIndex: 1,
         readerCount: 1,
         priorAnswer: '',
+        claimDigest: '',
       }),
     ).not.toContain('Research note');
     expect(
@@ -346,7 +365,6 @@ describe('researcherNote — the web-research/probe-agent passthrough', () => {
         findings: [],
         topScores: [],
         resultSoFar: null,
-        assignSources: false,
         stop: 'S',
         mode: 'goal',
         venues: [],
@@ -409,7 +427,6 @@ describe('multilingual routing — conditional, prospector → brainer → resea
     findings: [],
     topScores: [],
     resultSoFar: null,
-    assignSources: false,
     stop: 'S',
     mode: 'goal' as const,
   };
@@ -460,6 +477,89 @@ describe('follow-the-links — the scheduler takes a carried ref directly', () =
   });
 });
 
+describe('researcher — claim ledger channels (v3 batch 2b)', () => {
+  const base = {
+    query: Q,
+    trail: 'goal  →  x',
+    keyword: 'x',
+    why: 'w',
+    note: 'n',
+    footer: FOOTER,
+    reads: [{ source: 'https://a.com', cachePath: '/cache/a.txt', offset: 0, limit: 100 }],
+    readerIndex: 1,
+    readerCount: 1,
+    priorAnswer: '',
+  };
+  it('renders the KEY CLAIMS SO FAR section when claimDigest is non-empty', () => {
+    const out = RESEARCHER_PROMPT({ ...base, claimDigest: 'c1 pgvector recall is 0.98' });
+    expect(out).toContain('KEY CLAIMS SO FAR');
+    expect(out).toContain('ids look like c12');
+    expect(out).toContain('SUPPORTS or ATTACKS');
+    expect(out).toContain('c1 pgvector recall is 0.98');
+  });
+  it('omits the KEY CLAIMS section entirely when claimDigest is empty — DIRECTIVE flows straight into READ NOW', () => {
+    const none = RESEARCHER_PROMPT({ ...base, claimDigest: '' });
+    expect(none).not.toContain('KEY CLAIMS SO FAR');
+    expect(none).toContain('DIRECTIVE — what to extract, with ranked fallbacks: n\nREAD NOW —');
+  });
+  it('always carries the no-quote-no-claim discipline line', () => {
+    const out = RESEARCHER_PROMPT({ ...base, claimDigest: '' });
+    expect(out).toContain('no quote, no claim');
+    expect(out).toContain('Extract each load-bearing fact as a claim');
+  });
+  it('an ATTACK lane gets the counter-evidence primary-output clause', () => {
+    const out = RESEARCHER_PROMPT({ ...base, claimDigest: '', laneKind: 'attack' });
+    expect(out).toContain('ATTACK lane');
+    expect(out).toContain("kind:'attacks'");
+    expect(out).toContain('never manufacture doubt');
+  });
+  it('a non-attack (or absent) laneKind renders no attack clause — byte-identical', () => {
+    const gap = RESEARCHER_PROMPT({ ...base, claimDigest: '', laneKind: 'gap' });
+    const none = RESEARCHER_PROMPT({ ...base, claimDigest: '' });
+    expect(gap).not.toContain('ATTACK lane');
+    expect(gap).toBe(none);
+  });
+});
+
+describe('scout — claim ledger channels (v3 batch 2b)', () => {
+  it('Step 3 enumerates claims + newTerms, mirroring the no-quote-no-claim rule', () => {
+    const out = SCOUT_PROMPT({ query: Q, net: NET, footer: FOOTER, ...SCOUT_ANGLE_ARGS });
+    expect(out).toContain('claims[]');
+    expect(out).toContain('no quote no claim');
+    expect(out).toContain('newTerms[]');
+  });
+});
+
+// E — the scout schema now carries nextSources (the FOOTER's "Next sources" channel, previously discarded);
+// the probe prompt enumerates it and skips the footer's Surprise section (no prior claims exist at wave 0).
+describe('scout — nextSources channel (v3 batch 6, finding E)', () => {
+  it('Step 3 enumerates nextSources and Step 2 skips the Surprise section', () => {
+    const out = SCOUT_PROMPT({ query: Q, net: NET, footer: FOOTER, ...SCOUT_ANGLE_ARGS });
+    expect(out).toContain('nextSources[]');
+    expect(out).toContain("Skip the footer's Surprise section");
+  });
+  it('scoutMerger unions nextSources deduped by ref', () => {
+    const out = scoutMerger.buildPrompt({ query: Q, decomposition: 'axis', probes: [] });
+    expect(out).toContain('nextSources: the union of every probe');
+    expect(out).toContain('deduped by ref');
+  });
+});
+
+describe('scout — one probe of the swarm, scoped to a single angle (v3 batch 2s)', () => {
+  it('names its angle, why, lens, and its OWN searchQuery — not the raw query', () => {
+    const out = SCOUT_PROMPT({ query: Q, net: NET, footer: FOOTER, ...SCOUT_ANGLE_ARGS });
+    expect(out).toContain('«skeptic»');
+    expect(out).toContain('surfaces counter-evidence');
+    expect(out).toContain('critical');
+    expect(out).toContain(SCOUT_ANGLE_ARGS.searchQuery);
+    expect(out).toContain('probe 1 of 3');
+  });
+  it('carries the footer verbatim (the rabbit-hole discipline applies to every fetched page)', () => {
+    const out = SCOUT_PROMPT({ query: Q, net: NET, footer: FOOTER, ...SCOUT_ANGLE_ARGS });
+    expect(out).toContain('<<' + FOOTER + '>>');
+  });
+});
+
 describe('validator — per-wave coverage gate', () => {
   const base = {
     query: Q,
@@ -488,7 +588,6 @@ describe('validator → brainer feedback', () => {
     findings: [],
     topScores: [],
     resultSoFar: null,
-    assignSources: false,
     stop: 'S',
     mode: 'goal' as const,
     venues: [],
@@ -517,7 +616,6 @@ describe('brainer — the working-derivation clause is gated on compute (A1a)', 
     findings: [],
     topScores: [],
     resultSoFar: null,
-    assignSources: false,
     stop: 'S',
     mode: 'goal' as const,
     venues: [],
@@ -533,6 +631,132 @@ describe('brainer — the working-derivation clause is gated on compute (A1a)', 
     expect(out).toContain('never hand-roll a derivation');
     expect(out).not.toContain('grow the `working` derivation chain');
     expect(out).not.toContain('COMPUTE TO STEER'); // the steering-compute block is also gated off
+  });
+  it('derivationClause (compute on) instructs AUTHORING the derivation as a stored artifact', () => {
+    const out = BRAINER_PROMPT({ ...base, compute: true });
+    expect(out).toContain('AUTHOR the derivation once as a stored artifact');
+    expect(out).toContain('return `derivation` {code, inputs}');
+    expect(out).toContain('mark unevidenced inputs prior:true with a WIDE dist');
+    expect(out).toContain('Fold the headline number into `working`');
+  });
+});
+
+// v3 STEERING (batch 3) — the ledger/calibration/sensitivity/coverage-aware brainer clauses. Each is
+// OMITTED entirely (byte-identical to the base render) when its engine-supplied input is empty/absent.
+describe('brainer — v3 STEERING clauses (batch 3)', () => {
+  const base = {
+    wave: 1,
+    query: Q,
+    rubric: 'R',
+    landscape: 'L',
+    pursuedList: [],
+    open: [],
+    findings: [],
+    topScores: [],
+    resultSoFar: null,
+    stop: 'S',
+    mode: 'goal' as const,
+    venues: [],
+  };
+  it('ledgerClause + attackClause render together once the ledger digest is non-empty', () => {
+    const out = BRAINER_PROMPT({ ...base, ledger: 'c1 [tentative·clu0·pass] X — s' });
+    expect(out).toContain('CLAIM LEDGER');
+    expect(out).toContain('c1 [tentative·clu0·pass] X — s');
+    expect(out).toContain('ids look like c12, clusters like clu2');
+    expect(out).toContain('Corroboration counts independence CLUSTERS');
+    expect(out).toContain('do not re-emit facts into resultSoFar.evidence');
+    expect(out).toContain('kind:"attack" lane');
+  });
+  it('omits CLAIM LEDGER + the attack discipline (byte-identical) before any claim is ledgered', () => {
+    const none = BRAINER_PROMPT({ ...base, ledger: '' });
+    expect(none).not.toContain('CLAIM LEDGER');
+    expect(none).not.toContain('kind:"attack" lane');
+    expect(none).toBe(BRAINER_PROMPT(base));
+  });
+  it('calibrationClause renders only the kinds with a real observation (n>0)', () => {
+    const out = BRAINER_PROMPT({
+      ...base,
+      calib: { gap: { n: 3, ratio: 0.8 }, attack: { n: 0, ratio: 1 } },
+    });
+    expect(out).toContain('CALIBRATION');
+    expect(out).toContain('gap: 0.80 (3)');
+    expect(out).not.toContain('attack:');
+  });
+  it('omits CALIBRATION (byte-identical) when every kind is unobserved or calib is absent', () => {
+    const none = BRAINER_PROMPT({ ...base, calib: {} });
+    expect(none).not.toContain('CALIBRATION');
+    expect(none).toBe(BRAINER_PROMPT(base));
+  });
+  it('sensitivityClause + voiClause render once a derivation has a completed rerun', () => {
+    const out = BRAINER_PROMPT({
+      ...base,
+      mode: 'goal',
+      derivation: {
+        quantiles: { p50: 100 },
+        sensitivity: { cost: 0.7, volume: 0.2 },
+        inputs: [
+          { name: 'cost', dist: 'lognormal(mu=1,sigma=0.2)', claimIds: [1], prior: false },
+          { name: 'volume', dist: 'wide', claimIds: [], prior: true },
+        ],
+        stale: false,
+      },
+    });
+    expect(out).toContain('DERIVATION STATE');
+    expect(out).toContain('p50=100');
+    expect(out).toContain('cost: 0.70');
+    expect(out).toContain('volume: 0.20 (PRIOR)');
+    expect(out).toContain('a lane that pins a cost beats any topical lead');
+    expect(out).toContain('STOP TEST (value-of-information)');
+    expect(out).not.toContain('STALE');
+  });
+  it('flags STALE when the last rerun failed', () => {
+    const out = BRAINER_PROMPT({
+      ...base,
+      derivation: { quantiles: {}, sensitivity: {}, inputs: [], stale: true },
+    });
+    expect(out).toContain('STALE — last rerun failed; consider re-emitting the derivation');
+  });
+  it('omits DERIVATION STATE / STOP TEST (byte-identical) before any rerun has completed', () => {
+    const none = BRAINER_PROMPT({ ...base, derivation: undefined });
+    expect(none).not.toContain('DERIVATION STATE');
+    expect(none).not.toContain('STOP TEST');
+    expect(none).toBe(BRAINER_PROMPT(base));
+  });
+  it('voiClause is goal-mode only — collect mode omits the STOP TEST even with a derivation', () => {
+    const out = BRAINER_PROMPT({
+      ...base,
+      mode: 'collect',
+      derivation: { quantiles: {}, sensitivity: {}, inputs: [], stale: false },
+    });
+    expect(out).toContain('DERIVATION STATE'); // sensitivity still shows
+    expect(out).not.toContain('STOP TEST');
+  });
+  it('chaoClause renders in collect mode once chao is computed', () => {
+    const out = BRAINER_PROMPT({ ...base, mode: 'collect', chao: { unseen: 4.2, coverage: 0.62 } });
+    expect(out).toContain('COVERAGE');
+    expect(out).toContain('~4 distinct findings remain unfound');
+    expect(out).toContain('coverage ≈62%');
+  });
+  it('omits COVERAGE (byte-identical) in goal mode or before chao is computed', () => {
+    const goalMode = BRAINER_PROMPT({ ...base, mode: 'goal', chao: { unseen: 4, coverage: 0.9 } });
+    expect(goalMode).not.toContain('COVERAGE');
+    const noChao = BRAINER_PROMPT({ ...base, mode: 'collect', chao: null });
+    expect(noChao).not.toContain('COVERAGE');
+    expect(noChao).toBe(BRAINER_PROMPT({ ...base, mode: 'collect' }));
+  });
+});
+
+describe('scheduler — community vocabulary (v3 STEERING)', () => {
+  const lane = { id: 1, keyword: 'x', why: 'w', note: 'n', venues };
+  it('renders the COMMUNITY VOCABULARY clause when vocabulary is non-empty', () => {
+    const out = SCHEDULER_PROMPT({ query: Q, lanes: [lane], vocabulary: 'biomarker (5), RCT (2)' });
+    expect(out).toContain('COMMUNITY VOCABULARY');
+    expect(out).toContain('biomarker (5), RCT (2)');
+  });
+  it('omits the clause (byte-identical) when vocabulary is empty/absent', () => {
+    const none = SCHEDULER_PROMPT({ query: Q, lanes: [lane], vocabulary: '' });
+    expect(none).not.toContain('COMMUNITY VOCABULARY');
+    expect(none).toBe(SCHEDULER_PROMPT({ query: Q, lanes: [lane] }));
   });
 });
 
@@ -634,5 +858,223 @@ describe('judge — the leftover open-rabbit-holes input (B1-refinement)', () =>
   it('renders nothing (byte-identical) when there are no leftover rabbit-holes', () => {
     const none = JUDGE_PROMPT({ ...base, openRabbitHoles: [] });
     expect(none).not.toContain('LEFTOVER OPEN RABBIT-HOLES');
+  });
+});
+
+// v3 FINALIZE (batch 4) — the ledger/nullAttacks/confidence/stop-reconcile judge clauses. Each is OMITTED
+// entirely (clause-builder style) when its engine-supplied input is empty/absent.
+describe('judge — v3 FINALIZE clauses (batch 4)', () => {
+  const base = {
+    query: Q,
+    resultSoFar,
+    cleanReports,
+    focus: 'lead with cost',
+    openRabbitHoles: [],
+    compute: true,
+  };
+  it('ledgerClause renders the digest + the cluster-independence discipline', () => {
+    const out = JUDGE_PROMPT({ ...base, ledger: 'c1 [tentative·clu0·pass] X — s' });
+    expect(out).toContain('CLAIM LEDGER');
+    expect(out).toContain('c1 [tentative·clu0·pass] X — s');
+    expect(out).toContain('ids look like c12, clusters like clu2');
+    expect(out).toContain('Corroboration counts CLUSTERS');
+    expect(out).toContain('SINGLE-SOURCE however many names it wears');
+  });
+  it('omits CLAIM LEDGER (byte-identical) when the ledger digest is empty', () => {
+    const none = JUDGE_PROMPT({ ...base, ledger: '' });
+    expect(none).not.toContain('CLAIM LEDGER');
+    expect(none).toBe(JUDGE_PROMPT(base));
+  });
+  it('nullAttacksClause renders CHALLENGED AND SURVIVED + NEVER CHALLENGED independently', () => {
+    const survivedOnly = JUDGE_PROMPT({
+      ...base,
+      survivedAttacks: ['gap topic → c1 (queries: q1)'],
+    });
+    expect(survivedOnly).toContain('CHALLENGED AND SURVIVED');
+    expect(survivedOnly).toContain('gap topic → c1');
+    expect(survivedOnly).not.toContain('NEVER CHALLENGED');
+    const neverOnly = JUDGE_PROMPT({ ...base, neverChallenged: ['c3 an untested key claim'] });
+    expect(neverOnly).toContain('NEVER CHALLENGED');
+    expect(neverOnly).toContain('c3 an untested key claim');
+    expect(neverOnly).not.toContain('CHALLENGED AND SURVIVED');
+  });
+  it('omits the nullAttacks clause (byte-identical) when both lists are empty', () => {
+    const none = JUDGE_PROMPT({ ...base, survivedAttacks: [], neverChallenged: [] });
+    expect(none).not.toContain('CHALLENGED AND SURVIVED');
+    expect(none).not.toContain('NEVER CHALLENGED');
+    expect(none).toBe(JUDGE_PROMPT(base));
+  });
+  it('confidenceClause states the computed confidence + that the judge never sets it itself (H)', () => {
+    const out = JUDGE_PROMPT({ ...base, computedConfidence: 'low' });
+    expect(out).toContain('Machinery-computed confidence from evidence topology: low');
+    expect(out).toContain('weigh it when judging `verificationSound`');
+    expect(out).toContain('you do not set confidence yourself');
+    expect(out).toContain('only the synthesiser does, and it may only lower this value');
+  });
+  it('omits the confidence clause (byte-identical) when absent', () => {
+    expect(JUDGE_PROMPT(base)).toBe(JUDGE_PROMPT(base));
+    expect(JUDGE_PROMPT({ ...base, computedConfidence: undefined })).toBe(JUDGE_PROMPT(base));
+  });
+  it("STOP RECONCILE: names the crawl's own stop reason and forbids silently converting it into a caveat", () => {
+    const out = JUDGE_PROMPT({
+      ...base,
+      stop: { done: true, reason: 'one more focused wave is warranted' },
+    });
+    expect(out).toContain("THE CRAWL'S LAST WORD");
+    expect(out).toContain('done=true');
+    expect(out).toContain('one more focused wave is warranted');
+    expect(out).toContain('never silently convert remaining work into a caveat');
+  });
+  it('omits STOP RECONCILE (byte-identical) when no stop is supplied', () => {
+    const none = JUDGE_PROMPT({ ...base, stop: undefined });
+    expect(none).not.toContain("THE CRAWL'S LAST WORD");
+    expect(none).toBe(JUDGE_PROMPT(base));
+  });
+  it('the Return line names retractClaimIds', () => {
+    expect(JUDGE_PROMPT(base)).toContain('retractClaimIds');
+  });
+});
+
+describe('synthesiser — v3 FINALIZE clauses (batch 4)', () => {
+  const base = {
+    mode: 'goal' as const,
+    query: Q,
+    landscape: 'L',
+    resultSoFar,
+    waveLog,
+    cleanReports,
+    focus: 'lead with cost',
+    openRabbitHoles: ['x'],
+  };
+  it('ledgerClause instructs citing [c12] ids from the digest, independence from clusters only', () => {
+    const out = SYNTHESISER_PROMPT({ ...base, ledger: 'c1 [settled·clu1·pass] X — s' });
+    expect(out).toContain('CLAIM LEDGER');
+    expect(out).toContain('c1 [settled·clu1·pass] X — s');
+    expect(out).toContain('ids look like c12, clusters like clu2');
+    expect(out).toContain('Cite ledger claims inline as [c12]');
+    expect(out).toContain('must be a real ledger id from the digest above');
+    expect(out).toContain('independence ONLY from cluster counts');
+  });
+  it('omits the ledger clause (byte-identical) when the digest is empty', () => {
+    const none = SYNTHESISER_PROMPT({ ...base, ledger: '' });
+    expect(none).not.toContain('CLAIM LEDGER');
+    expect(none).toBe(SYNTHESISER_PROMPT(base));
+  });
+  it('nullAttacksSummary renders the challenged-and-survived one-liners', () => {
+    const out = SYNTHESISER_PROMPT({ ...base, nullAttacksSummary: ['gap topic → c1'] });
+    expect(out).toContain('CHALLENGED AND SURVIVED');
+    expect(out).toContain('gap topic → c1');
+  });
+  it('omits the nullAttacks clause (byte-identical) when empty', () => {
+    const none = SYNTHESISER_PROMPT({ ...base, nullAttacksSummary: [] });
+    expect(none).not.toContain('CHALLENGED AND SURVIVED');
+    expect(none).toBe(SYNTHESISER_PROMPT(base));
+  });
+  it('confidenceClause states the computed confidence, lower-only', () => {
+    const out = SYNTHESISER_PROMPT({ ...base, computedConfidence: 'medium' });
+    expect(out).toContain('Machinery-computed confidence: medium');
+    expect(out).toContain('may be lower with a stated reason, never higher');
+  });
+  it('omits the confidence clause (byte-identical) when absent', () => {
+    expect(SYNTHESISER_PROMPT({ ...base, computedConfidence: undefined })).toBe(
+      SYNTHESISER_PROMPT(base),
+    );
+  });
+});
+
+describe('initiator — v3 FINALIZE clauses (batch 4)', () => {
+  const base = { query: Q, resultSoFar, waveLog, landscape: 'L', openRabbitHoles: ['x'] };
+  it('ledgerClause renders the CLAIM LEDGER digest', () => {
+    const out = INITIATOR_PROMPT({ ...base, ledger: 'c1 [tentative·clu0·pass] X — s' });
+    expect(out).toContain('CLAIM LEDGER');
+    expect(out).toContain('c1 [tentative·clu0·pass] X — s');
+    expect(out).toContain('ids look like c12, clusters like clu2');
+  });
+  it('omits the ledger clause (byte-identical) when the digest is empty', () => {
+    const none = INITIATOR_PROMPT({ ...base, ledger: '' });
+    expect(none).not.toContain('CLAIM LEDGER');
+    expect(none).toBe(INITIATOR_PROMPT(base));
+  });
+  it('sensitivityClause renders when a derivation rerun has produced a ranking', () => {
+    const out = INITIATOR_PROMPT({ ...base, sensitivity: '- cost (0.70) — backed by c1 X' });
+    expect(out).toContain('SENSITIVITY RANKING');
+    expect(out).toContain('- cost (0.70) — backed by c1 X');
+    expect(out).toContain('Prioritize hardening the claims behind the top-variance inputs');
+  });
+  it('omits SENSITIVITY RANKING (byte-identical) before any rerun has completed', () => {
+    const none = INITIATOR_PROMPT({ ...base, sensitivity: '' });
+    expect(none).not.toContain('SENSITIVITY RANKING');
+    expect(none).toBe(INITIATOR_PROMPT(base));
+  });
+  it('the facts instruction names claimId and its binding to the ledger record', () => {
+    expect(INITIATOR_PROMPT(base)).toContain('set its claimId');
+  });
+});
+
+describe('refiner — v3 FINALIZE clause: THE CLAIM AS PINNED (batch 4)', () => {
+  it('pinnedClause renders the claim quote + source when the fact is bound to a ledger claim', () => {
+    const out = REFINE_PROMPT({
+      net: NET,
+      query: Q,
+      fact: 'F',
+      why: 'W',
+      claimQuote: 'the exact verbatim span',
+      claimSource: 'https://example.com/p',
+    });
+    expect(out).toContain('THE CLAIM AS PINNED');
+    expect(out).toContain('the exact verbatim span');
+    expect(out).toContain('https://example.com/p');
+  });
+  it('omits THE CLAIM AS PINNED (byte-identical) when the fact carries no claimId', () => {
+    const none = REFINE_PROMPT({ net: NET, query: Q, fact: 'F', why: 'W' });
+    expect(none).not.toContain('THE CLAIM AS PINNED');
+    expect(none).toBe(REFINE_PROMPT({ net: NET, query: Q, fact: 'F', why: 'W' }));
+  });
+  it('the Return line names the attack-recording fields', () => {
+    const out = REFINE_PROMPT({ net: NET, query: Q, fact: 'F', why: 'W' });
+    expect(out).toContain('queriesTried');
+    expect(out).toContain('counterFound');
+    expect(out).toContain('counterNote');
+  });
+});
+
+// I — debugAnalyst was blind to v3: it never named the ledger machinery an engineer should sanity-check.
+describe('debugAnalyst — v3 ledger machinery sanity-check clause (finding I)', () => {
+  it('names the v3 clerks + the metrics to check for anomalies', () => {
+    const out = DEBUG_PROMPT({
+      query: Q,
+      focus: '',
+      metrics: {
+        mode: 'goal',
+        dir: 'RR/x',
+        wavesRun: 1,
+        stopReason: 'brainer-done',
+        scoutRabbitHoles: 0,
+        prospectorVenues: 0,
+        pursuedTotal: 0,
+        rabbitHolesFinal: 0,
+        bestOpenScore: 0,
+        topScores: [],
+        done: true,
+        reportWritten: true,
+        confidence: 'high',
+        claimsTotal: 0,
+        nullAttacksTotal: 0,
+        chao: null,
+        citationsBogus: 0,
+      },
+      waveLog: [],
+      resultLog: [],
+      highValueSources: [],
+      laneRecords: [],
+    });
+    expect(out).toContain('claimAuditor');
+    expect(out).toContain('lineageClerk');
+    expect(out).toContain('rerunner');
+    expect(out).toContain('scribe');
+    expect(out).toContain('metrics.claimsTotal');
+    expect(out).toContain('nullAttacksTotal');
+    expect(out).toContain('citationsBogus');
+    expect(out).toContain('chao');
   });
 });

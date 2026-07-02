@@ -1,5 +1,6 @@
 // BRAINER prompts — the brain's per-wave template + the clause-assembly function. Template strings
 // are module-level consts; buildBrainer only assembles/substitutes the per-wave clauses.
+import { CONFIG } from '../../config.js';
 import { plain, render } from '../../utils/index.js';
 import { FINISH } from '../shared.js';
 import type { BrainerArgs, BrainerComputeArgs } from '../../types/index.js';
@@ -29,12 +30,12 @@ RABBIT-HOLE STORE — open rabbit-holes (\`#id [last score or "new"] keyword —
 ALREADY PURSUED — do not look up or re-originate these (research history):
 {{pursuedList}}
 Findings this wave (from the researchers' page-reading):
-{{findings}}{{trajectory}}{{venuesClause}}{{languageClause}}
+{{findings}}{{trajectory}}{{venuesClause}}{{languageClause}}{{calibrationClause}}{{sensitivityClause}}{{chaoClause}}
 
-{{memoryClause}}
-Update and return \`resultSoFar\` as the run's memory: refine \`answer\`; append load-bearing \`evidence\` only (each {fact, value, source, status: settled|tentative|contested} — facts the answer rests on, not a transcript); record the working \`assumptions\` the answer leans on (each {claim, basis}) and revise or retire them as evidence lands; move closed parts into \`resolved\`; keep \`openGaps\` current; record any \`tensions\` (conflicting sources); {{workingClause}}; set \`confidence\`.
+{{memoryClause}}{{ledgerClause}}
+Update and return \`resultSoFar\` as the run's memory: refine \`answer\`; set \`keyClaimIds\` to the ledger ids the answer rests on; record the working \`assumptions\` the answer leans on (each {claim, basis}) and revise or retire them as evidence lands; move closed parts into \`resolved\`; keep \`openGaps\` current; record any \`tensions\` (conflicting sources); {{workingClause}}; set \`confidence\`.
 Weight findings by evidence quality — funding independence, sample size, replication, stated limitations — not mere existence; let it drive both your scores and \`confidence\`.
-For each headline / load-bearing finding, originate a lane to hunt failed replications, null trials, or refutations. Keep such a claim at status \`tentative\` (single source) until an independent source — a different group and funder — corroborates it; only then mark it \`settled\`.{{computeField}}
+For each headline / load-bearing finding, originate a lane to hunt failed replications, null trials, or refutations. Corroboration is what feeds the ledger's own settled/tentative computation — you never set status yourself; originate lanes that give the machinery independent clusters to count.{{attackClause}}{{computeField}}
 
 Then return deltas against the store:
 (1) \`rescore\`: [{id, score}] — only the rabbit-holes whose 0-100 score changes this wave (score every "new" one at least once); unlisted ones keep their last score. Score honestly per the rubric; a marginal one scores low.
@@ -42,7 +43,7 @@ Then return deltas against the store:
 (3) \`lookupNext\`: the rabbit-holes to research now — each either {id} (a stored one) or {keyword, why, score{{scoreFields}}} (one you originate and pursue now). None may be already pursued.{{assignClause}} For EVERY lookupNext lane author a \`note\`: the research directive — WHAT to find plus ranked fallbacks ("if not X, focus on Y; give both if available"). It steers both the scheduler's source pick and the reader's extraction; keep it distinct from \`why\` (your store/scoring rationale).
 (4) \`rename\`: [{id, keyword, why?}] — relabel a rabbit-hole, keeping its id + history (optional).
 (5) \`drop\`: [id, …] — eliminate a dead/duplicate rabbit-hole; a merge = drop the duplicate and rescore the survivor (optional).{{spawnClause}}
-(6) \`stop\`: {done, reason}. {{stop}}{{goalClause}}{{validatorClause}}{{FINISH}}
+(6) \`stop\`: {done, reason}. {{stop}}{{goalClause}}{{voiClause}}{{validatorClause}}{{FINISH}}
 `;
 
 export const buildBrainer = ({
@@ -70,6 +71,10 @@ export const buildBrainer = ({
   trail,
   canSpawn,
   lastWave,
+  ledger,
+  calib,
+  derivation,
+  chao,
 }: BrainerArgs) => {
   // brainer-tree role: a CHILD drives ONE branch and may abandon it; the ROOT carries the whole run and never can.
   const roleClause = isChild
@@ -81,7 +86,7 @@ export const buildBrainer = ({
   // spawn is offered ONLY while spawning is still permitted (caps not hit) — don't tempt a capped-out brainer.
   const spawnClause = canSpawn
     ? `\n(5b) \`spawn\` (at most ONE this wave): when the goal holds two or more INDEPENDENT investigations — separate evidence bases, sub-questions that do not inform each other — hand one to a focused child brainer THIS wave instead of carrying both in your single line: emit \`spawn\` {id (or keyword+why), mandate}. The child inherits a clean copy of your store + memory, aimed by the mandate; you drop that branch and steer the rest. Reserve a spawn for a branch substantial enough to run on its own — not a single lane — but when the run genuinely splits in two, spawn rather than interleave.`
-    : '';
+    : `\n(spawn is unavailable this wave — the parallel-brainer cap is reached; do not emit one.)`;
   const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
   const validatorClause = lastValidatorMissing
     ? `\nVALIDATOR — last wave left these unfilled; re-pursue the reopened lanes or originate new ones to close them: ${lastValidatorMissing}`
@@ -123,11 +128,56 @@ Some of this topic's strongest literature is non-English. Guidance: ${languageGu
     compute === false
       ? `leave \`working\` empty and treat any value you cannot source as STATED UNCERTAINTY in the answer — never hand-roll a derivation`
       : `for build-the-answer / estimate questions grow the \`working\` derivation chain (else '')`;
+  // derivationClause (compute on) — replaces v2's inline COMPUTE TO STEER: redirect from deriving-inline to
+  // AUTHORING the derivation once as a stored artifact the engine reruns cheaply every wave (kept in the
+  // `computeField` slot/variable name — same template placeholder, same compute gate as before).
   const computeField = compute
     ? `
 
-COMPUTE TO STEER: when a calculation would change your next move — a number the answer is being built toward, or an estimate of which gap matters most — derive it yourself this wave (reason it out, or write and run a short Python/Node script when the arithmetic needs it) and fold the result into \`working\`. Keep it light; you are steering, not writing the final derivation.${computeNote ? '\n\n' + computeNote : ''}`
+When the answer must be BUILT (an estimate, a synthesis with arithmetic), AUTHOR the derivation once as a stored artifact: return \`derivation\` {code, inputs} — pure seeded python3, reads one JSON arg of input values, prints {quantiles, sensitivity}. Name each input, tie it to the ledger claims backing it (claimIds), and mark unevidenced inputs prior:true with a WIDE dist — never a fake point value. The engine reruns it cheaply every wave and shows you the sensitivity; re-emit \`derivation\` only to change code or inputs. Fold the headline number into \`working\`.${computeNote ? '\n\n' + computeNote : ''}`
     : '';
+  // ledgerClause — the claim ledger digest (v3 STEERING); omitted entirely before any claim is ledgered.
+  const ledgerClause = ledger
+    ? `\nCLAIM LEDGER — the run's evidence, quote-pinned + audited by machinery (each line: c12 [status·clu2·audit] claim = value — ids look like c12, clusters like clu2):\n${ledger}\nCorroboration counts independence CLUSTERS, not sources — two claims in one cluster are ONE voice. Reference claims by their NUMBER (the digits in its c12 id) in \`keyClaimIds\` (the ids the answer rests on). Evidence lives HERE now — do not re-emit facts into resultSoFar.evidence.`
+    : '';
+  // attackClause — gated on the SAME ledger presence: nothing to challenge before the first claim lands.
+  const attackClause = ledger
+    ? ` For every keyClaim still \`tentative\` that has never been challenged (no attack lane, no nullAttack), originate ONE kind:"attack" lane hunting its strongest realistic counter-evidence — a claim that has survived attack outranks one nobody questioned.`
+    : '';
+  // calibrationClause — only kinds with a real observation (n>0) render; an all-neutral table teaches nothing.
+  const calibEntries = Object.entries(calib || {}).filter(([, v]) => v && v.n > 0);
+  const calibrationClause = calibEntries.length
+    ? `\nCALIBRATION — your lead kinds, predicted vs realized yield this run (ratio<1 = you overestimate this kind): ${calibEntries.map(([k, v]) => k + ': ' + v.ratio.toFixed(2) + ' (' + v.n + ')').join(', ')}. The engine already weights selection by these; let them temper your scores too.`
+    : '';
+  // sensitivityClause + voiClause — gated on a derivation with at least one completed rerun (lastRun);
+  // a freshly-authored, not-yet-run derivation has no sensitivity to show.
+  const priorNames = new Set(
+    (derivation ? derivation.inputs : []).filter((i) => i.prior).map((i) => i.name),
+  );
+  const sensEntries = derivation ? Object.entries(derivation.sensitivity || {}) : [];
+  const topInput = sensEntries.length ? sensEntries.reduce((a, b) => (b[1] > a[1] ? b : a))[0] : '';
+  const staleFlag =
+    derivation && derivation.stale
+      ? ' (STALE — last rerun failed; consider re-emitting the derivation.)'
+      : '';
+  const sensitivityClause = derivation
+    ? `\nDERIVATION STATE — current quantiles: ${Object.entries(derivation.quantiles || {})
+        .map(([k, v]) => k + '=' + v)
+        .join(', ')}. Variance shares by input: ${sensEntries
+        .map(([k, v]) => k + ': ' + v.toFixed(2) + (priorNames.has(k) ? ' (PRIOR)' : ''))
+        .join(
+          ', ',
+        )} (inputs marked PRIOR are placeholders awaiting evidence). Chase the inputs that dominate the variance: a lane that pins a ${topInput} beats any topical lead.${staleFlag}`
+    : '';
+  const voiClause =
+    mode === 'goal' && derivation
+      ? `\nSTOP TEST (value-of-information): when the goal is answered AND no open rabbit-hole targets a derivation input with variance share > ${CONFIG.VOI_SENS_THRESHOLD}, further waves cannot materially change the answer — set stop.done=true.`
+      : '';
+  // chaoClause — collect mode only, once the first collect-mode wave has computed a coverage estimate.
+  const chaoClause =
+    mode === 'collect' && chao
+      ? `\nCOVERAGE — statistical estimate from the claim ledger: ~${Math.round(chao.unseen)} distinct findings remain unfound (coverage ≈${Math.round(chao.coverage * 100)}%). Read it as the inventory's completeness, not a feeling.`
+      : '';
   return render(BRAINER_TPL, {
     roleClause,
     lastWaveClause,
@@ -145,12 +195,18 @@ COMPUTE TO STEER: when a calculation would change your next move — a number th
     trajectory,
     venuesClause,
     languageClause,
+    calibrationClause,
+    sensitivityClause,
+    chaoClause,
     memoryClause,
+    ledgerClause,
+    attackClause,
     scoreFields,
     assignClause,
     workingClause,
     stop,
     goalClause,
+    voiClause,
     validatorClause,
     computeField,
     FINISH,
@@ -174,7 +230,7 @@ Derive with rigor:
 - write and run a short script for any non-trivial arithmetic — load Bash + Write via ToolSearch if absent, run python (or node) — compute, do not estimate;
 - propagate the input uncertainties into an explicit ± error range;
 - adversarially check your own work: re-derive a second way or sanity-check against an anchor, and fix any unit / formula / arithmetic slip.{{noteClause}}{{thinkerClause}}
-Return the updated \`resultSoFar\`: fold the completed derivation into \`working\` (the verified inputs, the steps, the numbers, the ± result, the self-check), put the headline computed result in \`answer\`, and keep evidence / resolved / openGaps / tensions / confidence current.{{FINISH}}
+Return the updated \`resultSoFar\`: fold the completed derivation into \`working\` (the verified inputs, the steps, the numbers, the ± result, the self-check), put the headline computed result in \`answer\`, and keep \`keyClaimIds\` / \`resolved\` / \`openGaps\` / \`tensions\` / \`confidence\` current — \`keyClaimIds\` are the ledger claim ids the answer rests on; the deprecated \`evidence\` array is never populated.{{FINISH}}
 `;
 
 export const buildBrainerCompute = ({

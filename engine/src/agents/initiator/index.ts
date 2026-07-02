@@ -27,6 +27,11 @@ export const INITIATOR: Schema = {
                 type: 'string',
                 description: 'why this group is load-bearing — what breaks if it is wrong',
               },
+              claimId: {
+                type: 'number',
+                description:
+                  'ledger claim id this fact corresponds to, when one exists — hardening then updates that claim record',
+              },
             },
             required: ['fact', 'why'],
           },

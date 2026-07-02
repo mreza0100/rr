@@ -10,4 +10,5 @@ export interface Schema {
   description?: string;
   enum?: string[];
   maxItems?: number;
+  additionalProperties?: Schema; // an OPEN-KEYED object (e.g. Record<string, number>) — the schema every dynamic key must satisfy
 }

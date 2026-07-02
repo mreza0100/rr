@@ -1,13 +1,22 @@
 import { CONFIG } from '../config.js';
 import type {
-  Evidence,
+  ChaoStats,
+  Claim,
+  ClaimEntities,
+  ClaimStatus,
+  Confidence,
+  DerivInput,
   Finding,
+  LeadKind,
+  NullAttack,
   ReadSlice,
   ResultSoFar,
   SchedulerSource,
   ScoreEntry,
   Stop,
+  Term,
   Venue,
+  YieldCalib,
 } from '../types/index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -35,13 +44,15 @@ export const clip = (s: string, n: number): string => (s.length > n ? s.slice(0,
 export const lastScore = (r: { scoreHistory: ScoreEntry[] }): number | null =>
   r.scoreHistory.length ? r.scoreHistory[r.scoreHistory.length - 1].score : null;
 // one-line render of an open store entry for the brainer: `#id [last score or "new"] keyword — why`
-// (a ` ↪ ref` suffix flags a lead that carries a concrete URL/DOI to fetch directly).
+// (a ` ↪ ref` suffix flags a lead that carries a concrete URL/DOI to fetch directly; a trailing kind tag
+// surfaces the lead's origin channel when set, ⚔-prefixed for 'attack' so a pending attack lane stands out).
 export const openLine = (r: {
   id: number;
   keyword: string;
   why: string;
   scoreHistory: ScoreEntry[];
   ref?: string;
+  kind?: LeadKind;
 }): string =>
   '#' +
   r.id +
@@ -51,7 +62,8 @@ export const openLine = (r: {
   r.keyword +
   ' — ' +
   r.why +
-  (r.ref ? ' ↪ ' + r.ref : '');
+  (r.ref ? ' ↪ ' + r.ref : '') +
+  (r.kind ? (r.kind === 'attack' ? ' ⚔attack' : ' ·' + r.kind) : '');
 
 // plain() — render a value as compact PLAIN TEXT for interpolation INTO an agent prompt (replaces JSON.stringify-in-prompts: less noise, no
 // braces/quotes). string/number/boolean → as-is; array → one "- el" line each (recursing, nested indented two spaces); object → "key: value"
@@ -100,7 +112,20 @@ export const laneCount: number =
     ? CONFIG.AUTO_CAP
     : CONFIG.parallelLaneResearchAgentsPerWave;
 export const trailOf = (path: string[], keyword?: string): string =>
-  [clip(CONFIG.query, 60)].concat(path || [], keyword ? [keyword] : []).join('  →  ');
+  [clip(CONFIG.query, CONFIG.MANDATE_CLIP)]
+    .concat(path || [], keyword ? [keyword] : [])
+    .join('  →  ');
+
+// chunk — split an array into groups of at most `size` items each (the v3 ledger clerks — claimAuditor/
+// lineageClerk — batch a wave's claim list into bounded agent calls this way). size ≤ 0 defensively
+// degrades to one whole-array chunk (never an infinite loop) — empty input still yields [].
+export function chunk<T>(items: T[], size: number): T[][] {
+  if (!items.length) return [];
+  if (size <= 0) return [items];
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
 
 // map the brainer's assigned source-identifier strings back to the full {source, goodFor} venue objects (for the
 // researcher prompt) — looked up against the prospector's high-value venue set on rr; an unknown id renders bare.
@@ -110,6 +135,296 @@ export const venuesFor = (rr: { highValueSources: Venue[] }, sources?: string[])
     (s) => rr.highValueSources.find((v) => v.source === s) || { source: s, goodFor: '' },
   );
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Claim-ledger helpers (v3) — pure functions over the append-only claim ledger.
+// Status + confidence are COMPUTED here from ledger topology, never asserted by a model.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// scrubArtifacts — deterministic removal of structured-output/tool-call leakage that occasionally bleeds
+// into a reader's returned text (real bug from run forensics: raw `</parameter>` tags bled into lane
+// findings and propagated downstream). Strips every COMPLETE open/close tag matching the known leakage
+// patterns, then a trailing UNCLOSED fragment of one (the harness cut the emission off mid-tag) — ordinary
+// text is left alone: a lone '<' is only stripped when what follows it is a genuine prefix of one of these
+// tag names (so "5 < 10" or "x<y" survive untouched).
+const ARTIFACT_TAG = /<\/?(?:StructuredOutput|parameter|invoke|function_[a-z]+)[^>]*>/g;
+const ARTIFACT_TAG_NAMES = ['StructuredOutput', 'parameter', 'invoke'];
+const isArtifactTagPrefix = (frag: string): boolean =>
+  !!frag &&
+  (ARTIFACT_TAG_NAMES.some((n) => n.startsWith(frag)) ||
+    'function'.startsWith(frag) ||
+    /^function_[a-z]*$/.test(frag));
+export function scrubArtifacts(s: string): string {
+  if (!s) return s;
+  const out = s.replace(ARTIFACT_TAG, '');
+  const lastLt = out.lastIndexOf('<');
+  if (lastLt === -1 || out.slice(lastLt).includes('>')) return out;
+  const frag = out.slice(lastLt + 1).replace(/^\//, ''); // a closing-tag fragment drops its leading '/' first
+  return isArtifactTagPrefix(frag) ? out.slice(0, lastLt) : out;
+}
+
+// makeUF — a path-compressed union-find over string keys (lineage clustering). find() returns the
+// canonical root of a key (a fresh key is its own root); union() merges two keys' groups.
+export function makeUF(): { find: (key: string) => string; union: (a: string, b: string) => void } {
+  const parent: Record<string, string> = {};
+  const find = (key: string): string => {
+    if (!(key in parent)) parent[key] = key;
+    let root = key;
+    while (parent[root] !== root) root = parent[root];
+    for (let cur = key; parent[cur] !== root;) {
+      const next = parent[cur];
+      parent[cur] = root; // path compression: repoint every walked node straight at the root
+      cur = next;
+    }
+    return root;
+  };
+  const union = (a: string, b: string): void => {
+    parent[find(a)] = find(b);
+  };
+  return { find, union };
+}
+
+// domainOf — the lineage signal inside a source ref: the host without www, or a DOI's registrant
+// prefix ('10.x' = the publisher, per the normRef conventions). '' when nothing resolvable.
+export const domainOf = (url: string | null | undefined): string => normRef(url).split('/')[0];
+
+// lineageKeyOf — the DETERMINISTIC lineage fallback when the lineageClerk dies: cluster a claim by
+// norm(funder || venue || source-domain). '' when nothing resolvable (the caller maps '' → cluster 0).
+export const lineageKeyOf = (claim: { entities?: ClaimEntities; source: string }): string => {
+  const e = claim.entities || {};
+  return norm(e.funder || e.venue || domainOf(claim.source));
+};
+
+// claimStatus — COMPUTED, never asserted. contested: an unretracted attacking claim targets it.
+// settled: supporting clusters ≥ SETTLED_MIN_CLUSTERS AND (a survived attack OR one cluster beyond the
+// minimum). Else tentative. Support = the claim's own cluster plus the clusters of unretracted,
+// non-failed claims whose stance supports it; the Set counts cluster 0 (shared unknown lineage) at
+// most ONCE no matter how many claims sit in it.
+export function claimStatus(
+  claim: Claim,
+  allClaims: Claim[],
+  nullAttacks: NullAttack[],
+  cfg: { SETTLED_MIN_CLUSTERS: number },
+): ClaimStatus {
+  const bearsOn = (c: Claim, kind: 'supports' | 'attacks'): boolean =>
+    !!c.stance && c.stance.target === claim.id && c.stance.kind === kind;
+  // a set `counter` (the refiner's own counter-search landed something, or an attack-lane's finding) contests
+  // the claim just as an unretracted attacking ledger claim does — same signal, no ledger row required for it.
+  if (claim.counter || allClaims.some((c) => !c.retracted && bearsOn(c, 'attacks')))
+    return 'contested';
+  // the SUBJECT's own mechanical audit verdict: a claim the auditor actively disproved is treated like
+  // retracted for THIS purpose — it can never settle, no matter how many independent clusters back it
+  // (checked AFTER the contested guard above, so a still-attacked audit-fail claim reads as contested, not tentative).
+  if (claim.audit === 'fail') return 'tentative';
+  const clusters = new Set<number>([claim.cluster]);
+  for (const c of allClaims)
+    if (!c.retracted && c.audit !== 'fail' && bearsOn(c, 'supports')) clusters.add(c.cluster);
+  // a nullAttack naming the claim counts as a survived attack even before the attack-lane bookkeeping
+  // bumps the counter; max (not sum) so the two records never double-count one challenge.
+  const survived = Math.max(
+    claim.attacksSurvived || 0,
+    (nullAttacks || []).filter((na) => (na.claimIds || []).includes(claim.id)).length,
+  );
+  return clusters.size >= cfg.SETTLED_MIN_CLUSTERS &&
+    (survived >= 1 || clusters.size >= cfg.SETTLED_MIN_CLUSTERS + 1)
+    ? 'settled'
+    : 'tentative';
+}
+
+// computedConfidence — deterministic over the key claims the answer rests on: every one settled →
+// high; any contested → low; else medium. No key claims → medium; an unknown id can never ground high.
+// A key claim the mechanical audit disproved (or the judge retracted) is worse than merely unsettled —
+// the answer rests on a disproven pin, not just an unstressed one — so it forces 'low' outright, same as contested.
+export function computedConfidence(keyClaimIds: number[], claims: Claim[]): Confidence {
+  if (!keyClaimIds || !keyClaimIds.length) return 'medium';
+  const byId = new Map(claims.map((c) => [c.id, c]));
+  const keys = keyClaimIds.map((id) => byId.get(id));
+  if (keys.some((c) => c && (c.audit === 'fail' || c.retracted))) return 'low';
+  if (keys.some((c) => c && c.status === 'contested')) return 'low';
+  return keys.every((c) => c && !c.retracted && c.status === 'settled') ? 'high' : 'medium';
+}
+
+// claimDigestOf — the compact "KEY CLAIMS SO FAR" digest woven into a lane reader's prompt: non-retracted
+// claims, most recent first (highest id), capped at CLAIM_DIGEST_CAP, one line each `c12 clip(claim,90)`
+// (ids look like c12 — never '#12', which the ledger digest never renders and a stance target must not
+// be confused with a cluster's `clu2` notation). '' when the ledger is empty (the reader's own fallback
+// then renders "first wave"). Structural param (mirrors venuesFor's `rr`) so this stays a pure function
+// over any claims-bearing state, not just BrainerState.
+export const claimDigestOf = (bs: { claims: Claim[] }): string =>
+  bs.claims
+    .filter((c) => !c.retracted)
+    .sort((a, b) => b.id - a.id)
+    .slice(0, CONFIG.CLAIM_DIGEST_CAP)
+    .map((c) => 'c' + c.id + ' ' + clip(c.claim, CONFIG.CLAIM_DIGEST_CLIP))
+    .join('\n');
+
+// minConfidence — the lower-only rule: models may LOWER confidence, never raise it (low < medium < high).
+const CONF_RANK: Record<Confidence, number> = { low: 0, medium: 1, high: 2 };
+export const minConfidence = (a: Confidence, b: Confidence): Confidence =>
+  CONF_RANK[a] <= CONF_RANK[b] ? a : b;
+
+// lintCitations — v3 SYNTHESISER citation lint (pure): scan `report` for every [cN] marker the model wrote;
+// one whose id is not a LIVE (non-retracted) ledger claim is stripped from the text in place (never left
+// dangling, never fabricated back into a real id) and its id collected in `bogus` for the engine to log +
+// count. No markers / empty report ⇒ passthrough, bogus: [].
+export function lintCitations(
+  report: string,
+  claims: Claim[],
+): { report: string; bogus: number[] } {
+  const live = new Set(claims.filter((c) => !c.retracted).map((c) => c.id));
+  const bogus: number[] = [];
+  const cleaned = (report || '').replace(/\[c(\d+)\]/g, (marker, idStr: string) => {
+    const id = Number(idStr);
+    if (live.has(id)) return marker;
+    bogus.push(id);
+    return '';
+  });
+  return { report: cleaned, bogus };
+}
+
+// chao1 — the coverage estimator (collect mode): from claim groups and how many distinct sources saw
+// each, estimate the unseen groups (n1 = singletons, n2 = doubletons; the bias-corrected form when
+// n2 = 0) and the coverage share. No groups yet → coverage 0 (nothing observed ≠ complete).
+export function chao1(groups: { sources: number }[]): ChaoStats {
+  if (!groups || !groups.length) return { unseen: 0, coverage: 0 };
+  const n1 = groups.filter((g) => g.sources === 1).length;
+  const n2 = groups.filter((g) => g.sources === 2).length;
+  // Math.max also normalizes the n1 = 0 corner (0·(0−1)/2 = −0) to a clean +0
+  const unseen = Math.max(0, n2 > 0 ? (n1 * n1) / (2 * n2) : (n1 * (n1 - 1)) / 2);
+  return { unseen, coverage: groups.length / (groups.length + unseen) };
+}
+
+// updateCalib — one EMA step of a kind's realized/predicted yield ratio. PURE: returns the new entry,
+// never mutates `calib`. predicted ≤ 0 → identity (an unpredicted lead teaches nothing). A kind starts
+// from the neutral prior ratio 1, so early observations pull it gradually rather than whipsaw it.
+export function updateCalib(
+  calib: YieldCalib,
+  kind: string,
+  predicted: number,
+  realized: number,
+  alpha: number,
+): { n: number; ratio: number } {
+  const prev = calib[kind] || { n: 0, ratio: 1 };
+  if (!(predicted > 0)) return { n: prev.n, ratio: prev.ratio };
+  return { n: prev.n + 1, ratio: prev.ratio + alpha * (realized / predicted - prev.ratio) };
+}
+
+// calibFactor — the selection-only multiplier a kind's calibration earns, clamped to [lo, hi]
+// (an unseen kind is neutral: 1). Applied to sort keys only — stored scores are never touched.
+export const calibFactor = (calib: YieldCalib, kind: string, lo: number, hi: number): number =>
+  Math.min(hi, Math.max(lo, calib[kind] ? calib[kind].ratio : 1));
+
+// ledgerLines — the brainer's CLAIM LEDGER digest (v3 STEERING): every non-retracted claim, one line
+// `c12 [status·clu2·audit] claim = value — source` (claim ids look like c12, clusters like clu2 — kept
+// visually distinct so a model never confuses a cluster number with a claim id, or either with a [cN]
+// citation marker), ordered latest-keyClaimIds-first (the ids the LIVING answer currently rests on),
+// then contested, then settled, then tentative by recency (highest id first). Capped at `cap` with a
+// "(+N more)" tail; '' when the ledger is empty (the caller's clause then omits the whole CLAIM LEDGER section).
+export function ledgerLines(
+  bs: { claims: Claim[]; resultSoFar: ResultSoFar | null },
+  cap: number,
+): string {
+  const active = bs.claims.filter((c) => !c.retracted);
+  const used = new Set<number>();
+  const ordered: Claim[] = [];
+  const byId = new Map(active.map((c) => [c.id, c]));
+  for (const id of (bs.resultSoFar && bs.resultSoFar.keyClaimIds) || []) {
+    const c = byId.get(id);
+    if (c && !used.has(id)) {
+      ordered.push(c);
+      used.add(id);
+    }
+  }
+  const rest = active.filter((c) => !used.has(c.id)).sort((a, b) => b.id - a.id);
+  for (const status of ['contested', 'settled', 'tentative'] as ClaimStatus[])
+    for (const c of rest)
+      if (c.status === status && !used.has(c.id)) {
+        ordered.push(c);
+        used.add(c.id);
+      }
+  const shown = ordered.slice(0, cap);
+  const line = (c: Claim): string =>
+    'c' +
+    c.id +
+    ' [' +
+    c.status +
+    '·clu' +
+    c.cluster +
+    '·' +
+    c.audit +
+    '] ' +
+    clip(c.claim, CONFIG.CLAIM_LINE_CLIP) +
+    (c.value ? ' = ' + c.value : '') +
+    ' — ' +
+    c.source;
+  const remaining = ordered.length - shown.length;
+  return shown.map(line).join('\n') + (remaining > 0 ? '\n(+' + remaining + ' more)' : '');
+}
+
+// topSensitivityInput — the derivation input name whose variance share is largest ('' when there are
+// none). Shared by the rerunner's log line and the brainer's DERIVATION STATE clause — one definition.
+export const topSensitivityInput = (sensitivity: Record<string, number> | undefined): string => {
+  const entries = Object.entries(sensitivity || {});
+  return entries.length ? entries.reduce((a, b) => (b[1] > a[1] ? b : a))[0] : '';
+};
+
+// sensitivityRanking — the initiator's SENSITIVITY RANKING body (v3 FINALIZE): derivation inputs ordered by
+// variance share (highest first), each with the ledger claims backing it (`c12 clip(claim,SENSITIVITY_CLIP)`, joined —
+// same c-id notation as ledgerLines/claimDigestOf) or a PRIOR flag when it is an unevidenced placeholder.
+// '' when there is no completed rerun yet (the caller's clause is then omitted entirely — a freshly-authored,
+// not-yet-run derivation has no sensitivity to rank).
+export function sensitivityRanking(
+  derivation: { inputs: DerivInput[]; sensitivity: Record<string, number> } | null | undefined,
+  claims: Claim[],
+): string {
+  if (!derivation) return '';
+  const byId = new Map(claims.map((c) => [c.id, c]));
+  const ranked = [...derivation.inputs].sort(
+    (a, b) => (derivation.sensitivity[b.name] || 0) - (derivation.sensitivity[a.name] || 0),
+  );
+  return ranked
+    .map((inp) => {
+      const share = derivation.sensitivity[inp.name];
+      const backing = (inp.claimIds || [])
+        .map((id) => byId.get(id))
+        .filter((c): c is Claim => !!c && !c.retracted)
+        .map((c) => 'c' + c.id + ' ' + clip(c.claim, CONFIG.SENSITIVITY_CLIP))
+        .join('; ');
+      return (
+        '- ' +
+        inp.name +
+        ' (' +
+        (share != null ? share.toFixed(2) : '?') +
+        ')' +
+        (backing ? ' — backed by ' + backing : inp.prior ? ' — PRIOR (no backing claim yet)' : '')
+      );
+    })
+    .join('\n');
+}
+
+// venuesWithYieldWarn — per-wave copy of the prospector venues for the brainer prompt, with a
+// ' — ⚠ 0 yield in N lanes' suffix baked into `goodFor` for any venue assigned to ≥2 lanes that yielded
+// NOTHING (no ingested claim, no fresh lead) across the run so far. Pure: never mutates `venues` or the
+// stats map; a venue with no entry (or a healthy one) passes through unchanged.
+export function venuesWithYieldWarn(
+  venues: Venue[],
+  venueStats: Record<string, { assigned: number; yielded: number }>,
+): Venue[] {
+  return venues.map((v) => {
+    const s = venueStats[v.source];
+    if (!s || s.assigned < CONFIG.VENUE_WARN_MIN || s.yielded !== 0) return v;
+    return { ...v, goodFor: v.goodFor + ' — ⚠ 0 yield in ' + s.assigned + ' lanes' };
+  });
+}
+
+// vocabSummary — the scheduler's COMMUNITY VOCABULARY clause input: the top `cap` terms by uses,
+// "term (n)" comma-joined; '' when the vocabulary is empty (the caller's clause is then omitted).
+export const vocabSummary = (vocab: Term[], cap: number): string =>
+  [...(vocab || [])]
+    .sort((a, b) => b.uses - a.uses)
+    .slice(0, cap)
+    .map((t) => t.term + ' (' + t.uses + ')')
+    .join(', ');
 
 // packReaders — the MECHANICAL splitter (B5/B2/B7). Bin-pack a lane's sized sources into reader-units, each ≤
 // `budget` tokens AND ≤ budget×charsPerToken CHARS. The UNIT is the budget, not the source: small sources that
@@ -213,26 +528,12 @@ export const bullets = (arr: string[] | null | undefined): string =>
   arr && arr.length ? arr.map((x) => '- ' + x).join('\n') : '_none_';
 export function resultSoFarMd(r: ResultSoFar | null): string {
   if (!r || typeof r !== 'object') return '_none_';
-  const ev = (r.evidence || [])
-    .map(
-      (e: Evidence) =>
-        '- [' +
-        (e.status || '?') +
-        '] **' +
-        (e.fact || '') +
-        ':** ' +
-        (e.value || '') +
-        (e.source ? ' — ' + e.source : ''),
-    )
-    .join('\n');
   return (
     '**Answer:** ' +
     (r.answer || '_(none)_') +
     '\n\n**Confidence:** ' +
     (r.confidence || '_(none)_') +
     (r.working ? '\n\n**Working:**\n\n' + r.working : '') +
-    '\n\n**Evidence:**\n' +
-    (ev || '_none_') +
     (r.assumptions && r.assumptions.length
       ? '\n\n**Assumptions:**\n' +
         r.assumptions.map((a) => '- **' + (a.claim || '') + '** — ' + (a.basis || '')).join('\n')
@@ -317,6 +618,69 @@ export function waveMd(
           r.keyword,
       )
       .join('\n') || '_none_') +
+    '\n'
+  );
+}
+
+// claimsMd — the human-readable ledger artifact (_claims.md): every non-retracted claim, grouped by its
+// COMPUTED status (settled → tentative → contested), one line each: `- c<id> [status·cluster·audit] claim
+// = value — source (wave N, lane)`; then the nullAttacks ("Challenged and survived" — a completed
+// counter-search that found nothing is first-class, distinct from "never challenged"); then the vocabulary.
+export function claimsMd(bs: {
+  claims: Claim[];
+  nullAttacks: NullAttack[];
+  vocabulary: Term[];
+}): string {
+  const line = (c: Claim): string =>
+    '- c' +
+    c.id +
+    ' [' +
+    c.status +
+    '·' +
+    c.cluster +
+    '·' +
+    c.audit +
+    '] ' +
+    c.claim +
+    (c.value ? ' = ' + c.value : '') +
+    ' — ' +
+    c.source +
+    ' (wave ' +
+    c.wave +
+    ', ' +
+    c.lane +
+    ')';
+  const group = (status: ClaimStatus): string =>
+    bs.claims
+      .filter((c) => !c.retracted && c.status === status)
+      .map(line)
+      .join('\n') || '_none_';
+  const nullSection =
+    bs.nullAttacks
+      .map(
+        (na) =>
+          '- **' +
+          na.topic +
+          '** — queries: ' +
+          na.queries.join(', ') +
+          (na.claimIds.length ? ' → c' + na.claimIds.join(', c') : ''),
+      )
+      .join('\n') || '_none_';
+  const vocabSection =
+    bs.vocabulary
+      .map((t) => '- **' + t.term + '**' + (t.gloss ? ' — ' + t.gloss : '') + ' (' + t.uses + ')')
+      .join('\n') || '_none_';
+  return (
+    '# Claim ledger\n\n## Settled\n\n' +
+    group('settled') +
+    '\n\n## Tentative\n\n' +
+    group('tentative') +
+    '\n\n## Contested\n\n' +
+    group('contested') +
+    '\n\n## Challenged and survived\n\n' +
+    nullSection +
+    '\n\n## Vocabulary\n\n' +
+    vocabSection +
     '\n'
   );
 }

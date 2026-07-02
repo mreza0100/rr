@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { AgentOpts, RunResult } from '../src/types/index.js';
+import { BrainerState } from '../src/brainerState.js';
+import type { AgentOpts, Claim, JudgeOut, RunResult } from '../src/types/index.js';
 type AgentStub = (prompt: string, opts: AgentOpts) => unknown;
 
 // ── shared canned StructuredOutputs (the engine reads specific fields) ────────
@@ -8,6 +9,7 @@ const RSF = {
   confidence: 'medium',
   working: 'cost = nodes * price',
   evidence: [{ fact: 'recall', value: '0.98', source: 'arxiv', status: 'settled' }],
+  keyClaimIds: [] as number[], // v3: the ledger ids the answer rests on (empty in these canned fixtures — no ledger claims)
   resolved: ['index types'],
   openGaps: ['multi-tenant isolation'],
   tensions: [],
@@ -100,7 +102,8 @@ const keys = (r: RunResult) => Object.keys(r.files);
 // ── (a) GOAL mode — compute ON, brainer-driven stop, finalize brain-compute ──
 function goalAgent(prompt: string, opts: AgentOpts) {
   const L = opts.label;
-  if (L === 'scout') return SCOUT_OUT;
+  if (L === 'scout-probe:direct') return SCOUT_OUT;
+  if (L === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
   if (L === 'prospector') return PROSPECT_OUT;
   if (L === 'brainer-w0')
     return {
@@ -133,7 +136,8 @@ function goalAgent(prompt: string, opts: AgentOpts) {
       refinement: { facts: [{ fact: 'recall is 0.98', why: 'headline' }] },
       synthesiser: { focus: 'lead with cost' },
     };
-  if (L.startsWith('refine-')) return { report: 'refined: 0.96 ± 0.02 (verified)' };
+  if (L.startsWith('refine-'))
+    return { report: 'refined: 0.96 ± 0.02 (verified)', queriesTried: ['q1'], counterFound: false };
   // judge pass 0 → needs a derivation (routes to brain-compute); pass 1 → derivation now sound → exit
   if (L === 'judge-0')
     return {
@@ -181,9 +185,12 @@ describe('ResearchReport.run — goal mode (compute on, brainer-driven stop)', (
     expect(result.metrics.mode).toBe('goal');
     expect(result.metrics.reportWritten).toBe(true);
     expect(result.verdict).toBe('pgvector wins');
-    expect(result.confidence).toBe('high');
+    // the synthesiser stated 'high', but the fixture's RSF carries no keyClaimIds → computed confidence is
+    // 'medium' (v3 batch 4 confidence floor: final = min(stated, computed), never raised) — floored down.
+    expect(result.confidence).toBe('medium');
 
     expect(result.files['result.md']).toContain('# Report\n\nbody');
+    expect(result.files['result.md']).toContain('Confidence adjusted from high to medium');
     expect(keys(result)).toContain('01-scout.md');
     expect(keys(result)).toContain('02-prospector.md');
     expect(keys(result)).toContain('03-wave-0.md');
@@ -209,7 +216,8 @@ describe('ResearchReport.run — goal mode (compute on, brainer-driven stop)', (
 // ── (b) COLLECT mode — the dry-plateau stop ─────────────────────────────────
 function collectAgent(prompt: string, opts: AgentOpts) {
   const L = opts.label;
-  if (L === 'scout') return SCOUT_OUT;
+  if (L === 'scout-probe:direct') return SCOUT_OUT;
+  if (L === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
   if (L === 'prospector') return PROSPECT_OUT;
   if (L.startsWith('brainer-w')) {
     const w = Number(L.slice('brainer-w'.length));
@@ -228,7 +236,21 @@ function collectAgent(prompt: string, opts: AgentOpts) {
   }
   if (L.startsWith('scheduler-')) return schedulerStub(prompt);
   if (L.startsWith('validator-')) return VALIDATE_OUT;
-  if (L.startsWith('lane-')) return LANE_OUT;
+  // v3 CHAO STOP ASSIST: each research-wave lane lands the SAME recurring finding from a DISTINCT source —
+  // chao1 groups them as one multiply-corroborated species (never a singleton), so coverage reaches 1.0 by
+  // the time the plateau check fires, letting the collect dry-stop through the new coverage gate.
+  if (L.startsWith('lane-'))
+    return {
+      ...LANE_OUT,
+      claims: [
+        {
+          claim: 'the recurring landscape fact',
+          quote:
+            'the recurring landscape fact keeps turning up across independently examined sources',
+          source: 'https://source.example.com/' + L,
+        },
+      ],
+    };
   if (L === 'initiator')
     return {
       refinement: { facts: [] },
@@ -295,7 +317,8 @@ describe('ResearchReport.run — debug:true', () => {
 // ── (d) degraded — null prospector / lane / refine / synthesiser ─────
 function degradedAgent(prompt: string, opts: AgentOpts) {
   const L = opts.label;
-  if (L === 'scout') return SCOUT_OUT;
+  if (L === 'scout-probe:direct') return SCOUT_OUT;
+  if (L === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
   if (L === 'prospector') return null;
   if (L === 'brainer-w0')
     return {
@@ -365,7 +388,8 @@ describe('ResearchReport.run — degraded agents (null guards)', () => {
 // ── (e) brainer mid-crawl death — covers the break path + wave-cap classification ──
 function brainerDiesMidAgent(prompt: string, opts: AgentOpts) {
   const L = opts.label;
-  if (L === 'scout') return SCOUT_OUT;
+  if (L === 'scout-probe:direct') return SCOUT_OUT;
+  if (L === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
   if (L === 'prospector') return PROSPECT_OUT;
   if (L === 'brainer-w0')
     return {
@@ -415,15 +439,16 @@ describe('ResearchReport.run — brainer dies mid-crawl', () => {
 
 // ── (f) fatal: scout / wave-0 brainer death throw ───────────────────────────
 describe('ResearchReport.run — fatal deaths throw', () => {
-  it('throws when the scout dies', async () => {
+  it('throws when the scout dies (every probe in the swarm returns null — planner/merger dying alone is not fatal)', async () => {
     const RR = await loadEngine({ query: 'q', mode: 'goal' }, (p: string, o: AgentOpts) =>
-      o.label === 'scout' ? null : {},
+      o.label.startsWith('scout-probe:') ? null : {},
     );
     await expect(new RR().run()).rejects.toThrow(/scout died/);
   });
   it('throws when the wave-0 brainer dies', async () => {
     const agent = (p: string, o: AgentOpts) => {
-      if (o.label === 'scout') return SCOUT_OUT;
+      if (o.label === 'scout-probe:direct') return SCOUT_OUT;
+      if (o.label === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
       if (o.label === 'prospector') return PROSPECT_OUT;
       if (o.label === 'brainer-w0') return null;
       return {};
@@ -454,7 +479,8 @@ function makeRetryAgent() {
   let prospectorCalls = 0;
   return (prompt: string, opts: AgentOpts) => {
     const L = opts.label;
-    if (L === 'scout') return SCOUT_OUT2;
+    if (L === 'scout-probe:direct') return SCOUT_OUT2;
+    if (L === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
     if (L === 'prospector') {
       prospectorCalls++;
       if (prospectorCalls === 1) throw new Error('transient prospector failure');
@@ -501,7 +527,8 @@ const SCOUT_OUT3 = {
 
 function richAgent(prompt: string, opts: AgentOpts) {
   const L = opts.label;
-  if (L === 'scout') return SCOUT_OUT3;
+  if (L === 'scout-probe:direct') return SCOUT_OUT3;
+  if (L === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
   if (L === 'prospector') return PROSPECT_OUT;
   if (L === 'brainer-w0')
     return {
@@ -538,7 +565,7 @@ function richAgent(prompt: string, opts: AgentOpts) {
       refinement: { facts: [{ fact: 'F', why: 'W' }] },
       synthesiser: { focus: '' },
     };
-  if (L.startsWith('refine-')) return { report: 'r' };
+  if (L.startsWith('refine-')) return { report: 'r', queriesTried: [], counterFound: false };
   // judge pass 0 → routes to brain finalize-compute; pass 1 → derivation sound → exit
   if (L === 'judge-0')
     return {
@@ -590,7 +617,8 @@ describe('ResearchReport.run — rich goal run (defensive defaults)', () => {
 function dryAgent(drop: boolean) {
   return (prompt: string, opts: AgentOpts) => {
     const L = opts.label;
-    if (L === 'scout') return SCOUT_OUT;
+    if (L === 'scout-probe:direct') return SCOUT_OUT;
+    if (L === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
     if (L === 'prospector') return PROSPECT_OUT;
     if (L === 'brainer-w0')
       return {
@@ -661,7 +689,8 @@ function captureBrainerType(captured: Array<string | undefined>) {
   return function (prompt: string, opts: AgentOpts) {
     const L = opts.label;
     if (L.startsWith('brainer-')) captured.push(opts.agentType);
-    if (L === 'scout') return SCOUT_OUT;
+    if (L === 'scout-probe:direct') return SCOUT_OUT;
+    if (L === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
     if (L === 'prospector') return PROSPECT_OUT;
     if (L === 'brainer-w0')
       return {
@@ -748,7 +777,8 @@ describe('ResearchReport.run — compute flag off', () => {
 // ── (j2) finalize crawl-reopen carries the judge directive as the lane note (A5) ──
 function reopenAgent(prompt: string, opts: AgentOpts) {
   const L = opts.label;
-  if (L === 'scout') return SCOUT_OUT;
+  if (L === 'scout-probe:direct') return SCOUT_OUT;
+  if (L === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
   if (L === 'prospector') return PROSPECT_OUT;
   if (L === 'brainer-w0')
     return {
@@ -783,7 +813,7 @@ function reopenAgent(prompt: string, opts: AgentOpts) {
   if (L.startsWith('lane-')) return LANE_OUT;
   if (L === 'initiator')
     return { refinement: { facts: [{ fact: 'F', why: 'W' }] }, synthesiser: { focus: '' } };
-  if (L.startsWith('refine-')) return { report: 'r' };
+  if (L.startsWith('refine-')) return { report: 'r', queriesTried: [], counterFound: false };
   if (L === 'judge-0')
     return {
       goalMet: false, // a real coverage gap → reopen the crawl
@@ -861,7 +891,8 @@ describe('ResearchReport.run — finalize judge loop bounded by MAX_JUDGE_PASSES
 // ── (l) validator gate — re-opens failing lanes, caps re-fails, surfaces a known gap ──
 function refailAgent(prompt: string, opts: AgentOpts) {
   const L = opts.label;
-  if (L === 'scout') return SCOUT_OUT; // seeds id1 (hnsw tuning) + id2 (sharding)
+  if (L === 'scout-probe:direct') return SCOUT_OUT; // seeds id1 (hnsw tuning) + id2 (sharding)
+  if (L === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
   if (L === 'prospector') return PROSPECT_OUT;
   if (L === 'brainer-w0')
     return {
@@ -939,7 +970,8 @@ describe('ResearchReport.run — validator reopens then caps a persistently-fail
 const THICK = 'x'.repeat(200); // ≥ VALIDATOR_THIN, so the gate does not fire
 function skipValidatorAgent(prompt: string, opts: AgentOpts) {
   const L = opts.label;
-  if (L === 'scout') return SCOUT_OUT;
+  if (L === 'scout-probe:direct') return SCOUT_OUT;
+  if (L === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
   if (L === 'prospector') return PROSPECT_OUT;
   if (L === 'brainer-w0')
     return {
@@ -992,7 +1024,8 @@ describe('ResearchReport.run — validator gate skips when findings are substant
 // ── (n) B6 — scheduler-death starvation: an empty schedule N waves running → stopReason scheduler-starved ──
 function starveAgent(prompt: string, opts: AgentOpts) {
   const L = opts.label;
-  if (L === 'scout') return SCOUT_OUT;
+  if (L === 'scout-probe:direct') return SCOUT_OUT;
+  if (L === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
   if (L === 'prospector') return PROSPECT_OUT;
   if (L.startsWith('brainer-w')) {
     const w = Number(L.slice('brainer-w'.length));
@@ -1036,6 +1069,71 @@ describe('ResearchReport.run — scheduler-death starvation guard (B6)', () => {
     expect(result.stopReason).toBe('scheduler-starved');
     expect(result.metrics.wavesRun).toBeLessThan(15); // did NOT grind to HARD_CAP
     expect(result.files['result.md']).toContain('# R'); // still finalizes
+  });
+});
+
+// ── (n3) B6 fix (finding 3) — runOneWave (the multi-brainer path) now mirrors runCrawl's early break: a
+//     starved wave drains BEFORE findings/validator/brainer ever see it, instead of dispatching a brainer
+//     call it cannot do anything useful with. Unit-style (mirrors the topScoresBase test above): call
+//     runOneWave directly so a brainer call-count proves the wave that CROSSES MAX_STARVED_WAVES never dispatches it.
+describe('ResearchReport.runOneWave — B6 starved-wave early return skips the brainer dispatch (finding 3)', () => {
+  const mkBs = () =>
+    new BrainerState(
+      { scout: SCOUT_OUT, scoutRabbitHoles: [], highValueSources: [], languageGuidance: '' },
+      { name: 'root', parentName: null, mandate: '', trail: '', depth: 0 },
+    );
+  it('drains with stopReason scheduler-starved on the 2nd consecutive empty schedule, WITHOUT calling the brainer that wave', async () => {
+    let brainerCalls = 0;
+    const agent: AgentStub = (prompt: string, opts: AgentOpts) => {
+      const L = opts.label;
+      if (L.startsWith('scheduler-')) {
+        // every lane starves — the schedule carries ids but NO usable sources (mirrors starveAgent above).
+        const ids = [...new Set([...prompt.matchAll(/#(\d+)/g)].map((m) => Number(m[1])))];
+        return { lanes: ids.map((id) => ({ id, sources: [] })) };
+      }
+      if (L.startsWith('validator-')) return VALIDATE_OUT;
+      if (L.startsWith('brainer-')) {
+        brainerCalls++;
+        return {
+          resultSoFar: RSF,
+          rescore: [],
+          add: [],
+          rename: [],
+          drop: [],
+          lookupNext: [{ keyword: 'wave1-fresh-lead', why: 'w', score: 70 }],
+          stop: { done: false, reason: 'go' },
+        };
+      }
+      throw new Error('starved-runOneWave test: unexpected label ' + L);
+    };
+    const RR = await loadEngine(
+      { query: 'q', mode: 'goal', checkpoint: false, debug: false },
+      agent,
+    );
+    const rr = new RR();
+    const bs = mkBs();
+    bs.lookupNext = [
+      {
+        id: 1,
+        keyword: 'seed lead',
+        why: 'w',
+        score: 60,
+        scoreHistory: [{ wave: 0, score: 60 }],
+        path: [],
+      },
+    ];
+    // wave 1 — the FIRST starved wave: below MAX_STARVED_WAVES (2), so it runs the brainer as usual.
+    await rr.runOneWave(bs, 1, false, 'Research', false);
+    expect(bs.starvedWaves).toBe(1);
+    expect(bs.status).toBe('active');
+    expect(brainerCalls).toBe(1);
+    // wave 2 — the SECOND consecutive starved wave crosses MAX_STARVED_WAVES: must drain immediately,
+    // never reaching findings/validator/brainer this wave (the call count must NOT increment).
+    await rr.runOneWave(bs, 2, false, 'Research', false);
+    expect(bs.starvedWaves).toBe(2);
+    expect(bs.status).toBe('drained');
+    expect(bs.stopReason).toBe('scheduler-starved');
+    expect(brainerCalls).toBe(1); // unchanged — wave 2 never dispatched the brainer
   });
 });
 
@@ -1087,7 +1185,8 @@ function bigSchedulerStub(prompt: string) {
 }
 function partialFailAgent(prompt: string, opts: AgentOpts) {
   const L = opts.label;
-  if (L === 'scout') return SCOUT_OUT;
+  if (L === 'scout-probe:direct') return SCOUT_OUT;
+  if (L === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
   if (L === 'prospector') return PROSPECT_OUT;
   if (L === 'brainer-w0')
     return {
@@ -1191,7 +1290,8 @@ describe('ResearchReport.run — multi-brainer fork-and-branch (B>1)', () => {
       stop: { done: false, reason: 'x' },
       ...over,
     });
-    if (L === 'scout') return SCOUT_OUT;
+    if (L === 'scout-probe:direct') return SCOUT_OUT;
+    if (L === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
     if (L === 'prospector') return PROSPECT_OUT;
     // ROOT
     if (L === 'brainer-w0')
@@ -1219,7 +1319,8 @@ describe('ResearchReport.run — multi-brainer fork-and-branch (B>1)', () => {
     if (L.startsWith('lane-')) return LANE_OUT;
     if (L === 'initiator')
       return { refinement: { facts: [{ fact: 'f', why: 'w' }] }, synthesiser: { focus: 'lead' } };
-    if (L.startsWith('refine-')) return { report: 'hardened fact' };
+    if (L.startsWith('refine-'))
+      return { report: 'hardened fact', queriesTried: [], counterFound: false };
     if (L.startsWith('judge-'))
       return {
         goalMet: true,
@@ -1264,5 +1365,1621 @@ describe('ResearchReport.run — multi-brainer fork-and-branch (B>1)', () => {
     expect(result.files['_brainers-tree.md']).toContain('⚑WINNER');
     expect(JSON.parse(result.files['_brainers.json']).winner).toBe('root');
     expect(result.files['result-b1-sharding.md']).toContain('LOST');
+  });
+});
+
+// ── (r) v3 CLAIM-LEDGER INGESTION — scrub, dedupe, hallucinated-stance filter, batched audit ∥ lineage
+//     (incl. a cross-wave persistent cluster merge), computed status, attack bookkeeping (landed +
+//     nullAttack), vocabulary merge, yieldCalib, and the _claims.json/_claims.md artifacts ──────────────
+const SCOUT_OUT_LEDGER = {
+  landscape: 'v3 ledger test landscape',
+  pages: [],
+  claims: [
+    {
+      claim: 'SCOUT_CLAIM: Acme drug reduces cardiovascular risk',
+      quote: 'Acme drug reduces cardiovascular risk by 30 percent in the trial cohort text',
+      source: 'https://scout.example.com/ACME-MARKER-trial',
+      cachePath: '/cache/scout-trial.txt',
+      entities: { funder: 'Acme Corp' },
+    },
+  ],
+  newTerms: [{ term: 'RCT', gloss: 'randomized controlled trial' }],
+  deadEnds: [],
+};
+
+// id-agnostic stubs — parse {id, claim}/{id, source} pairs straight off the rendered prompt (plain()
+// renders object keys in declaration order: id then claim, or id then source) so these never depend on
+// hardcoding which numeric ids the engine happens to assign.
+function claimAuditStub(prompt: string) {
+  const checks: { id: number; verdict: 'pass' | 'fail' }[] = [];
+  for (const m of prompt.matchAll(/id: (\d+)\s*\n\s*claim: ([^\n]*)/g))
+    checks.push({ id: Number(m[1]), verdict: m[2].includes('BETA_CLAIM') ? 'fail' : 'pass' });
+  return { checks };
+}
+function lineageClerkStub(prompt: string) {
+  const links: { id: number; keys: string[] }[] = [];
+  for (const m of prompt.matchAll(/id: (\d+)\s*\n\s*source: ([^\n]*)/g)) {
+    const [, idStr, source] = m;
+    if (source.includes('OTHERFUNDER')) continue; // simulate "the clerk missed this one" → lineageKeyOf fallback
+    links.push({ id: Number(idStr), keys: source.includes('ACME-MARKER') ? ['funder:acme'] : [] });
+  }
+  return { links };
+}
+
+function ledgerAgent(scribeCalls: string[]) {
+  return (prompt: string, opts: AgentOpts) => {
+    const L = opts.label;
+    if (L === 'scout-probe:direct') return SCOUT_OUT_LEDGER;
+    if (L === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
+    if (L === 'prospector') return PROSPECT_OUT;
+    if (L === 'claim-audit-scout' || L === 'claim-audit-w1') return claimAuditStub(prompt);
+    if (L === 'lineage-scout' || L === 'lineage-w1') return lineageClerkStub(prompt);
+    if (L.startsWith('scribe-')) {
+      scribeCalls.push(L);
+      return { ok: true };
+    }
+    if (L === 'brainer-w0')
+      return {
+        resultSoFar: RSF,
+        rescore: [],
+        add: [],
+        rename: [],
+        drop: [],
+        lookupNext: [
+          { keyword: 'source beta', why: 'beta lead', score: 90, kind: 'gap' },
+          { keyword: 'source gamma', why: 'gamma lead', score: 80, kind: 'gap' },
+          { keyword: 'attack landed', why: 'counter search', score: 70, kind: 'attack' },
+          {
+            keyword: 'attack empty',
+            why: 'counter search',
+            score: 60,
+            kind: 'attack',
+            note: 'counter search for c1',
+          },
+        ],
+        stop: { done: false, reason: 'scoring seeds' },
+      };
+    if (L === 'brainer-w1')
+      return {
+        resultSoFar: RSF,
+        rescore: [],
+        add: [],
+        rename: [],
+        drop: [],
+        lookupNext: [],
+        stop: { done: true, reason: 'ledger test done' },
+      };
+    if (L.startsWith('scheduler-')) return schedulerStub(prompt);
+    if (L.startsWith('validator-')) return VALIDATE_OUT;
+    if (L === 'lane-w1:source-beta-r1of1')
+      return {
+        runningAnswer: 'beta lane summary. ' + THICK,
+        rabbitHoles: [],
+        nextSources: [],
+        deadEnds: [],
+        claims: [
+          {
+            claim: 'BETA_CLAIM: Beta compound improves outcome',
+            quote: 'Beta compound improves outcome significantly across the studied cohort text',
+            source: 'https://beta.example.com/ACME-MARKER-beta',
+            cachePath: '/cache/beta.txt',
+          },
+          // an exact duplicate (same quote+source) — must be deduped, never a second ledger row
+          {
+            claim: 'BETA_CLAIM: Beta compound improves outcome',
+            quote: 'Beta compound improves outcome significantly across the studied cohort text',
+            source: 'https://beta.example.com/ACME-MARKER-beta',
+            cachePath: '/cache/beta.txt',
+          },
+        ],
+        newTerms: [{ term: 'Biomarker', gloss: 'a measurable indicator' }],
+      };
+    if (L === 'lane-w1:source-gamma-r1of1')
+      return {
+        runningAnswer: 'gamma lane summary. ' + THICK,
+        rabbitHoles: [],
+        nextSources: [],
+        deadEnds: [],
+        claims: [
+          {
+            claim: 'GAMMA_CLAIM: Gamma finding without pinning',
+            quote: 'Gamma finding without pinning is reported anecdotally in the piece here',
+            source: 'https://gamma.example.com/ACME-MARKER-gamma',
+            // no cachePath → unpinned, never sent to the auditor
+          },
+          {
+            claim: 'DELTA_CLAIM: Delta unrelated finding',
+            quote: 'Delta unrelated finding appears in a completely separate context here today',
+            source: 'https://delta.example.com/INDEPENDENT-marker',
+            stance: { target: 9999, kind: 'supports' }, // hallucinated target id → dropped on ingest
+          },
+        ],
+        // same term, different case + a DIFFERENT gloss — must bump uses, never overwrite the first gloss
+        newTerms: [{ term: 'biomarker', gloss: 'a different gloss that must be ignored' }],
+      };
+    if (L === 'lane-w1:attack-landed-r1of1')
+      return {
+        runningAnswer: 'attack landed lane summary. ' + THICK,
+        rabbitHoles: [],
+        nextSources: [],
+        deadEnds: [],
+        surprise: 'the new trial data conflicts with the original claim',
+        claims: [
+          {
+            claim: 'EPSILON_CLAIM: Attack claim undermines the trial',
+            quote: 'Attack claim undermines the trial results reported by the original study text',
+            source: 'https://epsilon.example.com/OTHERFUNDER-marker',
+            cachePath: '/cache/epsilon.txt',
+            stance: { target: 1, kind: 'attacks' }, // targets the scout's claim (id 1) — a REAL prior id
+          },
+        ],
+        newTerms: [],
+      };
+    if (L === 'lane-w1:attack-empty-r1of1')
+      return {
+        runningAnswer: 'attack empty lane summary. ' + THICK,
+        rabbitHoles: [],
+        nextSources: [],
+        deadEnds: [],
+        claims: [], // landed NOTHING → a nullAttack, not silence
+        newTerms: [],
+      };
+    if (L === 'initiator') return { refinement: { facts: [] }, synthesiser: { focus: '' } };
+    if (L.startsWith('refine-')) return { report: 'r', queriesTried: [], counterFound: false };
+    if (L.startsWith('judge-'))
+      return {
+        goalMet: true,
+        verificationSound: true,
+        needsCompute: false,
+        computeSound: true,
+        reasoning: 'ok',
+        directive: '',
+      };
+    if (L === 'synthesiser')
+      return { report: '# R', verdict: 'v', confidence: 'medium', plan: [], openQuestions: [] };
+    throw new Error('ledgerAgent: unexpected label ' + L);
+  };
+}
+
+describe('ResearchReport.run — v3 claim-ledger ingestion', () => {
+  it('ingests + dedupes + audits + clusters (incl. cross-wave merge) + runs attack bookkeeping + merges vocabulary + updates yieldCalib + writes the ledger artifacts', async () => {
+    const scribeCalls: string[] = [];
+    const RR = await loadEngine(
+      { query: 'v3 ledger test query', mode: 'goal', debug: false },
+      ledgerAgent(scribeCalls),
+    );
+    const rr = new RR();
+    const result = await rr.run();
+
+    expect(result.stopReason).toBe('brainer-done');
+    expect(scribeCalls).toContain('scribe-w1'); // the checkpoint ran concurrently with the wave-1 readers
+
+    const ledger = JSON.parse(result.files['_claims.json']);
+    const byText = (needle: string) =>
+      ledger.claims.find((c: { claim: string }) => c.claim.includes(needle));
+    const a = byText('SCOUT_CLAIM');
+    const b = byText('BETA_CLAIM');
+    const g = byText('GAMMA_CLAIM');
+    const d = byText('DELTA_CLAIM');
+    const e = byText('EPSILON_CLAIM');
+    expect(a).toBeTruthy();
+    expect(b).toBeTruthy();
+    expect(g).toBeTruthy();
+    expect(d).toBeTruthy();
+    expect(e).toBeTruthy();
+    // dedupe: the beta lane emitted the SAME claim twice — only one survives
+    expect(
+      ledger.claims.filter((c: { claim: string }) => c.claim.includes('BETA_CLAIM')).length,
+    ).toBe(1);
+    // audit verdicts
+    expect(a.audit).toBe('pass'); // the scout's claim, cachePath set, auditor said pass
+    expect(b.audit).toBe('fail'); // the auditor said fail
+    expect(g.audit).toBe('unpinned'); // no cachePath → never sent to the auditor
+    expect(e.audit).toBe('pass');
+    // hallucinated-stance filter — DELTA's stance targeted a non-existent id 9999
+    expect(d.stance).toBeUndefined();
+    // lineage clustering: a/b/g share the SAME clerk key across WAVES (scout wave0, then wave1) → the
+    // SAME cluster (a persistent union-find, not recomputed from scratch); DELTA (explicit empty keys)
+    // → cluster 0; EPSILON (the clerk "missed" it) → the lineageKeyOf fallback → its OWN new cluster
+    expect(b.cluster).toBe(a.cluster);
+    expect(g.cluster).toBe(a.cluster);
+    expect(d.cluster).toBe(0);
+    expect(e.cluster).not.toBe(a.cluster);
+    expect(e.cluster).not.toBe(0);
+    // status: GAMMA shares a's cluster but nothing else supports it → still tentative
+    expect(g.status).toBe('tentative');
+    // attack bookkeeping: EPSILON attacked claim A (id 1) and LANDED → A is contested + carries a counter
+    expect(a.status).toBe('contested');
+    expect(a.counter).toContain('EPSILON_CLAIM');
+    // nullAttack: the "attack empty" lane landed NOTHING but its `note` named "c1" (claim A) as the
+    // intended target → recovered into claimIds; A's attacksSurvived bumped — challenged, not silent
+    expect(ledger.nullAttacks.length).toBe(1);
+    expect(ledger.nullAttacks[0].topic).toBe('attack empty');
+    expect(ledger.nullAttacks[0].claimIds).toEqual([a.id]);
+    expect(a.attacksSurvived).toBeGreaterThanOrEqual(1);
+    // vocabulary: RCT from the scout; Biomarker merged case-insensitively — uses bumped, FIRST gloss kept
+    expect(ledger.vocabulary.some((t: { term: string }) => t.term === 'RCT')).toBe(true);
+    const bio = ledger.vocabulary.find((t: { term: string }) => /biomarker/i.test(t.term));
+    expect(bio.uses).toBe(2);
+    expect(bio.gloss).toBe('a measurable indicator');
+    // chao is collect-mode only — stays null here (goal mode)
+    expect(result.metrics.chao).toBeNull();
+    expect(result.metrics.claimsTotal).toBe(ledger.claims.length);
+    expect(result.metrics.nullAttacksTotal).toBe(1);
+    // yieldCalib: both lane kinds pursued this wave got an entry
+    expect(rr.liveBrainers[0].yieldCalib.gap).toBeTruthy();
+    expect(rr.liveBrainers[0].yieldCalib.attack).toBeTruthy();
+    // the human-readable ledger view groups by status and surfaces the challenged-and-survived nullAttack
+    expect(result.files['_claims.md']).toContain('## Challenged and survived');
+    expect(result.files['_claims.md']).toContain('attack empty');
+    expect(result.files['_claims.md']).toContain('## Vocabulary');
+    // surprise folded into the attack-landed lane's OWN finding summary (no schema change)
+    const waveFile = Object.keys(result.files).find((k) => k.endsWith('-wave-1.md'));
+    expect(result.files[waveFile!]).toContain('⚡ SURPRISE');
+  });
+
+  it('never calls the scribe when checkpoint:false', async () => {
+    const scribeCalls: string[] = [];
+    const RR = await loadEngine(
+      { query: 'v3 ledger test query', mode: 'goal', debug: false, checkpoint: false },
+      ledgerAgent(scribeCalls),
+    );
+    await new RR().run();
+    expect(scribeCalls).toEqual([]);
+  });
+});
+
+// ── (s) v3 CHAO1 — the collect-mode coverage estimate is computed + surfaced in metrics + _claims.json ──
+describe('ResearchReport.run — v3 chao1 coverage estimate (collect mode)', () => {
+  it('computes bs.chao after a collect-mode wave with claims', async () => {
+    const RR = await loadEngine(
+      { query: 'collect ledger query', mode: 'collect', debug: false },
+      ledgerAgent([]),
+    );
+    const result = await new RR().run();
+    expect(result.metrics.chao).not.toBeNull();
+    expect(result.metrics.chao!.coverage).toBeGreaterThanOrEqual(0);
+    expect(JSON.parse(result.files['_claims.json']).chao).not.toBeNull();
+  });
+});
+
+// ── (t) v3 SANITIZE — a leaked structured-output tag is stripped from the reader summary before it
+//     reaches the wave file (findings scrubbing) ─────────────────────────────────────────────────────
+describe('ResearchReport.run — v3 sanitize scrubs structured-output leakage from findings', () => {
+  it('strips a leaked </parameter> tag from the lane summary before it reaches the wave file', async () => {
+    const agent = (prompt: string, opts: AgentOpts) => {
+      const L = opts.label;
+      if (L === 'scout-probe:direct') return SCOUT_OUT;
+      if (L === 'scout-merger') return null;
+      if (L === 'prospector') return PROSPECT_OUT;
+      if (L === 'brainer-w0')
+        return {
+          resultSoFar: RSF,
+          rescore: [{ id: 1, score: 80 }],
+          add: [],
+          rename: [],
+          drop: [],
+          lookupNext: [{ id: 1 }],
+          stop: { done: false, reason: 'go' },
+        };
+      if (L === 'brainer-w1')
+        return {
+          resultSoFar: RSF,
+          rescore: [],
+          add: [],
+          rename: [],
+          drop: [],
+          lookupNext: [],
+          stop: { done: true, reason: 'done' },
+        };
+      if (L.startsWith('scheduler-')) return schedulerStub(prompt);
+      if (L.startsWith('validator-')) return VALIDATE_OUT;
+      if (L.startsWith('lane-'))
+        return {
+          runningAnswer: 'clean text before the leak' + '</parameter>' + ' clean text after',
+          rabbitHoles: [],
+          deadEnds: [],
+        };
+      if (L === 'initiator') return { refinement: { facts: [] }, synthesiser: { focus: '' } };
+      if (L.startsWith('judge-'))
+        return {
+          goalMet: true,
+          verificationSound: true,
+          needsCompute: false,
+          computeSound: true,
+          reasoning: 'ok',
+          directive: '',
+        };
+      if (L === 'synthesiser')
+        return { report: '# R', verdict: 'v', confidence: 'low', plan: [], openQuestions: [] };
+      throw new Error('sanitize test: unexpected label ' + L);
+    };
+    const RR = await loadEngine({ query: 'q', mode: 'goal', debug: false }, agent);
+    const result = await new RR().run();
+    const waveFile = Object.keys(result.files).find((k) => k.endsWith('-wave-1.md'));
+    expect(result.files[waveFile!]).not.toContain('</parameter>');
+    expect(result.files[waveFile!]).toContain('clean text before the leak');
+    expect(result.files[waveFile!]).toContain('clean text after');
+  });
+});
+
+// ── (u) v3 HONEST WAVE COUNTERS in the multi-brainer path (runOneWave) — newRabbitHoles was hardcoded
+//     0, and wavesRun (`wave - 1`) under-reported; both are fixed via bs.waveLog ─────────────────────
+describe('ResearchReport.run — v3 honest wave counters in the multi-brainer path (runOneWave)', () => {
+  it('computes newRabbitHoles (not hardcoded 0) and the real wavesRun from waveLog', async () => {
+    const agent = (prompt: string, opts: AgentOpts) => {
+      const L = opts.label;
+      if (L === 'scout-probe:direct') return SCOUT_OUT;
+      if (L === 'scout-merger') return null;
+      if (L === 'prospector') return PROSPECT_OUT;
+      if (L === 'brainer-w0')
+        return {
+          resultSoFar: RSF,
+          rescore: [{ id: 1, score: 80 }],
+          add: [],
+          rename: [],
+          drop: [],
+          lookupNext: [{ id: 1 }],
+          stop: { done: false, reason: 'go' },
+        };
+      if (L === 'brainer-w1')
+        return {
+          resultSoFar: RSF,
+          rescore: [],
+          add: [],
+          rename: [],
+          drop: [],
+          lookupNext: [],
+          stop: { done: true, reason: 'answered' },
+        };
+      if (L.startsWith('scheduler-')) return schedulerStub(prompt);
+      if (L.startsWith('validator-')) return VALIDATE_OUT;
+      if (L.startsWith('lane-'))
+        return {
+          runningAnswer: 'multi-brainer lane summary. ' + THICK,
+          rabbitHoles: [{ keyword: 'freshly surfaced gap', why: 'new lead' }],
+          deadEnds: [],
+        };
+      if (L === 'initiator') return { refinement: { facts: [] }, synthesiser: { focus: '' } };
+      if (L.startsWith('judge-'))
+        return {
+          goalMet: true,
+          verificationSound: true,
+          needsCompute: false,
+          computeSound: true,
+          reasoning: 'ok',
+          directive: '',
+        };
+      if (L === 'synthesiser')
+        return { report: '# R', verdict: 'v', confidence: 'medium', plan: [], openQuestions: [] };
+      throw new Error('honest-counters test: unexpected label ' + L);
+    };
+    const RR = await loadEngine(
+      { query: 'q', mode: 'goal', maxParallelBrainers: 2, debug: false },
+      agent,
+    );
+    const result = await new RR().run();
+    const w1 = result.waveLog.find((w) => w.wave === 1)!;
+    expect(w1.newRabbitHoles).toBeGreaterThan(0); // was hardcoded 0 before the fix
+    expect(result.metrics.wavesRun).toBe(1); // was `wave - 1` = 0 before the fix
+  });
+});
+
+// ── (u2) v3 batch 6 fix — a CHILD's collect-mode plateau window slices from ITS OWN topScoresBase, not
+//     the parent's inherited history (the old bug: runOneWave always used topScores.slice(1), so a child
+//     that inherited a HIGH parent peak could never plateau relative to its own trajectory — or, as tested
+//     here, could be WRONGLY declared collect-dry-plateau by a peak it never earned). Unit-style: call
+//     runOneWave directly on a hand-built child BrainerState (mirrors the applyDerivation unit-test pattern
+//     above), so the inherited topScores/topScoresBase can be set precisely without a real spawn.
+describe('ResearchReport.runOneWave — collect-mode plateau slices from the CHILD spawn point (topScoresBase)', () => {
+  const mkChild = (): BrainerState => {
+    const bs = new BrainerState(
+      { scout: SCOUT_OUT, scoutRabbitHoles: [], highValueSources: [], languageGuidance: '' },
+      { name: 'child', parentName: 'root', mandate: 'm', trail: 't', depth: 1 },
+    );
+    // simulate spawnBrainer: 2 inherited entries with a HIGH peak (95), then the child's own pick-first
+    // score (60, index 2 = topScoresBase) — both must be excluded from the child's OWN plateau window.
+    bs.topScoresBase = 2;
+    bs.topScores = [20, 95, 60];
+    bs.lookupNext = [
+      {
+        id: 1,
+        keyword: 'seed lead',
+        why: 'w',
+        score: 60,
+        scoreHistory: [{ wave: 1, score: 60 }],
+        path: [],
+      },
+    ];
+    return bs;
+  };
+  // one lookupNext lead per wave, scored by the caller — drives bs.topScores.push(...) deterministically.
+  // withClaim: emit one ledger claim on every lane read (same quote+source each time, so only the FIRST
+  // sticks — ingestClaimSeeds dedups the rest) so collect-mode's chao1 coverage reads 1.0 (a single group,
+  // one source, no singleton left unseen) — otherwise the CHAO STOP ASSIST gate (a real, separate mechanism)
+  // would block every plateau drain on an empty ledger's coverage=0, masking this test's actual target.
+  function waveAgent(scoresByWave: Record<number, number>, withClaim = false): AgentStub {
+    return (prompt: string, opts: AgentOpts) => {
+      const L = opts.label;
+      if (L.startsWith('scheduler-')) return schedulerStub(prompt);
+      if (L.startsWith('lane-'))
+        return {
+          runningAnswer: 'own-wave lane summary. ' + THICK,
+          rabbitHoles: [],
+          nextSources: [],
+          claims: withClaim
+            ? [
+                {
+                  claim: 'own-wave finding',
+                  quote: 'a verbatim quote backing the own-wave finding text',
+                  source: 'https://own-wave.example.com/p',
+                },
+              ]
+            : [],
+          newTerms: [],
+          deadEnds: [],
+        };
+      if (L.startsWith('brainer-child-w')) {
+        const gw = Number(L.slice('brainer-child-w'.length));
+        return {
+          resultSoFar: RSF,
+          rescore: [],
+          add: [],
+          rename: [],
+          drop: [],
+          lookupNext: [{ keyword: 'own-wave-' + gw + '-lead', why: 'w', score: scoresByWave[gw] }],
+          stop: { done: false, reason: 'go' },
+        };
+      }
+      throw new Error('waveAgent: unexpected label ' + L);
+    };
+  }
+
+  it('does NOT drain on the inherited peak — its own post-spawn window (50,48,47) is healthy relative to its OWN peak (50), even though the old slice(1) bug would have read it against the inherited 95 (threshold 66.5 ≥ 48,47 → false plateau)', async () => {
+    const RR = await loadEngine(
+      { query: 'q', mode: 'collect', checkpoint: false, debug: false },
+      waveAgent({ 2: 50, 3: 48, 4: 47 }),
+    );
+    const rr = new RR();
+    const bs = mkChild();
+    for (const gw of [2, 3, 4]) await rr.runOneWave(bs, gw, false, 'Research', false);
+    expect(bs.topScores).toEqual([20, 95, 60, 50, 48, 47]);
+    expect(bs.status).toBe('active'); // NOT drained — the fix reads the plateau against 50, not the inherited 95
+    expect(bs.stopReason).not.toBe('collect-dry-plateau');
+  });
+
+  it('DOES drain when its own post-spawn window genuinely plateaus relative to its own peak (80 → 55,54 ≤ 56)', async () => {
+    const RR = await loadEngine(
+      { query: 'q', mode: 'collect', checkpoint: false, debug: false },
+      waveAgent({ 2: 80, 3: 55, 4: 54 }, true),
+    );
+    const rr = new RR();
+    const bs = mkChild();
+    for (const gw of [2, 3, 4]) await rr.runOneWave(bs, gw, false, 'Research', false);
+    expect(bs.topScores).toEqual([20, 95, 60, 80, 55, 54]);
+    expect(bs.chao!.coverage).toBe(1); // one ledgered claim, one group, no singleton left unseen — clears CHAO_COVERAGE_STOP
+    expect(bs.status).toBe('drained');
+    expect(bs.stopReason).toBe('collect-dry-plateau');
+  });
+});
+
+// ── (v) v3 SCOUT INGEST also wired into runCrawlMulti (not just runCrawl) ────────────────────────────
+describe('ResearchReport.run — v3 scout ingest in the multi-brainer path', () => {
+  it('seeds the root claim ledger from the scout claims/newTerms before the root brainer runs', async () => {
+    const agent = (prompt: string, opts: AgentOpts) => {
+      const L = opts.label;
+      if (L === 'scout-probe:direct') return SCOUT_OUT_LEDGER;
+      if (L === 'scout-merger') return null;
+      if (L === 'prospector') return PROSPECT_OUT;
+      if (L === 'claim-audit-scout') return claimAuditStub(prompt);
+      if (L === 'lineage-scout') return lineageClerkStub(prompt);
+      if (L === 'brainer-w0')
+        return {
+          resultSoFar: RSF,
+          rescore: [],
+          add: [],
+          rename: [],
+          drop: [],
+          lookupNext: [],
+          stop: { done: true, reason: 'nothing to pursue' },
+        };
+      if (L === 'initiator') return { refinement: { facts: [] }, synthesiser: { focus: '' } };
+      if (L.startsWith('judge-'))
+        return {
+          goalMet: true,
+          verificationSound: true,
+          needsCompute: false,
+          computeSound: true,
+          reasoning: 'ok',
+          directive: '',
+        };
+      if (L === 'synthesiser')
+        return { report: '# R', verdict: 'v', confidence: 'medium', plan: [], openQuestions: [] };
+      throw new Error('multi scout-ingest test: unexpected label ' + L);
+    };
+    const RR = await loadEngine(
+      { query: 'q', mode: 'goal', maxParallelBrainers: 2, debug: false },
+      agent,
+    );
+    const result = await new RR().run();
+    const ledger = JSON.parse(result.files['_claims.json']);
+    expect(ledger.claims.some((c: { claim: string }) => c.claim.includes('SCOUT_CLAIM'))).toBe(
+      true,
+    );
+    expect(ledger.vocabulary.some((t: { term: string }) => t.term === 'RCT')).toBe(true);
+  });
+});
+
+// ── (w) v3 STEERING — the brainer's derivation store + rerun wiring (batch 3): a brainer-authored
+//     derivation gets STORED, the rerunner fires the NEXT wave (label rerun-w<wave>), and the sensitivity
+//     it produces shows up in the FOLLOWING brainer's own prompt; a later failed rerun marks it STALE
+//     while keeping the last good numbers — never blocking the crawl. ─────────────────────────────────
+function derivationAgent(prompt: string, opts: AgentOpts) {
+  const L = opts.label;
+  if (L === 'scout-probe:direct') return SCOUT_OUT;
+  if (L === 'scout-merger') return null;
+  if (L === 'prospector') return PROSPECT_OUT;
+  if (L === 'brainer-w0')
+    return {
+      resultSoFar: RSF,
+      rescore: [{ id: 1, score: 80 }],
+      add: [],
+      lookupNext: [{ id: 1 }],
+      rename: [],
+      drop: [],
+      stop: { done: false, reason: 'go' },
+    };
+  if (L === 'brainer-w1')
+    return {
+      resultSoFar: RSF,
+      rescore: [],
+      add: [],
+      lookupNext: [{ keyword: 'w2 lane', why: 'continue', score: 70 }],
+      rename: [],
+      drop: [],
+      derivation: {
+        code: 'print(1)',
+        inputs: [{ name: 'x', dist: 'wide', claimIds: [], prior: true }],
+      },
+      stop: { done: false, reason: 'derive' },
+    };
+  if (L === 'brainer-w2')
+    // re-emits the SAME code (only re-authoring, not changing it) → dirties the derivation again for w3
+    // while (per the sameCode rule) keeping the lastRun the w2 rerun just produced.
+    return {
+      resultSoFar: RSF,
+      rescore: [],
+      add: [],
+      lookupNext: [{ keyword: 'w3 lane', why: 'continue', score: 60 }],
+      rename: [],
+      drop: [],
+      derivation: {
+        code: 'print(1)',
+        inputs: [{ name: 'x', dist: 'wide', claimIds: [], prior: true }],
+      },
+      stop: { done: false, reason: 'still deriving' },
+    };
+  if (L === 'brainer-w3')
+    return {
+      resultSoFar: RSF,
+      rescore: [],
+      add: [],
+      lookupNext: [],
+      rename: [],
+      drop: [],
+      stop: { done: true, reason: 'done' },
+    };
+  if (L === 'rerun-w2') return { ok: true, quantiles: { p50: 100 }, sensitivity: { x: 0.8 } };
+  if (L === 'rerun-w3') return { ok: false, note: 'script exploded' }; // a normal (non-throwing) failure
+  if (L.startsWith('scheduler-')) return schedulerStub(prompt);
+  if (L.startsWith('validator-')) return VALIDATE_OUT;
+  if (L.startsWith('lane-')) return LANE_OUT;
+  if (L === 'initiator') return { refinement: { facts: [] }, synthesiser: { focus: '' } };
+  if (L.startsWith('judge-'))
+    return {
+      goalMet: true,
+      verificationSound: true,
+      needsCompute: false,
+      computeSound: true,
+      reasoning: 'ok',
+      directive: '',
+    };
+  if (L === 'synthesiser')
+    return { report: '# R', verdict: 'v', confidence: 'medium', plan: [], openQuestions: [] };
+  throw new Error('derivationAgent: unexpected label ' + L);
+}
+
+describe('ResearchReport.run — v3 derivation store + rerun wiring (batch 3)', () => {
+  it('stores the derivation, reruns it next wave, and surfaces DERIVATION STATE in the FOLLOWING brainer prompt; a later failed rerun marks it STALE while keeping the last good numbers', async () => {
+    const RR = await loadEngine({ query: 'q', mode: 'goal', debug: false }, derivationAgent);
+    const rr = new RR();
+    const result = await rr.run();
+    expect(result.stopReason).toBe('brainer-done');
+    const wave2Key = Object.keys(result.files).find((k) => k.endsWith('-wave-2.md'))!;
+    const wave3Key = Object.keys(result.files).find((k) => k.endsWith('-wave-3.md'))!;
+    // wave 2's brainer prompt (captured via withPrompt) shows the sensitivity the w2 rerun just produced.
+    expect(result.files[wave2Key]).toContain('DERIVATION STATE');
+    expect(result.files[wave2Key]).toContain('p50=100');
+    expect(result.files[wave2Key]).toContain('x: 0.80');
+    expect(result.files[wave2Key]).not.toContain('STALE');
+    // wave 3's rerun died → stale flag shown, but the last GOOD numbers (from w2) are still there, not wiped.
+    expect(result.files[wave3Key]).toContain('DERIVATION STATE');
+    expect(result.files[wave3Key]).toContain('p50=100');
+    expect(result.files[wave3Key]).toContain('STALE — last rerun failed');
+    expect(rr.liveBrainers[0].derivation!.lastRun).toEqual({
+      quantiles: { p50: 100 },
+      sensitivity: { x: 0.8 },
+      wave: 2,
+    });
+    expect(rr.liveBrainers[0].derivationStale).toBe(true);
+  });
+});
+
+// ── (w2) v3 STEERING — applyDerivation / maybeRerunDerivation unit coverage (the store+rerun rules
+//     directly, mirroring the scheduleSources id-discipline unit-test pattern above) ─────────────────
+describe('ResearchReport.applyDerivation / maybeRerunDerivation — unit coverage (batch 3)', () => {
+  const mkBs = () =>
+    new BrainerState(
+      { scout: null, scoutRabbitHoles: [], highValueSources: [], languageGuidance: '' },
+      { name: 'root', parentName: null, mandate: '', trail: '', depth: 0 },
+    );
+
+  it('applyDerivation stores a fresh delta, dirties it, lastRun null for genuinely NEW code', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => ({}));
+    const rr = new RR();
+    const bs = mkBs();
+    rr.applyDerivation(bs, {
+      derivation: {
+        code: 'print(1)',
+        inputs: [{ name: 'x', dist: 'wide', claimIds: [], prior: true }],
+      },
+    } as never);
+    expect(bs.derivation).toEqual({
+      code: 'print(1)',
+      inputs: [{ name: 'x', dist: 'wide', claimIds: [], prior: true }],
+      lastRun: null,
+    });
+    expect(bs.derivationDirty).toBe(true);
+  });
+
+  it('applyDerivation KEEPS lastRun when the re-emitted code is byte-identical (only inputs changed)', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => ({}));
+    const rr = new RR();
+    const bs = mkBs();
+    const priorRun = { quantiles: { p50: 1 }, sensitivity: {}, wave: 2 };
+    bs.derivation = { code: 'print(1)', inputs: [], lastRun: priorRun };
+    rr.applyDerivation(bs, {
+      derivation: {
+        code: 'print(1)',
+        inputs: [{ name: 'y', dist: 'wide', claimIds: [3], prior: false }],
+      },
+    } as never);
+    expect(bs.derivation!.lastRun).toEqual(priorRun); // kept — same code
+    expect(bs.derivation!.inputs).toEqual([
+      { name: 'y', dist: 'wide', claimIds: [3], prior: false },
+    ]);
+    expect(bs.derivationDirty).toBe(true); // always dirtied
+  });
+
+  it('applyDerivation is a no-op when compute is off, or coord carries no derivation', async () => {
+    const off = await loadEngine({ query: 'q', compute: false }, () => ({}));
+    const rrOff = new off();
+    const bsOff = mkBs();
+    rrOff.applyDerivation(bsOff, {
+      derivation: { code: 'x', inputs: [] },
+    } as never);
+    expect(bsOff.derivation).toBe(null);
+    const on = await loadEngine({ query: 'q' }, () => ({}));
+    const rrOn = new on();
+    const bsOn = mkBs();
+    rrOn.applyDerivation(bsOn, {} as never);
+    expect(bsOn.derivation).toBe(null);
+    expect(bsOn.derivationDirty).toBe(false);
+  });
+
+  it('maybeRerunDerivation reruns when dirty, stores lastRun, clears dirty/stale', async () => {
+    const RR = await loadEngine({ query: 'q' }, (_p: string, o: AgentOpts) =>
+      o.label === 'rerun-w3'
+        ? { ok: true, quantiles: { p50: 42 }, sensitivity: { a: 0.9 } }
+        : (() => {
+            throw new Error('unexpected label ' + o.label);
+          })(),
+    );
+    const rr = new RR();
+    const bs = mkBs();
+    bs.wave = 3; // runRerunner labels off bs.wave, not the method's `wave` param — keep them in step
+    bs.derivation = { code: 'x', inputs: [], lastRun: null };
+    bs.derivationDirty = true;
+    await rr.maybeRerunDerivation(bs, 3, 'Research');
+    expect(bs.derivation!.lastRun).toEqual({
+      quantiles: { p50: 42 },
+      sensitivity: { a: 0.9 },
+      wave: 3,
+    });
+    expect(bs.derivationDirty).toBe(false);
+    expect(bs.derivationStale).toBe(false);
+  });
+
+  it('a changed input claim (not dirty) still triggers a rerun; an untouched one skips it', async () => {
+    let calls = 0;
+    const RR = await loadEngine({ query: 'q' }, () => {
+      calls++;
+      return { ok: true, quantiles: {}, sensitivity: {} };
+    });
+    const rr = new RR();
+    const bs = mkBs();
+    bs.derivation = {
+      code: 'x',
+      inputs: [{ name: 'a', dist: 'd', claimIds: [7], prior: false }],
+      lastRun: { quantiles: {}, sensitivity: {}, wave: 1 },
+    };
+    bs.derivationDirty = false;
+    bs.lastChangedClaimIds = new Set([7]); // claim 7 (an input's claimId) changed this wave
+    await rr.maybeRerunDerivation(bs, 2, 'Research');
+    expect(calls).toBe(1);
+  });
+
+  it('an untouched claim (no dirty, no matching change) skips the rerun entirely — no agent call', async () => {
+    let calls = 0;
+    const RR = await loadEngine({ query: 'q' }, () => {
+      calls++;
+      return { ok: true };
+    });
+    const rr = new RR();
+    const bs = mkBs();
+    bs.derivation = {
+      code: 'x',
+      inputs: [{ name: 'a', dist: 'd', claimIds: [7], prior: false }],
+      lastRun: { quantiles: {}, sensitivity: {}, wave: 1 },
+    };
+    bs.derivationDirty = false;
+    bs.lastChangedClaimIds = new Set([99]); // unrelated claim
+    await rr.maybeRerunDerivation(bs, 2, 'Research');
+    expect(calls).toBe(0);
+  });
+
+  it('a dead/failing rerunner keeps lastRun and marks it stale (never blocks)', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => ({ ok: false, note: 'boom' }));
+    const rr = new RR();
+    const bs = mkBs();
+    const priorRun = { quantiles: { p50: 1 }, sensitivity: {}, wave: 1 };
+    bs.derivation = { code: 'x', inputs: [], lastRun: priorRun };
+    bs.derivationDirty = true;
+    await rr.maybeRerunDerivation(bs, 2, 'Research');
+    expect(bs.derivation!.lastRun).toEqual(priorRun);
+    expect(bs.derivationStale).toBe(true);
+  });
+
+  it('compute:false ⇒ never reruns even when dirty', async () => {
+    let calls = 0;
+    const RR = await loadEngine({ query: 'q', compute: false }, () => {
+      calls++;
+      return {};
+    });
+    const rr = new RR();
+    const bs = mkBs();
+    bs.derivation = { code: 'x', inputs: [], lastRun: null };
+    bs.derivationDirty = true;
+    await rr.maybeRerunDerivation(bs, 1, 'Research');
+    expect(calls).toBe(0);
+  });
+});
+
+// ── (x) v3 CHAO STOP ASSIST — a collect-mode plateau alone is not enough: low coverage blocks the dry
+//     stop (continues to the wave cap), high coverage lets it through (batch 3) ─────────────────────
+function chaoGateAgent(convergent: boolean) {
+  let laneCalls = 0;
+  return (prompt: string, opts: AgentOpts) => {
+    const L = opts.label;
+    if (L === 'scout-probe:direct') return SCOUT_OUT;
+    if (L === 'scout-merger') return null;
+    if (L === 'prospector') return PROSPECT_OUT;
+    if (L.startsWith('brainer-w')) {
+      const w = Number(L.slice('brainer-w'.length));
+      const score = w <= 1 ? 100 : 50; // peak at w1, plateau at ≤0.7×peak from w2 on
+      return {
+        resultSoFar: RSF,
+        rescore: [],
+        add: [],
+        lookupNext: [{ keyword: 'chao lead ' + w, why: 'breadth', score }],
+        rename: [],
+        drop: [],
+        stop: { done: false, reason: 'still collecting' },
+      };
+    }
+    if (L.startsWith('scheduler-')) return schedulerStub(prompt);
+    if (L.startsWith('validator-')) return VALIDATE_OUT;
+    if (L.startsWith('lane-')) {
+      laneCalls++;
+      // convergent: the SAME finding from a DISTINCT source each wave → one multiply-corroborated
+      // species (chao1 coverage → 1). non-convergent: a genuinely DIFFERENT finding each wave → every
+      // species stays a singleton (coverage stays low) — the gate must tell these apart.
+      return {
+        runningAnswer: 'collected',
+        rabbitHoles: [],
+        nextSources: [],
+        deadEnds: [],
+        claims: [
+          {
+            claim: convergent ? 'the recurring landscape fact' : 'unique fact number ' + laneCalls,
+            quote: convergent
+              ? 'the recurring landscape fact keeps turning up across independently examined sources'
+              : 'unique fact number ' +
+                laneCalls +
+                ' appears only in this one specific source text',
+            source: 'https://source.example.com/' + laneCalls,
+          },
+        ],
+      };
+    }
+    if (L === 'initiator') return { refinement: { facts: [] }, synthesiser: { focus: '' } };
+    if (L.startsWith('judge-'))
+      return {
+        goalMet: true,
+        verificationSound: true,
+        needsCompute: false,
+        computeSound: true,
+        reasoning: 'ok',
+        directive: '',
+      };
+    if (L === 'synthesiser')
+      return { report: '# R', verdict: 'v', confidence: 'medium', plan: [], openQuestions: [] };
+    throw new Error('chaoGateAgent: unexpected label ' + L);
+  };
+}
+
+describe('ResearchReport.run — v3 CHAO stop assist gates the collect dry-plateau on coverage (batch 3)', () => {
+  it('blocks the dry stop when the plateau holds but coverage stays low (runs to the wave cap instead)', async () => {
+    const RR = await loadEngine(
+      { query: 'q', mode: 'collect', maxWave: 4, debug: false },
+      chaoGateAgent(false),
+    );
+    const result = await new RR().run();
+    expect(result.stopReason).toBe('wave-cap'); // NOT collect-dry-plateau — coverage never caught up
+    expect(result.metrics.chao!.coverage).toBeLessThan(0.9);
+  });
+  it('allows the dry stop once coverage reaches the threshold', async () => {
+    const RR = await loadEngine(
+      { query: 'q', mode: 'collect', maxWave: 5, debug: false },
+      chaoGateAgent(true),
+    );
+    const result = await new RR().run();
+    expect(result.stopReason).toBe('collect-dry-plateau');
+    expect(result.metrics.chao!.coverage).toBeGreaterThanOrEqual(0.9);
+  });
+});
+
+// ── (y) v3 VENUE YIELD — a venue assigned to ≥2 lanes that both land nothing gets a ⚠ suffix on its
+//     goodFor in the very next brainer prompt (batch 3) ──────────────────────────────────────────────
+function venueWarnAgent(prompt: string, opts: AgentOpts) {
+  const L = opts.label;
+  if (L === 'scout-probe:direct') return SCOUT_OUT; // seeds id1 'hnsw tuning', id2 'sharding'
+  if (L === 'scout-merger') return null;
+  if (L === 'prospector') return PROSPECT_OUT; // highValueSources incl. {source:'arXiv (site:arxiv.org)', goodFor:'ANN'}
+  if (L === 'brainer-w0')
+    return {
+      resultSoFar: RSF,
+      rescore: [
+        { id: 1, score: 80 },
+        { id: 2, score: 70 },
+      ],
+      add: [],
+      lookupNext: [
+        { id: 1, sources: ['arXiv (site:arxiv.org)'] },
+        { id: 2, sources: ['arXiv (site:arxiv.org)'] },
+      ],
+      rename: [],
+      drop: [],
+      stop: { done: false, reason: 'go' },
+    };
+  if (L === 'brainer-w1')
+    return {
+      resultSoFar: RSF,
+      rescore: [],
+      add: [],
+      lookupNext: [],
+      rename: [],
+      drop: [],
+      stop: { done: true, reason: 'done' },
+    };
+  if (L.startsWith('scheduler-')) return schedulerStub(prompt);
+  if (L.startsWith('validator-')) return VALIDATE_OUT;
+  // both lanes land NOTHING — no claims, no fresh leads — a genuine 0-yield wave for the shared venue.
+  if (L.startsWith('lane-'))
+    return { runningAnswer: 'came up empty', rabbitHoles: [], nextSources: [], deadEnds: [] };
+  if (L === 'initiator') return { refinement: { facts: [] }, synthesiser: { focus: '' } };
+  if (L.startsWith('judge-'))
+    return {
+      goalMet: true,
+      verificationSound: true,
+      needsCompute: false,
+      computeSound: true,
+      reasoning: 'ok',
+      directive: '',
+    };
+  if (L === 'synthesiser')
+    return { report: '# R', verdict: 'v', confidence: 'medium', plan: [], openQuestions: [] };
+  throw new Error('venueWarnAgent: unexpected label ' + L);
+}
+
+describe('ResearchReport.run — v3 venue yield warning (batch 3)', () => {
+  it('flags a venue assigned to ≥2 lanes with 0 yield via a ⚠ suffix on its goodFor', async () => {
+    const RR = await loadEngine({ query: 'q', mode: 'goal', debug: false }, venueWarnAgent);
+    const result = await new RR().run();
+    const wave1Key = Object.keys(result.files).find((k) => k.endsWith('-wave-1.md'))!;
+    expect(result.files[wave1Key]).toContain('arXiv (site:arxiv.org)');
+    expect(result.files[wave1Key]).toContain('ANN — ⚠ 0 yield in 2 lanes');
+  });
+});
+
+// ── (z) v3 SCHEDULER VOCABULARY — the field's own terms of art thread into the scheduler prompt once
+//     the scout has seeded one (batch 3) ─────────────────────────────────────────────────────────────
+describe('ResearchReport.run — v3 scheduler carries the community vocabulary (batch 3)', () => {
+  it('threads bs.vocabulary into the scheduler prompt once the scout has seeded a term', async () => {
+    const schedulerPrompts: string[] = [];
+    const agent = (prompt: string, opts: AgentOpts) => {
+      const L = opts.label;
+      if (L.startsWith('scheduler-')) schedulerPrompts.push(prompt);
+      if (L === 'scout-probe:direct') return SCOUT_OUT_LEDGER; // carries newTerms: [{term:'RCT', ...}]
+      if (L === 'scout-merger') return null;
+      if (L === 'prospector') return PROSPECT_OUT;
+      if (L === 'claim-audit-scout') return claimAuditStub(prompt);
+      if (L === 'lineage-scout') return lineageClerkStub(prompt);
+      if (L === 'brainer-w0')
+        // SCOUT_OUT_LEDGER carries no pages/rabbitHoles (only claims/newTerms) — originate the wave-1
+        // lane by keyword rather than looking up a nonexistent seeded id.
+        return {
+          resultSoFar: RSF,
+          rescore: [],
+          add: [],
+          lookupNext: [{ keyword: 'w1 lane', why: 'go', score: 80 }],
+          rename: [],
+          drop: [],
+          stop: { done: false, reason: 'go' },
+        };
+      if (L === 'brainer-w1')
+        return {
+          resultSoFar: RSF,
+          rescore: [],
+          add: [],
+          lookupNext: [],
+          rename: [],
+          drop: [],
+          stop: { done: true, reason: 'done' },
+        };
+      if (L.startsWith('scheduler-')) return schedulerStub(prompt);
+      if (L.startsWith('validator-')) return VALIDATE_OUT;
+      if (L.startsWith('lane-')) return LANE_OUT;
+      if (L === 'initiator') return { refinement: { facts: [] }, synthesiser: { focus: '' } };
+      if (L.startsWith('judge-'))
+        return {
+          goalMet: true,
+          verificationSound: true,
+          needsCompute: false,
+          computeSound: true,
+          reasoning: 'ok',
+          directive: '',
+        };
+      if (L === 'synthesiser')
+        return { report: '# R', verdict: 'v', confidence: 'medium', plan: [], openQuestions: [] };
+      throw new Error('scheduler-vocab test: unexpected label ' + L);
+    };
+    const RR = await loadEngine({ query: 'q', mode: 'goal', debug: false }, agent);
+    await new RR().run();
+    expect(schedulerPrompts.length).toBeGreaterThan(0);
+    expect(schedulerPrompts.some((p) => p.includes('COMMUNITY VOCABULARY'))).toBe(true);
+    expect(schedulerPrompts.some((p) => p.includes('RCT (1)'))).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// v3 BATCH 4 — FINALIZE/verification rewire: refiner attack-recording, judge retraction, synthesiser
+// citation lint + confidence floor, reopenCrawl HARVEST, and the multi-brainer CHILD→PARENT CLAIM MERGE.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+// a fully-valid minimal ResultSoFar (every required field present) — local to this section so it does not
+// collide with the file's own module-level RSF fixture (which carries a fixed keyClaimIds:[]).
+const RSF_MIN2 = {
+  answer: '',
+  confidence: 'medium',
+  evidence: [],
+  resolved: [],
+  openGaps: [],
+  tensions: [],
+  working: '',
+};
+
+// ── (aa) refiner attack-recording + initiator claimId threading, driven end-to-end through runFinalize ──
+describe('ResearchReport.run — v3 FINALIZE refiner attack-recording + initiator claimId threading (batch 4)', () => {
+  it('threads claimId from the initiator into the refine prompt (THE CLAIM AS PINNED), then folds the outcome into the ledger: survived → nullAttack + attacksSurvived; counterFound → contested', async () => {
+    const refinePrompts: Record<string, string> = {};
+    const agent = (prompt: string, opts: AgentOpts) => {
+      const L = opts.label;
+      refinePrompts[L] = prompt;
+      if (L === 'scout-probe:direct')
+        return {
+          landscape: 'l',
+          pages: [],
+          claims: [
+            {
+              claim: 'claim one — survives an attack',
+              quote: 'the exact verbatim span backing claim one',
+              source: 'https://a.example.com/1',
+              cachePath: '/cache/1.txt',
+            },
+            {
+              claim: 'claim two — a counter turns up',
+              quote: 'the exact verbatim span backing claim two',
+              source: 'https://b.example.com/2',
+              cachePath: '/cache/2.txt',
+            },
+          ],
+          deadEnds: [],
+        };
+      if (L === 'scout-merger') return null;
+      if (L === 'prospector') return PROSPECT_OUT;
+      if (L === 'claim-audit-scout')
+        return {
+          checks: [
+            { id: 1, verdict: 'pass' },
+            { id: 2, verdict: 'pass' },
+          ],
+        };
+      if (L === 'lineage-scout') return { links: [] }; // deterministic lineageKeyOf fallback — irrelevant to this test
+      if (L === 'brainer-w0')
+        return {
+          resultSoFar: { ...RSF_MIN2, answer: 'seeded', keyClaimIds: [1, 2] },
+          rescore: [],
+          add: [],
+          rename: [],
+          drop: [],
+          lookupNext: [],
+          stop: { done: true, reason: 'seeded and answered' },
+        };
+      if (L === 'initiator')
+        return {
+          refinement: {
+            facts: [
+              { fact: 'claim one — survives an attack', why: 'load-bearing', claimId: 1 },
+              { fact: 'claim two — a counter turns up', why: 'load-bearing', claimId: 2 },
+            ],
+          },
+          synthesiser: { focus: '' },
+        };
+      if (L === 'refine-0')
+        return {
+          report: 'claim one, hardened',
+          queriesTried: ['counter-search for claim one'],
+          counterFound: false,
+        };
+      if (L === 'refine-1')
+        return {
+          report: 'claim two, hardened',
+          queriesTried: ['counter-search for claim two'],
+          counterFound: true,
+          counterNote: 'a real contradiction turned up',
+        };
+      if (L.startsWith('judge-'))
+        return {
+          goalMet: true,
+          verificationSound: true,
+          needsCompute: false,
+          computeSound: true,
+          reasoning: 'upheld',
+          directive: '',
+          retractClaimIds: [],
+        };
+      if (L === 'synthesiser')
+        return { report: '# R', verdict: 'v', confidence: 'medium', plan: [], openQuestions: [] };
+      throw new Error('refiner-attack test: unexpected label ' + L);
+    };
+    const RR = await loadEngine({ query: 'q', mode: 'goal', debug: false }, agent);
+    const rr = new RR();
+    await rr.run();
+    const bs = rr.liveBrainers[0];
+
+    // initiator → refiner claimId threading: the refine prompt for the claimId-bound fact carries the
+    // ledger claim's OWN pinned quote/source, not just the fact text.
+    expect(refinePrompts['refine-0']).toContain('THE CLAIM AS PINNED');
+    expect(refinePrompts['refine-0']).toContain('the exact verbatim span backing claim one');
+    expect(refinePrompts['refine-1']).toContain('the exact verbatim span backing claim two');
+    expect(refinePrompts['refine-1']).toContain('https://b.example.com/2');
+
+    // survived (counterFound:false) → a completed counter-search that found nothing is first-class state
+    const claim1 = bs.claims.find((c: Claim) => c.id === 1)!;
+    expect(claim1.attacksSurvived).toBe(1);
+    expect(claim1.status).not.toBe('contested');
+    const na = bs.nullAttacks.find((n) => n.claimIds.includes(1))!;
+    expect(na).toBeTruthy();
+    expect(na.topic).toBe('claim one — survives an attack');
+    expect(na.queries).toEqual(['counter-search for claim one']);
+
+    // counterFound:true → contested, with the counter note recorded
+    const claim2 = bs.claims.find((c: Claim) => c.id === 2)!;
+    expect(claim2.counter).toBe('a real contradiction turned up');
+    expect(claim2.status).toBe('contested');
+  });
+});
+
+// ── (bb) judge retraction — unit coverage on applyJudgeRetractions directly ──
+describe('ResearchReport.applyJudgeRetractions — unit coverage (batch 4)', () => {
+  const mkBs = () =>
+    new BrainerState(
+      { scout: null, scoutRabbitHoles: [], highValueSources: [], languageGuidance: '' },
+      { name: 'root', parentName: null, mandate: '', trail: '', depth: 0 },
+    );
+  const mkClaim = (id: number, over: Partial<Claim> = {}): Claim => ({
+    id,
+    claim: 'claim ' + id,
+    quote: 'q' + id,
+    source: 'https://x.example.com/' + id,
+    cluster: id,
+    audit: 'pass',
+    status: 'tentative',
+    attacksSurvived: 0,
+    retracted: false,
+    wave: 1,
+    lane: 'l',
+    ...over,
+  });
+  const judgeOut = (over: Partial<JudgeOut>) => ({
+    goalMet: true,
+    verificationSound: true,
+    needsCompute: false,
+    computeSound: true,
+    reasoning: 'x',
+    ...over,
+  });
+
+  it('retracts real ids + recomputes statuses; a hallucinated id (not in the ledger) is ignored', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => {
+      throw new Error('no agent expected — no derivation input was retracted');
+    });
+    const rr = new RR();
+    const bs = mkBs();
+    bs.claims = [mkClaim(1), mkClaim(2)];
+    await rr.applyJudgeRetractions(bs, judgeOut({ retractClaimIds: [1, 999] }), 'Finalize');
+    expect(bs.claims.find((c) => c.id === 1)!.retracted).toBe(true);
+    expect(bs.claims.find((c) => c.id === 2)!.retracted).toBe(false); // untouched
+  });
+
+  it('a null judgement, or one with no/empty retractClaimIds, is a no-op (degrade-to-null)', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => {
+      throw new Error('no agent expected');
+    });
+    const rr = new RR();
+    const bs = mkBs();
+    bs.claims = [mkClaim(1)];
+    await rr.applyJudgeRetractions(bs, null, 'Finalize');
+    await rr.applyJudgeRetractions(bs, judgeOut({ retractClaimIds: [] }), 'Finalize');
+    await rr.applyJudgeRetractions(bs, judgeOut({}), 'Finalize');
+    expect(bs.claims[0].retracted).toBe(false);
+  });
+
+  it('an id that is ONLY hallucinated (no real id in the batch) never fires the rerunner', async () => {
+    let calls = 0;
+    const RR = await loadEngine({ query: 'q' }, () => {
+      calls++;
+      return { ok: true };
+    });
+    const rr = new RR();
+    const bs = mkBs();
+    bs.claims = [mkClaim(1)];
+    bs.derivation = {
+      code: 'x',
+      inputs: [{ name: 'x', dist: 'd', claimIds: [1], prior: false }],
+      lastRun: { quantiles: {}, sensitivity: {}, wave: 1 },
+    };
+    await rr.applyJudgeRetractions(bs, judgeOut({ retractClaimIds: [999] }), 'Finalize');
+    expect(calls).toBe(0);
+    expect(bs.derivation.lastRun).toEqual({ quantiles: {}, sensitivity: {}, wave: 1 }); // untouched
+  });
+
+  it('fires ONE bounded rerunner call when a retracted claim backed a derivation input, refreshing lastRun', async () => {
+    let calls = 0;
+    const RR = await loadEngine({ query: 'q' }, (_p: string, o: AgentOpts) => {
+      calls++;
+      expect(o.label).toBe('rerun-w4');
+      return { ok: true, quantiles: { p50: 7 }, sensitivity: { x: 0.9 } };
+    });
+    const rr = new RR();
+    const bs = mkBs();
+    bs.wave = 4;
+    bs.claims = [mkClaim(1)];
+    bs.derivation = {
+      code: 'x',
+      inputs: [{ name: 'x', dist: 'd', claimIds: [1], prior: false }],
+      lastRun: { quantiles: {}, sensitivity: {}, wave: 1 },
+    };
+    await rr.applyJudgeRetractions(bs, judgeOut({ retractClaimIds: [1] }), 'Finalize');
+    expect(calls).toBe(1);
+    expect(bs.derivation.lastRun).toEqual({
+      quantiles: { p50: 7 },
+      sensitivity: { x: 0.9 },
+      wave: 4,
+    });
+  });
+
+  it('does NOT fire the rerunner when the retracted claim is not a derivation input', async () => {
+    let calls = 0;
+    const RR = await loadEngine({ query: 'q' }, () => {
+      calls++;
+      return { ok: true };
+    });
+    const rr = new RR();
+    const bs = mkBs();
+    bs.claims = [mkClaim(1), mkClaim(2)];
+    bs.derivation = {
+      code: 'x',
+      inputs: [{ name: 'x', dist: 'd', claimIds: [2], prior: false }],
+      lastRun: { quantiles: {}, sensitivity: {}, wave: 1 },
+    };
+    await rr.applyJudgeRetractions(bs, judgeOut({ retractClaimIds: [1] }), 'Finalize');
+    expect(calls).toBe(0);
+  });
+});
+
+// ── (cc) synthesiser finish — citation lint + confidence floor, unit coverage on applyReportFinish ──
+describe('ResearchReport.applyReportFinish — citation lint + confidence floor (batch 4)', () => {
+  const mkBs = () =>
+    new BrainerState(
+      { scout: null, scoutRabbitHoles: [], highValueSources: [], languageGuidance: '' },
+      { name: 'root', parentName: null, mandate: '', trail: '', depth: 0 },
+    );
+  const mkClaim = (id: number, over: Partial<Claim> = {}): Claim => ({
+    id,
+    claim: 'claim ' + id,
+    quote: 'q',
+    source: 's',
+    cluster: id,
+    audit: 'pass',
+    status: 'tentative',
+    attacksSurvived: 0,
+    retracted: false,
+    wave: 1,
+    lane: 'l',
+    ...over,
+  });
+
+  it('lints [cN] markers: strips unknown + retracted ids (counted + logged), keeps real live ones', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => ({}));
+    const rr = new RR();
+    const bs = mkBs();
+    bs.claims = [mkClaim(1, { status: 'settled' }), mkClaim(2, { retracted: true })];
+    bs.resultSoFar = { ...RSF_MIN2, keyClaimIds: [1] };
+    const agg = {
+      report: 'the answer [c1] holds, but [c2] and [c9] do not.',
+      verdict: 'v',
+      confidence: 'medium' as const,
+      plan: [],
+      openQuestions: [],
+    };
+    rr.applyReportFinish(bs, agg, 'test');
+    expect(bs.reportOk).toBe(true);
+    expect(bs.citationsBogus).toBe(2);
+    expect(agg.report).toContain('the answer [c1] holds, but  and  do not.');
+    expect(rr.files['result.md']).toContain('the answer [c1] holds');
+  });
+
+  it('confidence floor LOWERS a high stated confidence to the computed value, appending the adjustment note', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => ({}));
+    const rr = new RR();
+    const bs = mkBs();
+    // a CONTESTED key claim → computedConfidence is 'low' regardless of how confident the synthesiser felt
+    bs.claims = [mkClaim(1, { status: 'contested' })];
+    bs.resultSoFar = { ...RSF_MIN2, keyClaimIds: [1] };
+    const agg = {
+      report: '# body',
+      verdict: 'v',
+      confidence: 'high' as const,
+      plan: [],
+      openQuestions: [],
+    };
+    rr.applyReportFinish(bs, agg, 'test');
+    expect(agg.confidence).toBe('low');
+    expect(agg.report).toContain('Confidence adjusted from high to low');
+    expect(agg.report).toContain('computed from evidence topology');
+  });
+
+  it('confidence floor NEVER RAISES a low stated confidence even when computed is high', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => ({}));
+    const rr = new RR();
+    const bs = mkBs();
+    // every key claim settled → computedConfidence is 'high', but the synthesiser stated 'low'
+    bs.claims = [mkClaim(1, { status: 'settled' })];
+    bs.resultSoFar = { ...RSF_MIN2, keyClaimIds: [1] };
+    const agg = {
+      report: '# body',
+      verdict: 'v',
+      confidence: 'low' as const,
+      plan: [],
+      openQuestions: [],
+    };
+    rr.applyReportFinish(bs, agg, 'test');
+    expect(agg.confidence).toBe('low'); // unchanged — never raised
+    expect(agg.report).not.toContain('Confidence adjusted');
+  });
+
+  it('a dead synthesiser (agg null) sets reportOk false and citationsBogus 0, never throws', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => ({}));
+    const rr = new RR();
+    const bs = mkBs();
+    rr.applyReportFinish(bs, null, 'test');
+    expect(bs.reportOk).toBe(false);
+    expect(bs.citationsBogus).toBe(0);
+    expect(bs.synthesiserOut).toBe(null);
+  });
+});
+
+// ── (dd) reopenCrawl HARVEST — unit coverage directly on the method ──
+describe('ResearchReport.reopenCrawl — v3 HARVEST (batch 4)', () => {
+  it('ingests the reopen readers claims into the ledger, harvests fresh rabbitHoles/nextSources into the store, and applies the coord deltas (not just resultSoFar)', async () => {
+    const agent = (prompt: string, opts: AgentOpts) => {
+      const L = opts.label;
+      if (L.startsWith('scheduler-')) return schedulerStub(prompt);
+      if (L.startsWith('lineage-')) return { links: [] };
+      if (L.startsWith('lane-'))
+        return {
+          runningAnswer: 'reopen finding',
+          rabbitHoles: [{ keyword: 'fresh gap', why: 'follow-on' }],
+          nextSources: [{ ref: 'https://cited.example.com/x', why: 'top citation' }],
+          deadEnds: [],
+          claims: [
+            {
+              claim: 'reopen claim',
+              quote: 'a verbatim reopen quote long enough to matter here today',
+              source: 'https://reopen.example.com/a',
+            },
+          ],
+          newTerms: [],
+        };
+      if (L.startsWith('brainer-'))
+        return {
+          resultSoFar: { ...RSF_MIN2, answer: 'folded' },
+          rescore: [],
+          add: [{ keyword: 'parked lead', why: 'later', score: 40 }],
+          rename: [],
+          drop: [],
+          lookupNext: [],
+          stop: { done: false, reason: 'folded' },
+        };
+      throw new Error('reopenCrawl HARVEST test: unexpected label ' + L);
+    };
+    const RR = await loadEngine({ query: 'q', mode: 'goal' }, agent);
+    const rr = new RR();
+    const bs = new BrainerState(
+      {
+        scout: { landscape: 'l', pages: [], deadEnds: [] },
+        scoutRabbitHoles: [],
+        highValueSources: [],
+        languageGuidance: '',
+      },
+      { name: 'root', parentName: null, mandate: '', trail: '', depth: 0 },
+    );
+    bs.wave = 2;
+    const before = bs.rabbitHoles.length;
+    await rr.reopenCrawl(bs, [{ keyword: 'evidence gap', why: 'needed' }], 'DIG INTO THE GAP');
+
+    // claims/attacks/vocab flowed into the ledger (ingestWave), not discarded
+    expect(bs.claims.some((c) => c.claim === 'reopen claim')).toBe(true);
+    // fresh rabbitHoles + nextSources both landed in the store — the harvest, not just resultSoFar
+    expect(bs.rabbitHoles.length).toBeGreaterThan(before);
+    expect(bs.rabbitHoles.some((r) => r.keyword === 'fresh gap')).toBe(true);
+    expect(bs.rabbitHoles.some((r) => r.why === 'followed citation')).toBe(true);
+    // the coord's OWN deltas were applied via applyDeltas — the parked `add` lead is in the store
+    expect(bs.rabbitHoles.some((r) => r.keyword === 'parked lead')).toBe(true);
+    expect(bs.resultSoFar!.answer).toBe('folded');
+  });
+});
+
+// ── (dd2) reopenCrawl — v3 batch 6 review fixes: kind threading (finding A) + the derivation rerun that
+//     reopenCrawl never fired at all (finding B) ──────────────────────────────────────────────────────
+describe('ResearchReport.reopenCrawl — v3 batch 6 fixes (findings A + B)', () => {
+  const mkBs = () =>
+    new BrainerState(
+      {
+        scout: { landscape: 'l', pages: [], deadEnds: [] },
+        scoutRabbitHoles: [],
+        highValueSources: [],
+        languageGuidance: '',
+      },
+      { name: 'root', parentName: null, mandate: '', trail: '', depth: 0 },
+    );
+
+  it('threads kind through every reopenCrawl path: the judge-injected pick gets kind:"inject"; a harvested rabbitHole (no kind) defaults to "gap"; a harvested nextSource gets "citation" (finding A)', async () => {
+    const agent = (prompt: string, opts: AgentOpts) => {
+      const L = opts.label;
+      if (L.startsWith('scheduler-')) return schedulerStub(prompt);
+      if (L.startsWith('lane-'))
+        return {
+          runningAnswer: 'reopen finding',
+          rabbitHoles: [{ keyword: 'fresh gap', why: 'follow-on' }], // kind omitted → defaults to 'gap'
+          nextSources: [{ ref: 'https://cited.example.com/x', why: 'top citation' }],
+          deadEnds: [],
+          claims: [],
+          newTerms: [],
+        };
+      if (L.startsWith('brainer-'))
+        return {
+          resultSoFar: { ...RSF_MIN2, answer: 'folded' },
+          rescore: [],
+          add: [],
+          rename: [],
+          drop: [],
+          lookupNext: [],
+          stop: { done: false, reason: 'folded' },
+        };
+      throw new Error('reopenCrawl kind test: unexpected label ' + L);
+    };
+    const RR = await loadEngine({ query: 'q', mode: 'goal' }, agent);
+    const rr = new RR();
+    const bs = mkBs();
+    bs.wave = 2;
+    await rr.reopenCrawl(bs, [{ keyword: 'evidence gap', why: 'needed' }], 'DIG INTO THE GAP');
+
+    expect(bs.pursuedArchive.find((r) => r.keyword === 'evidence gap')!.kind).toBe('inject');
+    expect(bs.rabbitHoles.find((r) => r.keyword === 'fresh gap')!.kind).toBe('gap');
+    expect(bs.rabbitHoles.find((r) => r.why === 'followed citation')!.kind).toBe('citation');
+  });
+
+  it('reruns the stored derivation when a reopened lane ingests a claim that is one of its inputs — this exact path was dead before (finding B)', async () => {
+    let rerunCalls = 0;
+    const agent = (prompt: string, opts: AgentOpts) => {
+      const L = opts.label;
+      if (L.startsWith('scheduler-')) return schedulerStub(prompt);
+      if (L.startsWith('lineage-')) return { links: [] };
+      if (L.startsWith('lane-'))
+        return {
+          runningAnswer: 'reopen finding',
+          rabbitHoles: [],
+          nextSources: [],
+          deadEnds: [],
+          claims: [
+            {
+              claim: 'a fresh derivation-input claim',
+              quote: 'a verbatim reopen quote long enough to matter here today',
+              source: 'https://reopen.example.com/a',
+            },
+          ],
+          newTerms: [],
+        };
+      if (L.startsWith('brainer-'))
+        return {
+          resultSoFar: { ...RSF_MIN2, answer: 'folded' },
+          rescore: [],
+          add: [],
+          rename: [],
+          drop: [],
+          lookupNext: [],
+          stop: { done: false, reason: 'folded' },
+        };
+      if (L === 'rerun-w2') {
+        rerunCalls++;
+        return { ok: true, quantiles: { p50: 7 }, sensitivity: { a: 1 } };
+      }
+      throw new Error('reopenCrawl rerun test: unexpected label ' + L);
+    };
+    const RR = await loadEngine({ query: 'q', mode: 'goal' }, agent);
+    const rr = new RR();
+    const bs = mkBs();
+    bs.wave = 2;
+    // a stored derivation whose ONLY input cites claim id 1 — the id the reopen reader's fresh claim mints
+    // (this bs's own nextClaimId starts at 1 and nothing else ingests first).
+    bs.derivation = {
+      code: 'x',
+      inputs: [{ name: 'a', dist: 'd', claimIds: [1], prior: false }],
+      lastRun: { quantiles: { p50: 1 }, sensitivity: {}, wave: 1 },
+    };
+    bs.derivationDirty = false;
+    await rr.reopenCrawl(bs, [{ keyword: 'evidence gap', why: 'needed' }], 'DIG INTO THE GAP');
+
+    expect(bs.claims[0].id).toBe(1); // confirms the premise the test is built on
+    expect(rerunCalls).toBe(1);
+    expect(bs.derivation!.lastRun).toEqual({
+      quantiles: { p50: 7 },
+      sensitivity: { a: 1 },
+      wave: 2,
+    });
+  });
+});
+
+// ── (ee) mergeChildClaims — CHILD→PARENT CLAIM MERGE (batch 4) ──
+describe('ResearchReport.mergeChildClaims — CHILD→PARENT CLAIM MERGE (batch 4)', () => {
+  const mkBs = (name: string) =>
+    new BrainerState(
+      { scout: null, scoutRabbitHoles: [], highValueSources: [], languageGuidance: '' },
+      {
+        name,
+        parentName: name === 'root' ? null : 'root',
+        mandate: '',
+        trail: '',
+        depth: name === 'root' ? 0 : 1,
+      },
+    );
+  const mkClaim = (id: number, over: Partial<Claim> = {}): Claim => ({
+    id,
+    claim: 'c' + id,
+    quote: 'quote ' + id,
+    source: 'https://x.example.com/' + id,
+    cluster: 0,
+    audit: 'pass',
+    status: 'tentative',
+    attacksSurvived: 0,
+    retracted: false,
+    wave: 1,
+    lane: 'l',
+    ...over,
+  });
+
+  it('dedupes by quote+source, drops stances, remaps nullAttack claimIds (topic-only when the claim did not merge), recomputes statuses, and logs the summary', async () => {
+    const logs: string[] = [];
+    const RR = await loadEngine({ query: 'q' }, () => ({}));
+    globalThis.log = (m?: unknown) => logs.push(typeof m === 'string' ? m : String(m));
+    const rr = new RR();
+    const target = mkBs('root');
+    target.nextClaimId = 3;
+    target.claims = [mkClaim(1, { quote: 'shared quote', source: 'https://shared.com/p' })];
+    const loser = mkBs('b1-branch');
+    loser.claims = [
+      mkClaim(1, { quote: 'shared quote', source: 'https://shared.com/p' }), // dupe of target's own c1
+      mkClaim(2, {
+        quote: 'unique quote',
+        source: 'https://unique.com/q',
+        stance: { target: 1, kind: 'supports' }, // a stance whose target id lives in the LOSER's ledger
+      }),
+      mkClaim(3, { quote: 'retracted quote', source: 'https://gone.com/r', retracted: true }), // never merged
+    ];
+    loser.nullAttacks = [
+      {
+        topic: 'a survived attack on claim 2',
+        claimIds: [2],
+        queries: ['q'],
+        wave: 1,
+        phase: 'Research',
+      },
+      {
+        topic: 'attack on the retracted claim',
+        claimIds: [3],
+        queries: ['q2'],
+        wave: 1,
+        phase: 'Research',
+      },
+    ];
+
+    rr.mergeChildClaims(target, [target, loser]);
+
+    // dedupe: claim 1 (dupe) and claim 3 (retracted) never merge — only claim 2 does
+    expect(target.claims.length).toBe(2);
+    const merged = target.claims.find((c: Claim) => c.quote === 'unique quote')!;
+    expect(merged.id).toBe(3); // a FRESH id from the target's own nextClaimId, not the loser's id 2
+    // stances DROPPED — the loser's stance.target (1) does not map across ledgers
+    expect(merged.stance).toBeUndefined();
+    // nullAttacks: BOTH merge in; claimIds remap through the ids that survived, else topic-only []
+    expect(target.nullAttacks.length).toBe(2);
+    const remapped = target.nullAttacks.find((na) => na.topic === 'a survived attack on claim 2')!;
+    expect(remapped.claimIds).toEqual([merged.id]);
+    const topicOnly = target.nullAttacks.find(
+      (na) => na.topic === 'attack on the retracted claim',
+    )!;
+    expect(topicOnly.claimIds).toEqual([]);
+    // the merge log line names the counts
+    expect(
+      logs.some(
+        (l) =>
+          l.includes('⇄ merged 1 claims (+2 nullAttacks)') &&
+          l.includes('b1-branch') &&
+          l.includes('root') &&
+          l.includes('1 dupes dropped'),
+      ),
+    ).toBe(true);
+  });
+
+  it('is a no-op when there are no other brainers to merge', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => ({}));
+    const rr = new RR();
+    const target = mkBs('root');
+    target.claims = [mkClaim(1)];
+    rr.mergeChildClaims(target, [target]);
+    expect(target.claims.length).toBe(1);
   });
 });

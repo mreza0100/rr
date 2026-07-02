@@ -1,8 +1,17 @@
 import { describe, it, expect } from 'vitest';
 // Shared nested schema bricks live in agents/shared.js; each agent's TOP-LEVEL output schema is co-located in its agent module.
-import { RABBITHOLE, SCORED, PAGE, LOOKUP, RESULT_SO_FAR } from '../src/agents/shared.js';
+import {
+  RABBITHOLE,
+  SCORED,
+  PAGE,
+  LOOKUP,
+  RESULT_SO_FAR,
+  CLAIM_ITEM,
+  CLAIM_ITEM_STANCE,
+  TERM_SEED,
+} from '../src/agents/shared.js';
 import type { Schema } from '../src/types/index.js';
-import { SCOUT } from '../src/agents/scout/index.js';
+import { SCOUT, SCOUT_ANGLE, SCOUT_PLANNER } from '../src/agents/scout/index.js';
 import { SOURCES } from '../src/agents/prospector/index.js';
 import { COORD, BRAIN_COMPUTE } from '../src/agents/brainer/index.js';
 import { VALIDATE } from '../src/agents/validator/index.js';
@@ -22,8 +31,13 @@ describe('schemas — shape', () => {
     for (const s of [
       RABBITHOLE,
       SCORED,
+      CLAIM_ITEM,
+      CLAIM_ITEM_STANCE,
+      TERM_SEED,
       PAGE,
       SCOUT,
+      SCOUT_ANGLE,
+      SCOUT_PLANNER,
       RESEARCH,
       SCHEDULE,
       LOOKUP,
@@ -44,9 +58,16 @@ describe('schemas — shape', () => {
   it('required arrays are correct', () => {
     expect(RABBITHOLE.required).toEqual(['keyword', 'why']);
     expect(SCORED.required).toEqual(['keyword', 'why', 'score']);
+    expect(CLAIM_ITEM.required).toEqual(['claim', 'quote', 'source']);
+    expect(CLAIM_ITEM_STANCE.required).toEqual(['claim', 'quote', 'source']);
+    expect(TERM_SEED.required).toEqual(['term']);
     expect(PAGE.required).toEqual(['url', 'summary', 'rabbitHoles']);
     expect(SCOUT.required).toEqual(['landscape', 'pages']);
-    expect(RESEARCH.required).toEqual(['runningAnswer']); // the reader returns the accumulated running answer
+    expect(SCOUT_ANGLE.required).toEqual(['name', 'searchQuery', 'why']);
+    expect(SCOUT_PLANNER.required).toEqual(['decomposition', 'angles']);
+    // claims/newTerms are optional (mirrors ReaderOut's TS optionality) — a reader may legitimately
+    // surface neither on a thin/off-topic slice; the engine's `|| []` guards treat their absence as empty.
+    expect(RESEARCH.required).toEqual(['runningAnswer']);
     expect(SCHEDULE.required).toEqual(['lanes']);
     expect(VALIDATE.required).toEqual(['checks', 'enough']);
     expect(SOURCES.required).toEqual(['highValueSources']);
@@ -70,22 +91,85 @@ describe('schemas — nesting', () => {
     expect(SCOUT.properties!.pages.items).toBe(PAGE);
     expect(RESEARCH.properties!.rabbitHoles.items).toBe(RABBITHOLE);
   });
+  it('SCOUT_PLANNER.angles references SCOUT_ANGLE (the scout swarm — v3 batch 2s)', () => {
+    expect(SCOUT_PLANNER.properties!.angles.items).toBe(SCOUT_ANGLE);
+  });
+  it('SCOUT.claims references CLAIM_ITEM at the TOP LEVEL (no stance — the scout has no digest yet)', () => {
+    expect(SCOUT.properties!.claims.items).toBe(CLAIM_ITEM);
+    expect(CLAIM_ITEM.properties!.stance).toBeUndefined();
+    expect(PAGE.properties!.claims).toBeUndefined(); // claims are a scout-level union, never nested per page
+  });
+  it('RESEARCH.claims references CLAIM_ITEM_STANCE, which carries every CLAIM_ITEM property plus stance', () => {
+    expect(RESEARCH.properties!.claims.items).toBe(CLAIM_ITEM_STANCE);
+    for (const key of Object.keys(CLAIM_ITEM.properties!))
+      expect(CLAIM_ITEM_STANCE.properties![key]).toBe(CLAIM_ITEM.properties![key]);
+    expect(CLAIM_ITEM_STANCE.properties!.stance.properties!.kind.enum).toEqual([
+      'supports',
+      'attacks',
+    ]);
+  });
+  it('newTerms (both scout and researcher) reference TERM_SEED', () => {
+    expect(SCOUT.properties!.newTerms.items).toBe(TERM_SEED);
+    expect(RESEARCH.properties!.newTerms.items).toBe(TERM_SEED);
+  });
+  // finding E: the scout footer promises a "Next sources" channel the SCOUT schema could not carry — the
+  // work was silently discarded. nextSources requires ref+why (no expect/target — no ledger exists yet).
+  it('SCOUT.nextSources requires ref+why, with no expect/target (no ledger exists yet)', () => {
+    const item = SCOUT.properties!.nextSources.items!;
+    expect(item.required).toEqual(['ref', 'why']);
+    expect(item.properties!.expect).toBeUndefined();
+    expect(item.properties!.target).toBeUndefined();
+    expect(SCOUT.required).not.toContain('nextSources'); // top-level array itself stays optional
+  });
+  it('RABBITHOLE carries the optional kind enum shared by PAGE and RESEARCH rabbitHoles', () => {
+    expect(RABBITHOLE.properties!.kind.enum).toEqual(['gap', 'attack', 'entity']);
+  });
+  // finding A (blocker): LOOKUP and SCORED had NO `kind` property, so the schema-constrained brainer could
+  // never emit one despite its attackClause instruction — kind never survived to the store on any live path.
+  it('LOOKUP carries an optional kind enum so an originated lane can set its origin channel (finding A)', () => {
+    expect(LOOKUP.properties!.kind).toBeDefined();
+    expect(LOOKUP.properties!.kind.enum).toEqual(['gap', 'attack', 'entity', 'origin']);
+    expect(LOOKUP.required || []).not.toContain('kind');
+  });
+  it('SCORED carries an optional kind enum so a parked (`add`) lead can set its origin channel (finding A)', () => {
+    expect(SCORED.properties!.kind).toBeDefined();
+    expect(SCORED.properties!.kind.enum).toEqual(['gap', 'attack', 'entity', 'origin']);
+    expect(SCORED.required).not.toContain('kind');
+  });
+  it('RESEARCH.nextSources carries the optional expect/target stance-bearing pair', () => {
+    const item = RESEARCH.properties!.nextSources.items!;
+    expect(item.properties!.expect.enum).toEqual(['support', 'attack', 'neutral']);
+    expect(item.properties!.target.type).toBe('number');
+    expect(item.required).toEqual(['ref', 'why']); // both new fields stay optional
+  });
   it('COORD nests RESULT_SO_FAR/SCORED/LOOKUP and requires the delta fields', () => {
     expect(COORD.properties!.resultSoFar).toBe(RESULT_SO_FAR);
     expect(COORD.properties!.add.items).toBe(SCORED);
     expect(COORD.properties!.lookupNext.items).toBe(LOOKUP);
     expect(COORD.required).toEqual(['resultSoFar', 'rescore', 'add', 'lookupNext', 'stop']);
   });
-  it('RESULT_SO_FAR requires the full memory contract', () => {
+  it('COORD.derivation is OPTIONAL: {code, inputs}, each input requires name/dist/claimIds/prior', () => {
+    expect(COORD.required).not.toContain('derivation');
+    const deriv = COORD.properties!.derivation;
+    expect(deriv.required).toEqual(['code', 'inputs']);
+    expect(deriv.properties!.code.type).toBe('string');
+    const input = deriv.properties!.inputs.items!;
+    expect(input.required).toEqual(['name', 'dist', 'claimIds', 'prior']);
+    expect(input.properties!.claimIds.items!.type).toBe('number');
+    expect(input.properties!.prior.type).toBe('boolean');
+  });
+  it('RESULT_SO_FAR requires the full memory contract (v3: keyClaimIds replaces evidence as required)', () => {
     expect(RESULT_SO_FAR.required).toEqual([
       'answer',
-      'evidence',
+      'keyClaimIds',
       'resolved',
       'openGaps',
       'tensions',
       'working',
       'confidence',
     ]);
+    expect(RESULT_SO_FAR.required).not.toContain('evidence'); // the ledger is now the evidence store; the field stays but is no longer required
+    expect(RESULT_SO_FAR.properties!.keyClaimIds.items!.type).toBe('number');
     expect(RESULT_SO_FAR.properties!.evidence.items!.properties!.status.enum).toEqual([
       'settled',
       'tentative',
@@ -99,6 +183,11 @@ describe('schemas — nesting', () => {
     expect(INITIATOR.required).toEqual(['refinement', 'synthesiser']);
     expect(INITIATOR.properties!.computement).toBeUndefined();
   });
+  it('INITIATOR facts carry an optional claimId, binding a fact to a ledger claim (v3 batch 4)', () => {
+    const factItem = INITIATOR.properties!.refinement.properties!.facts.items!;
+    expect(factItem.required).toEqual(['fact', 'why']); // claimId stays optional
+    expect(factItem.properties!.claimId.type).toBe('number');
+  });
   it('JUDGE is the finalize terminal skeptic — four boolean flags + reasoning required', () => {
     expect(JUDGE.properties!.goalMet.type).toBe('boolean');
     expect(JUDGE.properties!.verificationSound.type).toBe('boolean');
@@ -106,6 +195,10 @@ describe('schemas — nesting', () => {
     expect(JUDGE.properties!.computeSound.type).toBe('boolean');
     expect(JUDGE.properties!.reopenRabbitHoles.items).toBe(RABBITHOLE); // gap leads reuse the shared brick
     expect(JUDGE.required).not.toContain('directive'); // directive + reopenRabbitHoles are optional
+  });
+  it('JUDGE carries an optional retractClaimIds — the engine retracts + recomputes downstream (v3 batch 4)', () => {
+    expect(JUDGE.required).not.toContain('retractClaimIds');
+    expect(JUDGE.properties!.retractClaimIds.items!.type).toBe('number');
   });
   it('BRAIN_COMPUTE returns the updated resultSoFar (derivation folded into `working`)', () => {
     expect(BRAIN_COMPUTE.required).toEqual(['resultSoFar']);
@@ -124,9 +217,12 @@ describe('schemas — nesting', () => {
     expect(VALIDATE.properties!.enough.type).toBe('boolean');
     expect(VALIDATE.required).not.toContain('missing'); // missing is optional
   });
-  it('REFINE requires report', () => {
-    expect(REFINE.required).toEqual(['report']);
+  it('REFINE requires report + the attack-recording fields (v3 batch 4)', () => {
+    expect(REFINE.required).toEqual(['report', 'queriesTried', 'counterFound']);
     expect(REFINE.properties!.report.type).toBe('string');
+    expect(REFINE.properties!.queriesTried.items!.type).toBe('string');
+    expect(REFINE.properties!.counterFound.type).toBe('boolean');
+    expect(REFINE.properties!.counterNote.type).toBe('string');
   });
   it('REPORT.confidence is an enum', () => {
     expect(REPORT.properties!.confidence.enum).toEqual(['high', 'medium', 'low']);

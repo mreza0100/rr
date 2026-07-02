@@ -9,8 +9,11 @@
 //   • shared StructuredOutput SCHEMA bricks — the nested sub-schemas reused across more than one
 //     agent's output contract (RABBITHOLE), plus the single-source nested bricks the top-level
 //     contracts compose. Each agent's TOP-LEVEL schema is co-located in its own file; these
-//     reusable bricks stay here so each nesting identity has one definition.
+//     reusable bricks stay here so each nesting identity has one definition. A couple (CLAIM_ITEM's
+//     quote cap) render a CONFIG knob straight into their description — the schema is data too, so
+//     the same "no literal outside config.ts" rule applies to it.
 // ─────────────────────────────────────────────────────────────────────────────
+import { CONFIG } from '../config.js';
 import type { Schema } from '../types/index.js';
 
 // ── static prompt guard clauses ──
@@ -27,13 +30,89 @@ Use the web only (WebSearch / mcp__harvester__fetch) to check sources — never 
 // ── shared schema bricks (declaration order respects nesting) ──
 export const RABBITHOLE: Schema = {
   type: 'object',
-  properties: { keyword: { type: 'string' }, why: { type: 'string' } },
+  properties: {
+    keyword: { type: 'string' },
+    why: { type: 'string' },
+    kind: {
+      type: 'string',
+      enum: ['gap', 'attack', 'entity'],
+      description:
+        "gap = an unexplained-gap search phrased in the SOURCE'S OWN terminology; attack = the single strongest realistic counter-evidence search for a claim this content supports; entity = follow an author/venue/dataset that keeps recurring",
+    },
+  },
   required: ['keyword', 'why'],
 };
 export const SCORED: Schema = {
   type: 'object',
-  properties: { keyword: { type: 'string' }, why: { type: 'string' }, score: { type: 'number' } },
+  properties: {
+    keyword: { type: 'string' },
+    why: { type: 'string' },
+    score: { type: 'number' },
+    kind: {
+      type: 'string',
+      enum: ['gap', 'attack', 'entity', 'origin'],
+      description: 'the lead channel; set "attack" for a counter-evidence lane',
+    },
+  },
   required: ['keyword', 'why', 'score'],
+};
+// CLAIM_ITEM = the load-bearing fact a reader/scout pins to a verbatim quote (pre-ledger — the engine
+// assigns id/cluster/audit/status when it enters bs.claims). The base shape every claim-emitting
+// agent shares; CLAIM_ITEM_STANCE adds `stance` for the researcher, which alone gets a digest of
+// existing claims to bear on (the scout's wave-0 pages have no digest yet).
+export const CLAIM_ITEM: Schema = {
+  type: 'object',
+  properties: {
+    claim: { type: 'string', description: 'one load-bearing fact, in one line' },
+    value: { type: 'string', description: 'the number/quantity, when the claim is quantitative' },
+    quote: {
+      type: 'string',
+      description: `a VERBATIM span, copied exactly from the source, of at most ${CONFIG.QUOTE_MAX_CHARS} characters that carries the claim`,
+    },
+    source: { type: 'string', description: 'the url or DOI this quote is from' },
+    entities: {
+      type: 'object',
+      properties: {
+        authors: { type: 'array', items: { type: 'string' } },
+        funder: { type: 'string' },
+        dataset: { type: 'string' },
+        venue: { type: 'string' },
+      },
+      description: "the source's provenance — only what is visibly stated, never inferred",
+    },
+    cachePath: {
+      type: 'string',
+      description:
+        'local cache file path this quote can be verified against, ONLY as reported by the fetch tool — never invented',
+    },
+  },
+  required: ['claim', 'quote', 'source'],
+};
+export const CLAIM_ITEM_STANCE: Schema = {
+  type: 'object',
+  properties: {
+    ...CLAIM_ITEM.properties,
+    stance: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'number',
+          description:
+            "the NUMBER from the existing KEY CLAIM's c-id in the digest (e.g. c12 → target: 12) this claim bears on",
+        },
+        kind: { type: 'string', enum: ['supports', 'attacks'] },
+      },
+      description:
+        'ONLY when this claim directly bears on one of the KEY CLAIMS listed in the digest',
+    },
+  },
+  required: ['claim', 'quote', 'source'],
+};
+// TERM_SEED = one community term of art a reader/scout surfaces (pre-ledger — `uses` is engine-owned).
+export const TERM_SEED: Schema = {
+  type: 'object',
+  properties: { term: { type: 'string' }, gloss: { type: 'string' } },
+  required: ['term'],
 };
 export const PAGE: Schema = {
   type: 'object',
@@ -74,6 +153,11 @@ export const LOOKUP: Schema = {
       description:
         'a concrete URL or DOI for this lane to fetch DIRECTLY (a followed citation) instead of WebSearching — set it when you are chasing a specific source',
     },
+    kind: {
+      type: 'string',
+      enum: ['gap', 'attack', 'entity', 'origin'],
+      description: 'the lead channel; set "attack" for a counter-evidence lane',
+    },
   },
 };
 // resultSoFar = the run's living MEMORY, carried wave to wave. The brainer maintains it; refinement gets the FINAL one only.
@@ -96,7 +180,13 @@ export const RESULT_SO_FAR: Schema = {
         },
         required: ['fact', 'value', 'source', 'status'],
       },
-      description: 'load-bearing facts the answer rests on — NOT a transcript of everything seen',
+      description:
+        'DEPRECATED — the claim ledger is now the evidence store; do not re-emit facts here (kept only so a finalize agent still rendering it does not break)',
+    },
+    keyClaimIds: {
+      type: 'array',
+      items: { type: 'number' },
+      description: 'the ledger claim ids the answer currently rests on (load-bearing)',
     },
     assumptions: {
       type: 'array',
@@ -128,5 +218,5 @@ export const RESULT_SO_FAR: Schema = {
     },
     confidence: { type: 'string' },
   },
-  required: ['answer', 'evidence', 'resolved', 'openGaps', 'tensions', 'working', 'confidence'],
+  required: ['answer', 'keyClaimIds', 'resolved', 'openGaps', 'tensions', 'working', 'confidence'],
 };

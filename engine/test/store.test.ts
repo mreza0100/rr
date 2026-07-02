@@ -142,6 +142,50 @@ describe('resolveLookupNext', () => {
     expect(picks.map((p) => p.keyword)).toEqual(['d', 'a']); // 50 > 10, capped to 2
     expect(picks.find((p) => p.id === 1)!.sources).toEqual(['arXiv']);
   });
+  it('passes the lead kind through when ORIGINATING a lane (keys the yieldCalib table)', () => {
+    const st = newState();
+    const a = addRabbitHole(st, { keyword: 'stored', why: 'x', wave: 0, kind: 'gap' })!;
+    expect(a.kind).toBe('gap'); // addRabbitHole stores the origin channel
+    const picks = resolveLookupNext(
+      st,
+      { lookupNext: [{ keyword: 'originated', why: 'y', score: 50, kind: 'attack' }] },
+      1,
+      5,
+    );
+    expect(picks.find((p) => p.keyword === 'originated')!.kind).toBe('attack');
+  });
+  it('v3 CALIBRATION: a hot kind (ratio>1) outranks a cold kind (ratio<1) even with a lower raw score', () => {
+    const st = newState();
+    // 'gap' is cold (0.5×), 'attack' is hot (1.5×): 60×0.5=30 vs 50×1.5=75 → attack wins despite the lower raw score
+    st.yieldCalib = { gap: { n: 3, ratio: 0.5 }, attack: { n: 3, ratio: 1.5 } };
+    const picks = resolveLookupNext(
+      st,
+      {
+        lookupNext: [
+          { keyword: 'cold lead', why: 'x', score: 60, kind: 'gap' },
+          { keyword: 'hot lead', why: 'y', score: 50, kind: 'attack' },
+        ],
+      },
+      1,
+      5,
+    );
+    expect(picks.map((p) => p.keyword)).toEqual(['hot lead', 'cold lead']);
+  });
+  it('v3 CALIBRATION: an unseen/absent kind (or no yieldCalib at all) degrades to the plain-score sort', () => {
+    const st = newState();
+    const picks = resolveLookupNext(
+      st,
+      {
+        lookupNext: [
+          { keyword: 'a', why: '', score: 40 },
+          { keyword: 'b', why: '', score: 90 },
+        ],
+      },
+      1,
+      5,
+    );
+    expect(picks.map((p) => p.keyword)).toEqual(['b', 'a']); // unchanged from the pre-calibration behavior
+  });
   it('attaches the brainer note + ref onto the resolved lane (rides to the scheduler/reader)', () => {
     const st = newState();
     addRabbitHole(st, { keyword: 'a', why: '', score: 10, wave: 0 }); // id 1

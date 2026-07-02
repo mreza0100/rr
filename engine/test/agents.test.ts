@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   scout,
   prospector,
@@ -12,6 +12,14 @@ import {
   synthesiser,
   debugAnalyst,
 } from '../src/agents/index.js';
+import { BrainerState } from '../src/brainerState.js';
+import type {
+  AgentOpts,
+  Claim,
+  RabbitHole,
+  ReadSlice,
+  SchedulerSource,
+} from '../src/types/index.js';
 
 // The model TIER + reasoning EFFORT live in the central config.js TIER/EFFORT maps; each agent object reads
 // its value from CONFIG. This pins that policy (the engine reads <agent>.tier / <agent>.effort / <agent>.schema).
@@ -73,3 +81,129 @@ describe('agents — effort policy (from config.EFFORT)', () => {
     expect(synthesiser.effort).toBe('xhigh');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v3 batch 2b — researcher/scout run-fn behavior. Descriptor/shape tests above are PURE (static
+// imports); these dynamically reload the module with a stubbed harness `agent()` (mirrors
+// ledgerClerks.test.ts's pattern), since researcher/run.ts + scout/run.ts read `agent`/`parallel`
+// as ambient globals captured at MODULE LOAD.
+type AgentStub = (prompt: string, opts: AgentOpts) => unknown;
+const DEFAULT_PARALLEL = async <T>(thunks: Array<() => Promise<T>>): Promise<T[]> =>
+  Promise.all(thunks.map((t) => t()));
+
+// counting stub factory — records every {prompt, opts} the fake harness `agent()` receives, so the
+// run-fn tests can assert call COUNT + the exact rendered PROMPT (a spy) without any real agent I/O.
+function countingStub(impl: AgentStub) {
+  const calls: { prompt: string; opts: AgentOpts }[] = [];
+  const stub: AgentStub = (prompt, opts) => {
+    calls.push({ prompt, opts });
+    return impl(prompt, opts);
+  };
+  return { stub, calls };
+}
+
+async function loadResearcherRun(agent: AgentStub, parallel = DEFAULT_PARALLEL) {
+  globalThis.args = { query: 'best vector database for production RAG at scale', mode: 'goal' };
+  globalThis.agent = async (p: string, o: AgentOpts) => agent(p, o);
+  globalThis.log = () => {};
+  globalThis.phase = () => {};
+  globalThis.parallel = parallel;
+  vi.resetModules();
+  return import('../src/agents/researcher/run.js');
+}
+const mkPick = (over: Partial<RabbitHole> = {}): RabbitHole => ({
+  id: 1,
+  keyword: 'x',
+  why: 'w',
+  score: 80,
+  scoreHistory: [],
+  path: [],
+  ...over,
+});
+// a minimal valid Claim with per-call overrides (mirrors ledgerClerks.test.ts's fixture).
+const mkClaim = (id: number, over: Partial<Claim> = {}): Claim => ({
+  id,
+  claim: 'claim ' + id,
+  quote: 'quote ' + id,
+  source: 'https://example.com/' + id,
+  cluster: 0,
+  audit: 'pending',
+  status: 'tentative',
+  attacksSurvived: 0,
+  retracted: false,
+  wave: 1,
+  lane: 'lane',
+  ...over,
+});
+
+describe('runLaneThread — accumulates claims/newTerms across readers, keeps the FIRST non-empty surprise', () => {
+  it('concatenates claims + newTerms from every reader; a later contradiction never overwrites the first', async () => {
+    let call = 0;
+    const { stub } = countingStub(() => {
+      call++;
+      return call === 1
+        ? {
+            runningAnswer: 'a1',
+            claims: [{ claim: 'c1', quote: 'q1', source: 's1' }],
+            newTerms: [{ term: 't1' }],
+            surprise: 'first contradiction',
+          }
+        : {
+            runningAnswer: 'a2',
+            claims: [{ claim: 'c2', quote: 'q2', source: 's2' }],
+            newTerms: [{ term: 't2' }],
+            surprise: 'second contradiction',
+          };
+    });
+    const mod = await loadResearcherRun(stub);
+    const readers: ReadSlice[][] = [
+      [{ source: 'https://a.com', cachePath: '/cache/a.txt', offset: 0, limit: 100 }],
+      [{ source: 'https://b.com', cachePath: '/cache/b.txt', offset: 0, limit: 100 }],
+    ];
+    const out = await mod.runLaneThread(mkPick(), readers, 'w1', 'Research', '');
+    expect(out).not.toBeNull();
+    expect(out!.claims).toEqual([
+      { claim: 'c1', quote: 'q1', source: 's1' },
+      { claim: 'c2', quote: 'q2', source: 's2' },
+    ]);
+    expect(out!.newTerms).toEqual([{ term: 't1' }, { term: 't2' }]);
+    expect(out!.surprise).toBe('first contradiction'); // NOT 'second contradiction'
+  });
+});
+
+describe('runResearchers — threads claimDigest (from bs.claims) + laneKind (from each pick.kind) into every reader prompt', () => {
+  it('every lane gets the same KEY CLAIMS digest; only the attack-kind lane gets the ATTACK clause', async () => {
+    const { stub, calls } = countingStub(() => ({
+      runningAnswer: 'ans',
+      claims: [],
+      newTerms: [],
+    }));
+    const mod = await loadResearcherRun(stub);
+    const bs = new BrainerState(
+      { scout: null, scoutRabbitHoles: [], highValueSources: [], languageGuidance: '' },
+      { name: 'root', parentName: null, mandate: '', trail: '', depth: 0 },
+    );
+    bs.claims = [mkClaim(1, { claim: 'pgvector recall is 0.98' })];
+    const picks: RabbitHole[] = [
+      mkPick({ id: 1, keyword: 'attack-lane', kind: 'attack' }),
+      mkPick({ id: 2, keyword: 'gap-lane', kind: 'gap' }),
+    ];
+    const schedule = new Map<number, SchedulerSource[]>([
+      [1, [{ source: 'https://a.com', path: '/cache/a.txt', size: 100, chars: 200 }]],
+      [2, [{ source: 'https://b.com', path: '/cache/b.txt', size: 100, chars: 200 }]],
+    ]);
+    await mod.runResearchers(bs, picks, schedule, 'w1', 'Research');
+    expect(calls.length).toBe(2);
+    const attackCall = calls.find((c) => c.prompt.includes('attack-lane'))!;
+    const gapCall = calls.find((c) => c.prompt.includes('gap-lane'))!;
+    expect(attackCall.prompt).toContain('KEY CLAIMS SO FAR');
+    expect(attackCall.prompt).toContain('pgvector recall is 0.98');
+    expect(attackCall.prompt).toContain('ATTACK lane');
+    expect(gapCall.prompt).toContain('KEY CLAIMS SO FAR'); // the same wave-level digest reaches every lane
+    expect(gapCall.prompt).not.toContain('ATTACK lane'); // only the attack-kind lane gets the clause
+  });
+});
+
+// runScout coverage (the wave-0 scout SWARM: planner → probes → merger) lives in scout.test.ts —
+// its dynamic-reload harness needs 3 distinct stub labels ('scout-planner', 'scout-probe:*', 'scout-merger'),
+// unlike the single-call pattern the rest of this file's run-fn tests share.

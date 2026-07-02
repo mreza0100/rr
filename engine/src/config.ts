@@ -48,10 +48,36 @@ export class Configs {
   HANDOFF_CHARS: number;
   MAX_STARVED_WAVES: number;
   TREE_LOG_WIDTH: number;
+  QUOTE_MAX_CHARS: number;
+  CLAIM_DIGEST_CAP: number;
+  CLAIM_DIGEST_CLIP: number;
+  CALIB_DEFAULT_SCORE: number;
+  AUDIT_BATCH: number;
+  LINEAGE_BATCH: number;
+  SETTLED_MIN_CLUSTERS: number;
+  VOI_SENS_THRESHOLD: number;
+  CALIB_CLAMP_LO: number;
+  CALIB_CLAMP_HI: number;
+  CALIB_NORM: number;
+  CALIB_ALPHA: number;
+  CALIB_LEAD_WEIGHT: number;
+  CALIB_REALIZED_MAX: number;
+  CHAO_COVERAGE_STOP: number;
+  BRAINER_LEDGER_CAP: number;
+  CLAIM_LINE_CLIP: number;
+  SENSITIVITY_CLIP: number;
+  TREE_ANSWER_CLIP: number;
+  MANDATE_CLIP: number;
+  SCHED_VOCAB_CAP: number;
+  VENUE_WARN_MIN: number;
+  SCOUT_PROBES: number;
+  SCOUT_PROBE_SOURCES: number;
+  SCOUT_PAGES_CAP: number;
   GENERAL_PURPOSE: string;
   TIER: Record<string, Tier>;
   EFFORT: Record<string, Effort>;
   compute: boolean;
+  checkpoint: boolean;
   computeNote: string;
   thinkerNote: string;
   researcherNote: string;
@@ -142,13 +168,44 @@ export class Configs {
     this.MAX_STARVED_WAVES = 2; // B6: consecutive all-null / empty-schedule waves before the crawl breaks with stopReason scheduler-starved
     this.MAX_BRAINER_DEPTH = 3; // safety cap on the spawn-chain depth (root=0); spawning past this depth is refused
     this.TREE_LOG_WIDTH = 120; // crawl-tree render: per-line clip width for the LIVE TERMINAL log ONLY — the persisted _tree.md + returned tree keep full, unclipped lines
+    // claim-ledger knobs (v3) — read by utils claimStatus/chao1/updateCalib/calibFactor + the prompt builders
+    this.QUOTE_MAX_CHARS = 300; // max chars of the VERBATIM quote a claim pins (the FOOTER + reader schema ceiling)
+    this.CLAIM_DIGEST_CAP = 30; // max existing key-claim one-liners woven into a reader prompt (the stance targets)
+    this.CLAIM_DIGEST_CLIP = 90; // max chars of a claim's text on ONE claimDigestOf line (distinct from CLAIM_DIGEST_CAP, which caps the line COUNT)
+    this.CALIB_DEFAULT_SCORE = 50; // ingestWave: predicted-yield default when a pursued lead carries no score history yet (the neutral midpoint)
+    this.AUDIT_BATCH = 50; // claimAuditor: max claims per batched quote-audit call (chunks beyond this dispatch as separate concurrent calls)
+    this.LINEAGE_BATCH = 80; // lineageClerk: max claims per batched entity-canonicalization call (chunks beyond this dispatch as separate concurrent calls)
+    this.SETTLED_MIN_CLUSTERS = 2; // claimStatus: independent lineage clusters required before a claim can settle
+    this.VOI_SENS_THRESHOLD = 0.15; // VOI stop assist: a derivation input below this sensitivity share is not worth another lane
+    this.CALIB_CLAMP_LO = 0.5; // yieldCalib: floor on the per-kind selection multiplier (a cold kind is never zeroed out)
+    this.CALIB_CLAMP_HI = 1.5; // yieldCalib: ceiling on the per-kind selection multiplier (a hot kind never dominates)
+    this.CALIB_NORM = 4; // yieldCalib: realized-yield divisor — (auditedPassClaims + CALIB_LEAD_WEIGHT×freshLeads)/CALIB_NORM ≈ 1 on a good lane
+    this.CALIB_ALPHA = 0.3; // yieldCalib: EMA weight of the newest realized/predicted observation
+    this.CALIB_LEAD_WEIGHT = 0.3; // yieldCalib: a lane's fresh (pre-dedup) leads count for this much of one audited-pass claim in the realized-yield formula
+    this.CALIB_REALIZED_MAX = 2; // yieldCalib: ceiling on one wave's realized-yield observation before it feeds the EMA (an outlier lane never swings the ratio unboundedly)
+    this.CHAO_COVERAGE_STOP = 0.9; // collect DRY assist: plateau AND chao1 coverage ≥ this → dry
+    // v3 STEERING knobs (batch 3) — the brainer's ledger/calibration/sensitivity-aware prompt sections + the scheduler's vocabulary clause.
+    this.BRAINER_LEDGER_CAP = 120; // max ledger lines rendered into the CLAIM LEDGER section (utils ledgerLines); beyond this, a "(+N more)" tail
+    this.CLAIM_LINE_CLIP = 120; // max chars of a claim's text on ONE ledger line (distinct from QUOTE_MAX_CHARS, which caps the underlying quote)
+    this.SENSITIVITY_CLIP = 60; // max chars of a backing claim's text on ONE sensitivityRanking line (utils sensitivityRanking)
+    this.TREE_ANSWER_CLIP = 400; // max chars of a brainer's resultSoFar.answer rendered into _brainers.json (the crawl-tree artifact)
+    this.MANDATE_CLIP = 60; // max chars of a trail label / spawn mandate on ONE log or tree line (utils trailOf; engine.ts spawn log + tree render)
+    this.SCHED_VOCAB_CAP = 20; // max community-vocabulary terms (by uses) rendered into the scheduler's COMMUNITY VOCABULARY clause
+    this.VENUE_WARN_MIN = 2; // venuesWithYieldWarn: min lane-assignments a venue must carry before a persistent 0-yield earns the ⚠ warning suffix
+    // scout SWARM knobs (v3 batch 2s) — the wave-0 seed is now a planner→probes→merger swarm, not one broad sweep.
+    this.SCOUT_PROBES = 5; // max search angles the planner may propose (≥3); each angle spawns exactly one probe
+    this.SCOUT_PROBE_SOURCES = 3; // max sources ONE probe fetches for its own angle (mirrors v2's single-scout ≤5, now split across probes)
+    this.SCOUT_PAGES_CAP = 10; // max pages the merger (or its JS fallback) keeps in the final ScoutOut — the union of every probe's pages, strongest kept
     this.GENERAL_PURPOSE = 'general-purpose'; // the harness agentType handed to code-capable / tool-using sub-agents
     // Per-agent model TIER + reasoning EFFORT — keyed by agent name; each src/agents/<agent>/ module reads its value
     // here (the tiering rationale travels in each agent's own comment). Brainer = ALWAYS Opus + xhigh (the global
-    // brain/reducer); scout + researcher = Haiku (bounded summarize + extract — the page reading is the fixed
-    // Haiku reader's job); escalate only on measured failure.
+    // brain/reducer); scout probes + researcher = Haiku (bounded summarize + extract — the page reading is the fixed
+    // Haiku reader's job); escalate only on measured failure. scoutPlanner/scoutMerger = Sonnet + high: landscape
+    // sensing (grounded search-angle judgment) and cross-angle synthesis are reasoning jobs, not bounded extraction.
     this.TIER = {
       scout: 'haiku',
+      scoutPlanner: 'sonnet',
+      scoutMerger: 'sonnet',
       prospector: 'opus',
       brainer: 'opus',
       validator: 'sonnet',
@@ -159,9 +216,19 @@ export class Configs {
       judge: 'opus',
       synthesiser: 'opus',
       debugAnalyst: 'opus',
+      // v3 ledger clerks — mostly Haiku: each is a bounded, mechanical, batched-per-wave job (grep a
+      // quote, re-execute a stored script, write a checkpoint file). lineageClerk alone is promoted to
+      // Sonnet — fuzzy entity resolution against a growing canon (same-as spellings, merges) is judgment,
+      // not grep.
+      claimAuditor: 'haiku',
+      lineageClerk: 'sonnet',
+      rerunner: 'haiku',
+      scribe: 'haiku',
     };
     this.EFFORT = {
       scout: 'medium',
+      scoutPlanner: 'high',
+      scoutMerger: 'high',
       prospector: 'high',
       brainer: 'xhigh',
       validator: 'medium',
@@ -172,6 +239,10 @@ export class Configs {
       judge: 'xhigh',
       synthesiser: 'xhigh',
       debugAnalyst: 'high',
+      claimAuditor: 'medium',
+      lineageClerk: 'medium',
+      rerunner: 'low',
+      scribe: 'low',
     };
     // ANCHOR the reader budget (B10) — now that TIER is set: a reader-unit must FIT the researcher tier's context
     // window, and (in chars) EXCEED the overlap re-read so every split makes forward progress. Fail loudly otherwise.
@@ -229,6 +300,7 @@ export class Configs {
     this.AGENT_RETRIES = 2;
     this.INJECT_SCORE = 90; // score for judge-reopened gap rabbit-holes (finalize crawl-reopen) — high, so they top the store
     this.compute = coerceBool(arg.compute, true); // master switch for ALL derivation: false → the brainer runs as a plain subagent (no code) + no finalize derivation (the brainer/judge are told it is off). STRICT: "false"/0/"no" coerce to false, never silently default to true
+    this.checkpoint = coerceBool(arg.checkpoint, true); // per-wave scribe checkpoint (_checkpoint.json in DIR): false → the scribe never runs. STRICT coercion, same as compute
     this.computeNote = str(arg.computeNote, ''); // optional run-specific compute guidance; appended after the baked stack note (COMPUTE_NOTE) the compute-aware agents receive
     this.thinkerNote = str(arg.thinkerNote, ''); // optional operator run-steering (priorities/framing/constraints/audience); reaches the Opus reasoning tier ONLY (THINKER_NOTE), pure passthrough
     this.researcherNote = str(arg.researcherNote, ''); // optional operator note to the web-research/probe agents (RESEARCHER_NOTE); terse passthrough, reaches scout/prospector/researcher/brainer
@@ -244,8 +316,14 @@ export class Configs {
     this.DIR = 'RR/' + this.slug;
 
     // ---- shared prompt fragments (woven into the builders below) ----
-    this.FOOTER = `Then append a section titled "Rabbit holes": 0-5 rabbit-holes worth a researcher's time, prioritizing the biggest gaps the page raises but does not explain. Each rabbit-hole: a concrete next web-search query and one line on why it matters. If the page is a dead end or self-contained, give 1 or none — do not pad. Skip anything the page already explains.
-Then append a section titled "Next sources": up to 5 of the page's highest-value outbound citations or links as concrete fetch targets — each the exact URL or DOI the page points to, plus one line on why following it matters. Give none when the page cites nothing worth following.`;
+    // FOOTER — the 6-channel return contract every reading agent appends: gap searches (in the source's
+    // own vocabulary) + attack queries, stance-tagged citations, quote-pinned claims, new terms, and a
+    // surprise flag. The do-not-pad discipline holds on every channel.
+    this.FOOTER = `Then append a section titled "Rabbit holes": 0-5 gap searches worth a researcher's time — the biggest things the content raises but does not explain, EACH PHRASED IN THE SOURCE'S OWN TERMINOLOGY (the community's words, not yours). Each: a concrete next web-search query and one line on why it matters. For any claim the page supports, also give the single strongest REALISTIC counter-evidence search, returned with kind:"attack". When a recurring author, venue, or dataset clearly matters to the topic, also give one search to follow their other work, returned with kind:"entity". If the page is a dead end or self-contained, give 1 or none — do not pad. Skip anything the page already explains.
+Then append a section titled "Next sources": up to 5 of the page's highest-value outbound citations or links as concrete fetch targets — each the exact URL or DOI the page points to, one line on why following it matters, and whether it is expected to SUPPORT or ATTACK a specific existing claim (name which) or is neutral. Give none when the page cites nothing worth following.
+Then append a section titled "Claims": each load-bearing fact the page carries — the fact in one line (with its value when it has one), a VERBATIM quote of at most ${this.QUOTE_MAX_CHARS} characters copied exactly from the page that pins it, and the source's entities (authors, funder, dataset, venue) when visible. Only facts the answer could rest on — do not pad.
+Then append a section titled "New terms": the community's terms of art the page uses that we did not — each with a one-line gloss. Give none when the page speaks our vocabulary.
+Then append a "Surprise" note ONLY when the page contradicts the current key claims: one line naming the contradiction. No section otherwise.`;
     // L3 (directive A): primary tools are WebSearch + mcp__harvester__fetch, but agents MAY reach for any other tool that genuinely helps the rabbit-hole.
     this.NET = `Primary tools: WebSearch + mcp__harvester__fetch — load WebSearch via ToolSearch "select:WebSearch" if absent (built-in WebFetch is hook-denied; fetch only through Harvester). You may also load any other tool that genuinely helps THIS rabbit-hole (e.g. context7 for library/API docs) via ToolSearch — pick the best tool for the question, not only web search. Prefer primary, recent sources; stay on-rabbit-hole.`;
     // COMPUTE_NOTE — capability fragment for the compute-aware agents (mirrors NET). Names the scientific Python stack the compute

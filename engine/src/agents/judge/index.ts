@@ -44,6 +44,12 @@ export const JUDGE: Schema = {
       description:
         '1-3 concrete gap searches ONLY when a real evidence/coverage gap needs more crawling (NONE already pursued); empty otherwise',
     },
+    retractClaimIds: {
+      type: 'array',
+      items: { type: 'number' },
+      description:
+        'ledger claim ids whose evidence is discredited (retraction/fabrication/misattribution) — the engine retracts them and recomputes everything downstream',
+    },
   },
   required: ['goalMet', 'verificationSound', 'needsCompute', 'computeSound', 'reasoning'],
 };

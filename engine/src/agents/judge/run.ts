@@ -1,9 +1,9 @@
 import { CONFIG } from '../../config.js';
 import { judge } from './index.js';
 import { retryAgent } from '../../runtime.js';
-import { lastScore } from '../../utils/index.js';
+import { clip, computedConfidence, ledgerLines, lastScore } from '../../utils/index.js';
 import type { BrainerState } from '../../brainerState.js';
-import type { CleanReport, JudgeOut } from '../../types/index.js';
+import type { Claim, CleanReport, JudgeOut } from '../../types/index.js';
 
 // the prefix shared by the compute-off limitation message and the engine's openGaps dedup, so editing the wording edits both.
 export const COMPUTE_LIMIT_PREFIX = 'Quantitative derivation unavailable';
@@ -22,6 +22,27 @@ export async function runJudge(
     .sort((a, b) => (lastScore(b) ?? -1) - (lastScore(a) ?? -1))
     .slice(0, CONFIG.FINALIZE_TOP_OPEN)
     .map((r) => '[' + (lastScore(r) ?? 'new') + '] ' + r.keyword + ' — ' + r.why);
+  // v3 FINALIZE — the ledger digest, the challenged-vs-never-challenged split, the computed confidence, and
+  // the crawl's own final stop (STOP RECONCILE): all pre-rendered here so judge/prompts.ts stays pure clause
+  // assembly. keyClaimIds is the answer's OWN load-bearing set — "never challenged" is scoped to those, not
+  // every tentative claim in the ledger.
+  const ledger = ledgerLines(bs, CONFIG.BRAINER_LEDGER_CAP);
+  const keyClaimIds = (bs.resultSoFar && bs.resultSoFar.keyClaimIds) || [];
+  const survivedAttacks = bs.nullAttacks.map(
+    (na) =>
+      na.topic +
+      (na.claimIds.length ? ' → c' + na.claimIds.join(', c') : '') +
+      ' (queries: ' +
+      na.queries.join('; ') +
+      ')',
+  );
+  const challengedIds = new Set(bs.nullAttacks.flatMap((na) => na.claimIds));
+  const neverChallenged = keyClaimIds
+    .map((id) => bs.claims.find((c) => c.id === id))
+    .filter(
+      (c): c is Claim => !!c && !c.retracted && !challengedIds.has(c.id) && !c.attacksSurvived,
+    )
+    .map((c) => 'c' + c.id + ' ' + clip(c.claim, CONFIG.CLAIM_DIGEST_CLIP));
   const out = await retryAgent<JudgeOut>(
     judge.buildPrompt({
       query: CONFIG.query,
@@ -33,6 +54,11 @@ export async function runJudge(
       mode: CONFIG.mode,
       computeNote: CONFIG.COMPUTE_NOTE,
       thinkerNote: CONFIG.THINKER_NOTE,
+      ledger,
+      survivedAttacks,
+      neverChallenged,
+      computedConfidence: computedConfidence(keyClaimIds, bs.claims),
+      stop: bs.coord ? bs.coord.stop : undefined,
     }),
     {
       label: 'judge-' + pass,

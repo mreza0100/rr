@@ -78,6 +78,39 @@ export const COORD: Schema = {
       description:
         'OPTIONAL, at most ONE per wave: spawn a focused child brainer onto a branch that deserves a dedicated brain. Only when you are SURE the branch is worth it — spawns are expensive. Omit when not spawning.',
     },
+    derivation: {
+      type: 'object',
+      properties: {
+        code: {
+          type: 'string',
+          description:
+            'pure python3 script: reads ONE json arg {inputName: value}, prints ONE json {quantiles:{p10,p50,p90}, sensitivity:{inputName: varianceShare 0-1}}; seeded (fixed seed) — same inputs, same output',
+        },
+        inputs: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              dist: {
+                type: 'string',
+                description:
+                  'the value/distribution to feed, e.g. "lognormal(mu=…, sigma=…)" or a point value',
+              },
+              claimIds: { type: 'array', items: { type: 'number' } },
+              prior: {
+                type: 'boolean',
+                description: 'true = wide-prior placeholder, not evidence-backed',
+              },
+            },
+            required: ['name', 'dist', 'claimIds', 'prior'],
+          },
+        },
+      },
+      required: ['code', 'inputs'],
+      description:
+        "OPTIONAL: author (or re-author) the run's stored derivation once — a pure, seeded artifact the engine reruns cheaply every wave. Re-emit only to change the code or the inputs.",
+    },
     stop: {
       type: 'object',
       properties: {

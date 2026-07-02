@@ -1,5 +1,5 @@
 import { CONFIG } from './config.js';
-import { norm, normRef } from './utils/index.js';
+import { calibFactor, norm, normRef } from './utils/index.js';
 import type {
   AddRabbitHoleArgs,
   LookupItem,
@@ -26,9 +26,11 @@ type DeltaInput = {
 };
 
 // light near-duplicate check — Jaccard token-set overlap ≥ CONFIG.NEAR_DUP counts as "the same lead, reworded"
-// (catches re-orderings the exact norm() match misses); the threshold is kept high so distinct leads are never merged.
+// (catches re-orderings the exact norm() match misses); the threshold is kept high so distinct leads are never
+// merged. Exported: the v3 chao1 coverage estimate (engine.ts) reuses it to group near-duplicate claims —
+// ONE Jaccard near-dup definition for the whole engine, never a second copy.
 const tokenSet = (s: string): Set<string> => new Set(norm(s).split(' ').filter(Boolean));
-const nearDup = (a: string, b: string): boolean => {
+export const nearDup = (a: string, b: string): boolean => {
   const A = tokenSet(a);
   const B = tokenSet(b);
   if (!A.size || !B.size) return false;
@@ -42,7 +44,7 @@ const nearDup = (a: string, b: string): boolean => {
 // (never re-open a pursued lane or re-fetch a pursued citation). New entries get a fresh id; scoreHistory seeded only when scored.
 export function addRabbitHole(
   state: StoreState,
-  { keyword, why, path, score, wave, ref }: AddRabbitHoleArgs,
+  { keyword, why, path, score, wave, ref, kind }: AddRabbitHoleArgs,
 ): RabbitHole | null {
   const k = norm(keyword);
   const r = ref ? normRef(ref) : '';
@@ -67,6 +69,7 @@ export function addRabbitHole(
     path: path || [],
   };
   if (ref) rh.ref = ref;
+  if (kind) rh.kind = kind; // the lead's origin channel — keys the yieldCalib table
   state.rabbitHoles.push(rh);
   return rh;
 }
@@ -92,7 +95,14 @@ export function applyDeltas(state: StoreState, coord: DeltaInput, wave: number):
     }
   }
   for (const a of coord.add || [])
-    addRabbitHole(state, { keyword: a.keyword, why: a.why, path: [], score: a.score, wave });
+    addRabbitHole(state, {
+      keyword: a.keyword,
+      why: a.why,
+      path: [],
+      score: a.score,
+      wave,
+      kind: a.kind,
+    });
 }
 
 // resolve the brainer's `lookupNext` into open-store entries to pursue NOW: id → existing lead; keyword → originate (or find). Drop any
@@ -115,6 +125,7 @@ export function resolveLookupNext(
         score: item.score,
         wave,
         ref: item.ref,
+        kind: item.kind, // origin channel rides along when the brainer originates a lane
       });
     if (!rh || state.pursuedKeys.has(norm(rh.keyword))) continue;
     if (item.sources) rh.sources = item.sources;
@@ -122,7 +133,19 @@ export function resolveLookupNext(
     if (item.ref && !rh.ref) rh.ref = item.ref;
     if (!picks.some((p) => p.id === rh.id)) picks.push(rh);
   }
-  return picks.sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, laneCount);
+  // v3 CALIBRATION — the sort key is the score weighted by its kind's predicted-vs-realized yield (selection
+  // only; the stored score itself is never touched). kind = the stored lead's own kind (an id-resolved pick
+  // already carries it; an originated one got it from addRabbitHole's `kind: item.kind` above); an unseen
+  // kind (or none) is neutral (calibFactor defaults to 1) — degrades to the old plain-score sort untouched.
+  const weighted = (p: RabbitHole): number =>
+    (p.score ?? 0) *
+    calibFactor(
+      state.yieldCalib ?? {},
+      p.kind ?? 'origin',
+      CONFIG.CALIB_CLAMP_LO,
+      CONFIG.CALIB_CLAMP_HI,
+    );
+  return picks.sort((a, b) => weighted(b) - weighted(a)).slice(0, laneCount);
 }
 
 // REOPEN — the inverse of pursue (validator-driven): move a pursued lead back into the open store so the next

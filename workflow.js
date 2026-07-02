@@ -1,7 +1,7 @@
 export const meta = {
   name: 'Research and Report',
   description:
-    'Research and Report — unbounded best-first web crawl steered by a BRAINER over a persistent id-keyed rabbit-hole store. haiku scout seeds rabbit-holes → opus PROSPECTOR names the high-value authoritative source venues → [the brainer looks up OR originates the rabbit-holes worth pursuing, assigning each its venue subset + a steering `note` (what to find + ranked fallbacks) → a sonnet SCHEDULER discovers + sizes the highest-value sources per lane (batched search, then mcp__harvester size_only → {size, path}) → code bin-packs each lane into 130k-token reader-units and runs ONE sequential haiku reader thread per lane (each reads its assigned cache slice off disk, carrying a running answer across all the lane sources) → the brainer returns delta updates (rescore / add / lookupNext / rename / drop), maintains a running resultSoFar, decides done] until done / rabbithole-dry / wave hard-cap (15) → FINALIZE: an opus INITIATOR names the load-bearing facts + report focus → a sonnet refine pass fact-checks + hardens those facts against the sources → an opus JUDGE — the sole terminal skeptic, also handed the leftover open rabbit-holes — judges the hardened answer (goal met, verification real, derivation valid) and steers a bounded remediation loop — the brain derives the answer (writing + running code, propagating error bars) when one is needed, refine re-checks a mis-hardened fact, or the crawl reopens on a real gap → an opus synthesiser writes the 8-section report. Pursued-archive (no delete-on-pursue) + pursued memory; scoreHistory rides natively on each rabbit-hole id. Two modes: goal (satisficing) / collect (exhaustive). Returns per-wave markdown + refinement + report + _rabbitHoles.json.',
+    'Research and Report — unbounded best-first web crawl steered by a BRAINER over a persistent id-keyed rabbit-hole store, believing only what a quote-pinned CLAIM LEDGER can prove. A sonnet SCOUT PLANNER decomposes the query into 3-5 search angles (direct + a SKEPTIC angle + a RECENT angle) → parallel haiku SCOUT PROBES sweep each angle → a sonnet SCOUT MERGER folds them into one landscape, naming inter-angle tensions → opus PROSPECTOR names the high-value authoritative source venues → [the brainer looks up OR originates the rabbit-holes worth pursuing, assigning each its venue subset + a steering `note` (what to find + ranked fallbacks) → a sonnet SCHEDULER discovers + sizes the highest-value sources per lane → code bin-packs each lane into 130k-token reader-units and runs ONE sequential haiku reader thread per lane, each yielding quote-pinned CLAIMS a haiku AUDITOR mechanically verifies against the cache and a sonnet LINEAGE CLERK clusters by independent provenance (union-find; corroboration counts clusters, not sources) — claim status and confidence are COMPUTED from ledger topology, never asserted, and may only be lowered; a counter-search that lands nothing is logged as a survived challenge (nullAttack); for build-the-answer queries the brainer authors a stored seeded Python DERIVATION once, a haiku RERUNNER re-executes it whenever an input claim changes, and its variance decomposition steers which leads get read next (a value-of-information stop test) → the brainer returns delta updates (rescore / add / lookupNext / rename / drop), maintains a running resultSoFar keyed to `keyClaimIds`, decides done] until done / rabbithole-dry / wave hard-cap (15) → FINALIZE: an opus INITIATOR names the load-bearing facts + report focus → a sonnet refine pass fact-checks + hardens those facts against the sources, folding every counter-search outcome into the ledger → an opus JUDGE — the sole terminal skeptic, also handed the leftover open rabbit-holes and the power to RETRACT a discredited claim — judges the hardened answer (goal met, verification real, derivation valid) and steers a bounded remediation loop — the brain derives the answer when one is needed, refine re-checks a mis-hardened fact, or the crawl reopens on a real gap → an opus synthesiser writes the 8-section report, its citations linted against the ledger and its confidence floored by the computed value. Pursued-archive (no delete-on-pursue) + pursued memory; scoreHistory rides natively on each rabbit-hole id. Two modes: goal (satisficing) / collect (exhaustive, with a Chao1 coverage estimate gating the plateau stop). Returns per-wave markdown + the claim ledger + refinement + report + _rabbitHoles.json.',
   // ONLY the always-first phase is declared; everything after Scout is driven dynamically by phase() calls in run
   // order — each crawl wave its own phase (Research wN), then Finalize ONLY when a brainer declares done, then Debug
   // only at the very end. Declaring Finalize/Debug statically would pin them ahead of the dynamic wave phases.
@@ -9,7 +9,7 @@ export const meta = {
     {
       title: 'Scout',
       detail:
-        'the seed: haiku scout maps the landscape (fetch sources with the rabbit-hole footer) → opus prospector names the high-value authoritative source venues → the brainer (wave 0) scores the scout rabbit-holes, assigns each its venue subset, and looks up the first wave',
+        'the seed: a sonnet planner decomposes the query into search angles → parallel haiku probes sweep them (fetching sources with the rabbit-hole footer, each claim quote-pinned) → a sonnet merger folds every probe into one landscape → opus prospector names the high-value authoritative source venues → the brainer (wave 0) ledgers the scout claims, scores the scout rabbit-holes, assigns each its venue subset, and looks up the first wave',
     },
   ],
 };
@@ -25,8 +25,11 @@ export const meta = {
 //   • shared StructuredOutput SCHEMA bricks — the nested sub-schemas reused across more than one
 //     agent's output contract (RABBITHOLE), plus the single-source nested bricks the top-level
 //     contracts compose. Each agent's TOP-LEVEL schema is co-located in its own file; these
-//     reusable bricks stay here so each nesting identity has one definition.
+//     reusable bricks stay here so each nesting identity has one definition. A couple (CLAIM_ITEM's
+//     quote cap) render a CONFIG knob straight into their description — the schema is data too, so
+//     the same "no literal outside config.ts" rule applies to it.
 // ─────────────────────────────────────────────────────────────────────────────
+
                                                 
 
 // ── static prompt guard clauses ──
@@ -43,13 +46,89 @@ Use the web only (WebSearch / mcp__harvester__fetch) to check sources — never 
 // ── shared schema bricks (declaration order respects nesting) ──
 const RABBITHOLE         = {
   type: 'object',
-  properties: { keyword: { type: 'string' }, why: { type: 'string' } },
+  properties: {
+    keyword: { type: 'string' },
+    why: { type: 'string' },
+    kind: {
+      type: 'string',
+      enum: ['gap', 'attack', 'entity'],
+      description:
+        "gap = an unexplained-gap search phrased in the SOURCE'S OWN terminology; attack = the single strongest realistic counter-evidence search for a claim this content supports; entity = follow an author/venue/dataset that keeps recurring",
+    },
+  },
   required: ['keyword', 'why'],
 };
 const SCORED         = {
   type: 'object',
-  properties: { keyword: { type: 'string' }, why: { type: 'string' }, score: { type: 'number' } },
+  properties: {
+    keyword: { type: 'string' },
+    why: { type: 'string' },
+    score: { type: 'number' },
+    kind: {
+      type: 'string',
+      enum: ['gap', 'attack', 'entity', 'origin'],
+      description: 'the lead channel; set "attack" for a counter-evidence lane',
+    },
+  },
   required: ['keyword', 'why', 'score'],
+};
+// CLAIM_ITEM = the load-bearing fact a reader/scout pins to a verbatim quote (pre-ledger — the engine
+// assigns id/cluster/audit/status when it enters bs.claims). The base shape every claim-emitting
+// agent shares; CLAIM_ITEM_STANCE adds `stance` for the researcher, which alone gets a digest of
+// existing claims to bear on (the scout's wave-0 pages have no digest yet).
+const CLAIM_ITEM         = {
+  type: 'object',
+  properties: {
+    claim: { type: 'string', description: 'one load-bearing fact, in one line' },
+    value: { type: 'string', description: 'the number/quantity, when the claim is quantitative' },
+    quote: {
+      type: 'string',
+      description: `a VERBATIM span, copied exactly from the source, of at most ${CONFIG.QUOTE_MAX_CHARS} characters that carries the claim`,
+    },
+    source: { type: 'string', description: 'the url or DOI this quote is from' },
+    entities: {
+      type: 'object',
+      properties: {
+        authors: { type: 'array', items: { type: 'string' } },
+        funder: { type: 'string' },
+        dataset: { type: 'string' },
+        venue: { type: 'string' },
+      },
+      description: "the source's provenance — only what is visibly stated, never inferred",
+    },
+    cachePath: {
+      type: 'string',
+      description:
+        'local cache file path this quote can be verified against, ONLY as reported by the fetch tool — never invented',
+    },
+  },
+  required: ['claim', 'quote', 'source'],
+};
+const CLAIM_ITEM_STANCE         = {
+  type: 'object',
+  properties: {
+    ...CLAIM_ITEM.properties,
+    stance: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'number',
+          description:
+            "the NUMBER from the existing KEY CLAIM's c-id in the digest (e.g. c12 → target: 12) this claim bears on",
+        },
+        kind: { type: 'string', enum: ['supports', 'attacks'] },
+      },
+      description:
+        'ONLY when this claim directly bears on one of the KEY CLAIMS listed in the digest',
+    },
+  },
+  required: ['claim', 'quote', 'source'],
+};
+// TERM_SEED = one community term of art a reader/scout surfaces (pre-ledger — `uses` is engine-owned).
+const TERM_SEED         = {
+  type: 'object',
+  properties: { term: { type: 'string' }, gloss: { type: 'string' } },
+  required: ['term'],
 };
 const PAGE         = {
   type: 'object',
@@ -90,6 +169,11 @@ const LOOKUP         = {
       description:
         'a concrete URL or DOI for this lane to fetch DIRECTLY (a followed citation) instead of WebSearching — set it when you are chasing a specific source',
     },
+    kind: {
+      type: 'string',
+      enum: ['gap', 'attack', 'entity', 'origin'],
+      description: 'the lead channel; set "attack" for a counter-evidence lane',
+    },
   },
 };
 // resultSoFar = the run's living MEMORY, carried wave to wave. The brainer maintains it; refinement gets the FINAL one only.
@@ -112,7 +196,13 @@ const RESULT_SO_FAR         = {
         },
         required: ['fact', 'value', 'source', 'status'],
       },
-      description: 'load-bearing facts the answer rests on — NOT a transcript of everything seen',
+      description:
+        'DEPRECATED — the claim ledger is now the evidence store; do not re-emit facts here (kept only so a finalize agent still rendering it does not break)',
+    },
+    keyClaimIds: {
+      type: 'array',
+      items: { type: 'number' },
+      description: 'the ledger claim ids the answer currently rests on (load-bearing)',
     },
     assumptions: {
       type: 'array',
@@ -144,7 +234,7 @@ const RESULT_SO_FAR         = {
     },
     confidence: { type: 'string' },
   },
-  required: ['answer', 'evidence', 'resolved', 'openGaps', 'tensions', 'working', 'confidence'],
+  required: ['answer', 'keyClaimIds', 'resolved', 'openGaps', 'tensions', 'working', 'confidence'],
 };
 // ╔══ module: src/config.ts ═══════════════════════════════════════════════
 // ─────────────────────────────────────────────────────────────────────────────
@@ -197,10 +287,36 @@ class Configs {
   HANDOFF_CHARS        ;
   MAX_STARVED_WAVES        ;
   TREE_LOG_WIDTH        ;
+  QUOTE_MAX_CHARS        ;
+  CLAIM_DIGEST_CAP        ;
+  CLAIM_DIGEST_CLIP        ;
+  CALIB_DEFAULT_SCORE        ;
+  AUDIT_BATCH        ;
+  LINEAGE_BATCH        ;
+  SETTLED_MIN_CLUSTERS        ;
+  VOI_SENS_THRESHOLD        ;
+  CALIB_CLAMP_LO        ;
+  CALIB_CLAMP_HI        ;
+  CALIB_NORM        ;
+  CALIB_ALPHA        ;
+  CALIB_LEAD_WEIGHT        ;
+  CALIB_REALIZED_MAX        ;
+  CHAO_COVERAGE_STOP        ;
+  BRAINER_LEDGER_CAP        ;
+  CLAIM_LINE_CLIP        ;
+  SENSITIVITY_CLIP        ;
+  TREE_ANSWER_CLIP        ;
+  MANDATE_CLIP        ;
+  SCHED_VOCAB_CAP        ;
+  VENUE_WARN_MIN        ;
+  SCOUT_PROBES        ;
+  SCOUT_PROBE_SOURCES        ;
+  SCOUT_PAGES_CAP        ;
   GENERAL_PURPOSE        ;
   TIER                      ;
   EFFORT                        ;
   compute         ;
+  checkpoint         ;
   computeNote        ;
   thinkerNote        ;
   researcherNote        ;
@@ -291,13 +407,44 @@ class Configs {
     this.MAX_STARVED_WAVES = 2; // B6: consecutive all-null / empty-schedule waves before the crawl breaks with stopReason scheduler-starved
     this.MAX_BRAINER_DEPTH = 3; // safety cap on the spawn-chain depth (root=0); spawning past this depth is refused
     this.TREE_LOG_WIDTH = 120; // crawl-tree render: per-line clip width for the LIVE TERMINAL log ONLY — the persisted _tree.md + returned tree keep full, unclipped lines
+    // claim-ledger knobs (v3) — read by utils claimStatus/chao1/updateCalib/calibFactor + the prompt builders
+    this.QUOTE_MAX_CHARS = 300; // max chars of the VERBATIM quote a claim pins (the FOOTER + reader schema ceiling)
+    this.CLAIM_DIGEST_CAP = 30; // max existing key-claim one-liners woven into a reader prompt (the stance targets)
+    this.CLAIM_DIGEST_CLIP = 90; // max chars of a claim's text on ONE claimDigestOf line (distinct from CLAIM_DIGEST_CAP, which caps the line COUNT)
+    this.CALIB_DEFAULT_SCORE = 50; // ingestWave: predicted-yield default when a pursued lead carries no score history yet (the neutral midpoint)
+    this.AUDIT_BATCH = 50; // claimAuditor: max claims per batched quote-audit call (chunks beyond this dispatch as separate concurrent calls)
+    this.LINEAGE_BATCH = 80; // lineageClerk: max claims per batched entity-canonicalization call (chunks beyond this dispatch as separate concurrent calls)
+    this.SETTLED_MIN_CLUSTERS = 2; // claimStatus: independent lineage clusters required before a claim can settle
+    this.VOI_SENS_THRESHOLD = 0.15; // VOI stop assist: a derivation input below this sensitivity share is not worth another lane
+    this.CALIB_CLAMP_LO = 0.5; // yieldCalib: floor on the per-kind selection multiplier (a cold kind is never zeroed out)
+    this.CALIB_CLAMP_HI = 1.5; // yieldCalib: ceiling on the per-kind selection multiplier (a hot kind never dominates)
+    this.CALIB_NORM = 4; // yieldCalib: realized-yield divisor — (auditedPassClaims + CALIB_LEAD_WEIGHT×freshLeads)/CALIB_NORM ≈ 1 on a good lane
+    this.CALIB_ALPHA = 0.3; // yieldCalib: EMA weight of the newest realized/predicted observation
+    this.CALIB_LEAD_WEIGHT = 0.3; // yieldCalib: a lane's fresh (pre-dedup) leads count for this much of one audited-pass claim in the realized-yield formula
+    this.CALIB_REALIZED_MAX = 2; // yieldCalib: ceiling on one wave's realized-yield observation before it feeds the EMA (an outlier lane never swings the ratio unboundedly)
+    this.CHAO_COVERAGE_STOP = 0.9; // collect DRY assist: plateau AND chao1 coverage ≥ this → dry
+    // v3 STEERING knobs (batch 3) — the brainer's ledger/calibration/sensitivity-aware prompt sections + the scheduler's vocabulary clause.
+    this.BRAINER_LEDGER_CAP = 120; // max ledger lines rendered into the CLAIM LEDGER section (utils ledgerLines); beyond this, a "(+N more)" tail
+    this.CLAIM_LINE_CLIP = 120; // max chars of a claim's text on ONE ledger line (distinct from QUOTE_MAX_CHARS, which caps the underlying quote)
+    this.SENSITIVITY_CLIP = 60; // max chars of a backing claim's text on ONE sensitivityRanking line (utils sensitivityRanking)
+    this.TREE_ANSWER_CLIP = 400; // max chars of a brainer's resultSoFar.answer rendered into _brainers.json (the crawl-tree artifact)
+    this.MANDATE_CLIP = 60; // max chars of a trail label / spawn mandate on ONE log or tree line (utils trailOf; engine.ts spawn log + tree render)
+    this.SCHED_VOCAB_CAP = 20; // max community-vocabulary terms (by uses) rendered into the scheduler's COMMUNITY VOCABULARY clause
+    this.VENUE_WARN_MIN = 2; // venuesWithYieldWarn: min lane-assignments a venue must carry before a persistent 0-yield earns the ⚠ warning suffix
+    // scout SWARM knobs (v3 batch 2s) — the wave-0 seed is now a planner→probes→merger swarm, not one broad sweep.
+    this.SCOUT_PROBES = 5; // max search angles the planner may propose (≥3); each angle spawns exactly one probe
+    this.SCOUT_PROBE_SOURCES = 3; // max sources ONE probe fetches for its own angle (mirrors v2's single-scout ≤5, now split across probes)
+    this.SCOUT_PAGES_CAP = 10; // max pages the merger (or its JS fallback) keeps in the final ScoutOut — the union of every probe's pages, strongest kept
     this.GENERAL_PURPOSE = 'general-purpose'; // the harness agentType handed to code-capable / tool-using sub-agents
     // Per-agent model TIER + reasoning EFFORT — keyed by agent name; each src/agents/<agent>/ module reads its value
     // here (the tiering rationale travels in each agent's own comment). Brainer = ALWAYS Opus + xhigh (the global
-    // brain/reducer); scout + researcher = Haiku (bounded summarize + extract — the page reading is the fixed
-    // Haiku reader's job); escalate only on measured failure.
+    // brain/reducer); scout probes + researcher = Haiku (bounded summarize + extract — the page reading is the fixed
+    // Haiku reader's job); escalate only on measured failure. scoutPlanner/scoutMerger = Sonnet + high: landscape
+    // sensing (grounded search-angle judgment) and cross-angle synthesis are reasoning jobs, not bounded extraction.
     this.TIER = {
       scout: 'haiku',
+      scoutPlanner: 'sonnet',
+      scoutMerger: 'sonnet',
       prospector: 'opus',
       brainer: 'opus',
       validator: 'sonnet',
@@ -308,9 +455,19 @@ class Configs {
       judge: 'opus',
       synthesiser: 'opus',
       debugAnalyst: 'opus',
+      // v3 ledger clerks — mostly Haiku: each is a bounded, mechanical, batched-per-wave job (grep a
+      // quote, re-execute a stored script, write a checkpoint file). lineageClerk alone is promoted to
+      // Sonnet — fuzzy entity resolution against a growing canon (same-as spellings, merges) is judgment,
+      // not grep.
+      claimAuditor: 'haiku',
+      lineageClerk: 'sonnet',
+      rerunner: 'haiku',
+      scribe: 'haiku',
     };
     this.EFFORT = {
       scout: 'medium',
+      scoutPlanner: 'high',
+      scoutMerger: 'high',
       prospector: 'high',
       brainer: 'xhigh',
       validator: 'medium',
@@ -321,6 +478,10 @@ class Configs {
       judge: 'xhigh',
       synthesiser: 'xhigh',
       debugAnalyst: 'high',
+      claimAuditor: 'medium',
+      lineageClerk: 'medium',
+      rerunner: 'low',
+      scribe: 'low',
     };
     // ANCHOR the reader budget (B10) — now that TIER is set: a reader-unit must FIT the researcher tier's context
     // window, and (in chars) EXCEED the overlap re-read so every split makes forward progress. Fail loudly otherwise.
@@ -378,6 +539,7 @@ class Configs {
     this.AGENT_RETRIES = 2;
     this.INJECT_SCORE = 90; // score for judge-reopened gap rabbit-holes (finalize crawl-reopen) — high, so they top the store
     this.compute = coerceBool(arg.compute, true); // master switch for ALL derivation: false → the brainer runs as a plain subagent (no code) + no finalize derivation (the brainer/judge are told it is off). STRICT: "false"/0/"no" coerce to false, never silently default to true
+    this.checkpoint = coerceBool(arg.checkpoint, true); // per-wave scribe checkpoint (_checkpoint.json in DIR): false → the scribe never runs. STRICT coercion, same as compute
     this.computeNote = str(arg.computeNote, ''); // optional run-specific compute guidance; appended after the baked stack note (COMPUTE_NOTE) the compute-aware agents receive
     this.thinkerNote = str(arg.thinkerNote, ''); // optional operator run-steering (priorities/framing/constraints/audience); reaches the Opus reasoning tier ONLY (THINKER_NOTE), pure passthrough
     this.researcherNote = str(arg.researcherNote, ''); // optional operator note to the web-research/probe agents (RESEARCHER_NOTE); terse passthrough, reaches scout/prospector/researcher/brainer
@@ -393,8 +555,14 @@ class Configs {
     this.DIR = 'RR/' + this.slug;
 
     // ---- shared prompt fragments (woven into the builders below) ----
-    this.FOOTER = `Then append a section titled "Rabbit holes": 0-5 rabbit-holes worth a researcher's time, prioritizing the biggest gaps the page raises but does not explain. Each rabbit-hole: a concrete next web-search query and one line on why it matters. If the page is a dead end or self-contained, give 1 or none — do not pad. Skip anything the page already explains.
-Then append a section titled "Next sources": up to 5 of the page's highest-value outbound citations or links as concrete fetch targets — each the exact URL or DOI the page points to, plus one line on why following it matters. Give none when the page cites nothing worth following.`;
+    // FOOTER — the 6-channel return contract every reading agent appends: gap searches (in the source's
+    // own vocabulary) + attack queries, stance-tagged citations, quote-pinned claims, new terms, and a
+    // surprise flag. The do-not-pad discipline holds on every channel.
+    this.FOOTER = `Then append a section titled "Rabbit holes": 0-5 gap searches worth a researcher's time — the biggest things the content raises but does not explain, EACH PHRASED IN THE SOURCE'S OWN TERMINOLOGY (the community's words, not yours). Each: a concrete next web-search query and one line on why it matters. For any claim the page supports, also give the single strongest REALISTIC counter-evidence search, returned with kind:"attack". When a recurring author, venue, or dataset clearly matters to the topic, also give one search to follow their other work, returned with kind:"entity". If the page is a dead end or self-contained, give 1 or none — do not pad. Skip anything the page already explains.
+Then append a section titled "Next sources": up to 5 of the page's highest-value outbound citations or links as concrete fetch targets — each the exact URL or DOI the page points to, one line on why following it matters, and whether it is expected to SUPPORT or ATTACK a specific existing claim (name which) or is neutral. Give none when the page cites nothing worth following.
+Then append a section titled "Claims": each load-bearing fact the page carries — the fact in one line (with its value when it has one), a VERBATIM quote of at most ${this.QUOTE_MAX_CHARS} characters copied exactly from the page that pins it, and the source's entities (authors, funder, dataset, venue) when visible. Only facts the answer could rest on — do not pad.
+Then append a section titled "New terms": the community's terms of art the page uses that we did not — each with a one-line gloss. Give none when the page speaks our vocabulary.
+Then append a "Surprise" note ONLY when the page contradicts the current key claims: one line naming the contradiction. No section otherwise.`;
     // L3 (directive A): primary tools are WebSearch + mcp__harvester__fetch, but agents MAY reach for any other tool that genuinely helps the rabbit-hole.
     this.NET = `Primary tools: WebSearch + mcp__harvester__fetch — load WebSearch via ToolSearch "select:WebSearch" if absent (built-in WebFetch is hook-denied; fetch only through Harvester). You may also load any other tool that genuinely helps THIS rabbit-hole (e.g. context7 for library/API docs) via ToolSearch — pick the best tool for the question, not only web search. Prefer primary, recent sources; stay on-rabbit-hole.`;
     // COMPUTE_NOTE — capability fragment for the compute-aware agents (mirrors NET). Names the scientific Python stack the compute
@@ -425,14 +593,23 @@ const CONFIG = new Configs(args);
 // ╔══ module: src/utils/index.ts ══════════════════════════════════════════
 
              
-           
+            
+        
+                
+              
+             
+             
           
+           
+             
             
               
                   
              
        
+       
         
+             
                            
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -460,13 +637,15 @@ const clip = (s        , n        )         => (s.length > n ? s.slice(0, n - 3)
 const lastScore = (r                                )                =>
   r.scoreHistory.length ? r.scoreHistory[r.scoreHistory.length - 1].score : null;
 // one-line render of an open store entry for the brainer: `#id [last score or "new"] keyword — why`
-// (a ` ↪ ref` suffix flags a lead that carries a concrete URL/DOI to fetch directly).
+// (a ` ↪ ref` suffix flags a lead that carries a concrete URL/DOI to fetch directly; a trailing kind tag
+// surfaces the lead's origin channel when set, ⚔-prefixed for 'attack' so a pending attack lane stands out).
 const openLine = (r   
              
                   
               
                              
                
+                  
  )         =>
   '#' +
   r.id +
@@ -476,7 +655,8 @@ const openLine = (r
   r.keyword +
   ' — ' +
   r.why +
-  (r.ref ? ' ↪ ' + r.ref : '');
+  (r.ref ? ' ↪ ' + r.ref : '') +
+  (r.kind ? (r.kind === 'attack' ? ' ⚔attack' : ' ·' + r.kind) : '');
 
 // plain() — render a value as compact PLAIN TEXT for interpolation INTO an agent prompt (replaces JSON.stringify-in-prompts: less noise, no
 // braces/quotes). string/number/boolean → as-is; array → one "- el" line each (recursing, nested indented two spaces); object → "key: value"
@@ -525,7 +705,20 @@ const laneCount         =
     ? CONFIG.AUTO_CAP
     : CONFIG.parallelLaneResearchAgentsPerWave;
 const trailOf = (path          , keyword         )         =>
-  [clip(CONFIG.query, 60)].concat(path || [], keyword ? [keyword] : []).join('  →  ');
+  [clip(CONFIG.query, CONFIG.MANDATE_CLIP)]
+    .concat(path || [], keyword ? [keyword] : [])
+    .join('  →  ');
+
+// chunk — split an array into groups of at most `size` items each (the v3 ledger clerks — claimAuditor/
+// lineageClerk — batch a wave's claim list into bounded agent calls this way). size ≤ 0 defensively
+// degrades to one whole-array chunk (never an infinite loop) — empty input still yields [].
+function chunk   (items     , size        )        {
+  if (!items.length) return [];
+  if (size <= 0) return [items];
+  const out        = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
 
 // map the brainer's assigned source-identifier strings back to the full {source, goodFor} venue objects (for the
 // researcher prompt) — looked up against the prospector's high-value venue set on rr; an unknown id renders bare.
@@ -535,6 +728,296 @@ const venuesFor = (rr                               , sources           )       
     (s) => rr.highValueSources.find((v) => v.source === s) || { source: s, goodFor: '' },
   );
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Claim-ledger helpers (v3) — pure functions over the append-only claim ledger.
+// Status + confidence are COMPUTED here from ledger topology, never asserted by a model.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// scrubArtifacts — deterministic removal of structured-output/tool-call leakage that occasionally bleeds
+// into a reader's returned text (real bug from run forensics: raw `</parameter>` tags bled into lane
+// findings and propagated downstream). Strips every COMPLETE open/close tag matching the known leakage
+// patterns, then a trailing UNCLOSED fragment of one (the harness cut the emission off mid-tag) — ordinary
+// text is left alone: a lone '<' is only stripped when what follows it is a genuine prefix of one of these
+// tag names (so "5 < 10" or "x<y" survive untouched).
+const ARTIFACT_TAG = /<\/?(?:StructuredOutput|parameter|invoke|function_[a-z]+)[^>]*>/g;
+const ARTIFACT_TAG_NAMES = ['StructuredOutput', 'parameter', 'invoke'];
+const isArtifactTagPrefix = (frag        )          =>
+  !!frag &&
+  (ARTIFACT_TAG_NAMES.some((n) => n.startsWith(frag)) ||
+    'function'.startsWith(frag) ||
+    /^function_[a-z]*$/.test(frag));
+function scrubArtifacts(s        )         {
+  if (!s) return s;
+  const out = s.replace(ARTIFACT_TAG, '');
+  const lastLt = out.lastIndexOf('<');
+  if (lastLt === -1 || out.slice(lastLt).includes('>')) return out;
+  const frag = out.slice(lastLt + 1).replace(/^\//, ''); // a closing-tag fragment drops its leading '/' first
+  return isArtifactTagPrefix(frag) ? out.slice(0, lastLt) : out;
+}
+
+// makeUF — a path-compressed union-find over string keys (lineage clustering). find() returns the
+// canonical root of a key (a fresh key is its own root); union() merges two keys' groups.
+function makeUF()                                                                           {
+  const parent                         = {};
+  const find = (key        )         => {
+    if (!(key in parent)) parent[key] = key;
+    let root = key;
+    while (parent[root] !== root) root = parent[root];
+    for (let cur = key; parent[cur] !== root;) {
+      const next = parent[cur];
+      parent[cur] = root; // path compression: repoint every walked node straight at the root
+      cur = next;
+    }
+    return root;
+  };
+  const union = (a        , b        )       => {
+    parent[find(a)] = find(b);
+  };
+  return { find, union };
+}
+
+// domainOf — the lineage signal inside a source ref: the host without www, or a DOI's registrant
+// prefix ('10.x' = the publisher, per the normRef conventions). '' when nothing resolvable.
+const domainOf = (url                           )         => normRef(url).split('/')[0];
+
+// lineageKeyOf — the DETERMINISTIC lineage fallback when the lineageClerk dies: cluster a claim by
+// norm(funder || venue || source-domain). '' when nothing resolvable (the caller maps '' → cluster 0).
+const lineageKeyOf = (claim                                              )         => {
+  const e = claim.entities || {};
+  return norm(e.funder || e.venue || domainOf(claim.source));
+};
+
+// claimStatus — COMPUTED, never asserted. contested: an unretracted attacking claim targets it.
+// settled: supporting clusters ≥ SETTLED_MIN_CLUSTERS AND (a survived attack OR one cluster beyond the
+// minimum). Else tentative. Support = the claim's own cluster plus the clusters of unretracted,
+// non-failed claims whose stance supports it; the Set counts cluster 0 (shared unknown lineage) at
+// most ONCE no matter how many claims sit in it.
+function claimStatus(
+  claim       ,
+  allClaims         ,
+  nullAttacks              ,
+  cfg                                  ,
+)              {
+  const bearsOn = (c       , kind                        )          =>
+    !!c.stance && c.stance.target === claim.id && c.stance.kind === kind;
+  // a set `counter` (the refiner's own counter-search landed something, or an attack-lane's finding) contests
+  // the claim just as an unretracted attacking ledger claim does — same signal, no ledger row required for it.
+  if (claim.counter || allClaims.some((c) => !c.retracted && bearsOn(c, 'attacks')))
+    return 'contested';
+  // the SUBJECT's own mechanical audit verdict: a claim the auditor actively disproved is treated like
+  // retracted for THIS purpose — it can never settle, no matter how many independent clusters back it
+  // (checked AFTER the contested guard above, so a still-attacked audit-fail claim reads as contested, not tentative).
+  if (claim.audit === 'fail') return 'tentative';
+  const clusters = new Set        ([claim.cluster]);
+  for (const c of allClaims)
+    if (!c.retracted && c.audit !== 'fail' && bearsOn(c, 'supports')) clusters.add(c.cluster);
+  // a nullAttack naming the claim counts as a survived attack even before the attack-lane bookkeeping
+  // bumps the counter; max (not sum) so the two records never double-count one challenge.
+  const survived = Math.max(
+    claim.attacksSurvived || 0,
+    (nullAttacks || []).filter((na) => (na.claimIds || []).includes(claim.id)).length,
+  );
+  return clusters.size >= cfg.SETTLED_MIN_CLUSTERS &&
+    (survived >= 1 || clusters.size >= cfg.SETTLED_MIN_CLUSTERS + 1)
+    ? 'settled'
+    : 'tentative';
+}
+
+// computedConfidence — deterministic over the key claims the answer rests on: every one settled →
+// high; any contested → low; else medium. No key claims → medium; an unknown id can never ground high.
+// A key claim the mechanical audit disproved (or the judge retracted) is worse than merely unsettled —
+// the answer rests on a disproven pin, not just an unstressed one — so it forces 'low' outright, same as contested.
+function computedConfidence(keyClaimIds          , claims         )             {
+  if (!keyClaimIds || !keyClaimIds.length) return 'medium';
+  const byId = new Map(claims.map((c) => [c.id, c]));
+  const keys = keyClaimIds.map((id) => byId.get(id));
+  if (keys.some((c) => c && (c.audit === 'fail' || c.retracted))) return 'low';
+  if (keys.some((c) => c && c.status === 'contested')) return 'low';
+  return keys.every((c) => c && !c.retracted && c.status === 'settled') ? 'high' : 'medium';
+}
+
+// claimDigestOf — the compact "KEY CLAIMS SO FAR" digest woven into a lane reader's prompt: non-retracted
+// claims, most recent first (highest id), capped at CLAIM_DIGEST_CAP, one line each `c12 clip(claim,90)`
+// (ids look like c12 — never '#12', which the ledger digest never renders and a stance target must not
+// be confused with a cluster's `clu2` notation). '' when the ledger is empty (the reader's own fallback
+// then renders "first wave"). Structural param (mirrors venuesFor's `rr`) so this stays a pure function
+// over any claims-bearing state, not just BrainerState.
+const claimDigestOf = (bs                     )         =>
+  bs.claims
+    .filter((c) => !c.retracted)
+    .sort((a, b) => b.id - a.id)
+    .slice(0, CONFIG.CLAIM_DIGEST_CAP)
+    .map((c) => 'c' + c.id + ' ' + clip(c.claim, CONFIG.CLAIM_DIGEST_CLIP))
+    .join('\n');
+
+// minConfidence — the lower-only rule: models may LOWER confidence, never raise it (low < medium < high).
+const CONF_RANK                             = { low: 0, medium: 1, high: 2 };
+const minConfidence = (a            , b            )             =>
+  CONF_RANK[a] <= CONF_RANK[b] ? a : b;
+
+// lintCitations — v3 SYNTHESISER citation lint (pure): scan `report` for every [cN] marker the model wrote;
+// one whose id is not a LIVE (non-retracted) ledger claim is stripped from the text in place (never left
+// dangling, never fabricated back into a real id) and its id collected in `bogus` for the engine to log +
+// count. No markers / empty report ⇒ passthrough, bogus: [].
+function lintCitations(
+  report        ,
+  claims         ,
+)                                      {
+  const live = new Set(claims.filter((c) => !c.retracted).map((c) => c.id));
+  const bogus           = [];
+  const cleaned = (report || '').replace(/\[c(\d+)\]/g, (marker, idStr        ) => {
+    const id = Number(idStr);
+    if (live.has(id)) return marker;
+    bogus.push(id);
+    return '';
+  });
+  return { report: cleaned, bogus };
+}
+
+// chao1 — the coverage estimator (collect mode): from claim groups and how many distinct sources saw
+// each, estimate the unseen groups (n1 = singletons, n2 = doubletons; the bias-corrected form when
+// n2 = 0) and the coverage share. No groups yet → coverage 0 (nothing observed ≠ complete).
+function chao1(groups                       )            {
+  if (!groups || !groups.length) return { unseen: 0, coverage: 0 };
+  const n1 = groups.filter((g) => g.sources === 1).length;
+  const n2 = groups.filter((g) => g.sources === 2).length;
+  // Math.max also normalizes the n1 = 0 corner (0·(0−1)/2 = −0) to a clean +0
+  const unseen = Math.max(0, n2 > 0 ? (n1 * n1) / (2 * n2) : (n1 * (n1 - 1)) / 2);
+  return { unseen, coverage: groups.length / (groups.length + unseen) };
+}
+
+// updateCalib — one EMA step of a kind's realized/predicted yield ratio. PURE: returns the new entry,
+// never mutates `calib`. predicted ≤ 0 → identity (an unpredicted lead teaches nothing). A kind starts
+// from the neutral prior ratio 1, so early observations pull it gradually rather than whipsaw it.
+function updateCalib(
+  calib            ,
+  kind        ,
+  predicted        ,
+  realized        ,
+  alpha        ,
+)                               {
+  const prev = calib[kind] || { n: 0, ratio: 1 };
+  if (!(predicted > 0)) return { n: prev.n, ratio: prev.ratio };
+  return { n: prev.n + 1, ratio: prev.ratio + alpha * (realized / predicted - prev.ratio) };
+}
+
+// calibFactor — the selection-only multiplier a kind's calibration earns, clamped to [lo, hi]
+// (an unseen kind is neutral: 1). Applied to sort keys only — stored scores are never touched.
+const calibFactor = (calib            , kind        , lo        , hi        )         =>
+  Math.min(hi, Math.max(lo, calib[kind] ? calib[kind].ratio : 1));
+
+// ledgerLines — the brainer's CLAIM LEDGER digest (v3 STEERING): every non-retracted claim, one line
+// `c12 [status·clu2·audit] claim = value — source` (claim ids look like c12, clusters like clu2 — kept
+// visually distinct so a model never confuses a cluster number with a claim id, or either with a [cN]
+// citation marker), ordered latest-keyClaimIds-first (the ids the LIVING answer currently rests on),
+// then contested, then settled, then tentative by recency (highest id first). Capped at `cap` with a
+// "(+N more)" tail; '' when the ledger is empty (the caller's clause then omits the whole CLAIM LEDGER section).
+function ledgerLines(
+  bs                                                      ,
+  cap        ,
+)         {
+  const active = bs.claims.filter((c) => !c.retracted);
+  const used = new Set        ();
+  const ordered          = [];
+  const byId = new Map(active.map((c) => [c.id, c]));
+  for (const id of (bs.resultSoFar && bs.resultSoFar.keyClaimIds) || []) {
+    const c = byId.get(id);
+    if (c && !used.has(id)) {
+      ordered.push(c);
+      used.add(id);
+    }
+  }
+  const rest = active.filter((c) => !used.has(c.id)).sort((a, b) => b.id - a.id);
+  for (const status of ['contested', 'settled', 'tentative']                 )
+    for (const c of rest)
+      if (c.status === status && !used.has(c.id)) {
+        ordered.push(c);
+        used.add(c.id);
+      }
+  const shown = ordered.slice(0, cap);
+  const line = (c       )         =>
+    'c' +
+    c.id +
+    ' [' +
+    c.status +
+    '·clu' +
+    c.cluster +
+    '·' +
+    c.audit +
+    '] ' +
+    clip(c.claim, CONFIG.CLAIM_LINE_CLIP) +
+    (c.value ? ' = ' + c.value : '') +
+    ' — ' +
+    c.source;
+  const remaining = ordered.length - shown.length;
+  return shown.map(line).join('\n') + (remaining > 0 ? '\n(+' + remaining + ' more)' : '');
+}
+
+// topSensitivityInput — the derivation input name whose variance share is largest ('' when there are
+// none). Shared by the rerunner's log line and the brainer's DERIVATION STATE clause — one definition.
+const topSensitivityInput = (sensitivity                                    )         => {
+  const entries = Object.entries(sensitivity || {});
+  return entries.length ? entries.reduce((a, b) => (b[1] > a[1] ? b : a))[0] : '';
+};
+
+// sensitivityRanking — the initiator's SENSITIVITY RANKING body (v3 FINALIZE): derivation inputs ordered by
+// variance share (highest first), each with the ledger claims backing it (`c12 clip(claim,SENSITIVITY_CLIP)`, joined —
+// same c-id notation as ledgerLines/claimDigestOf) or a PRIOR flag when it is an unevidenced placeholder.
+// '' when there is no completed rerun yet (the caller's clause is then omitted entirely — a freshly-authored,
+// not-yet-run derivation has no sensitivity to rank).
+function sensitivityRanking(
+  derivation                                                                                  ,
+  claims         ,
+)         {
+  if (!derivation) return '';
+  const byId = new Map(claims.map((c) => [c.id, c]));
+  const ranked = [...derivation.inputs].sort(
+    (a, b) => (derivation.sensitivity[b.name] || 0) - (derivation.sensitivity[a.name] || 0),
+  );
+  return ranked
+    .map((inp) => {
+      const share = derivation.sensitivity[inp.name];
+      const backing = (inp.claimIds || [])
+        .map((id) => byId.get(id))
+        .filter((c)             => !!c && !c.retracted)
+        .map((c) => 'c' + c.id + ' ' + clip(c.claim, CONFIG.SENSITIVITY_CLIP))
+        .join('; ');
+      return (
+        '- ' +
+        inp.name +
+        ' (' +
+        (share != null ? share.toFixed(2) : '?') +
+        ')' +
+        (backing ? ' — backed by ' + backing : inp.prior ? ' — PRIOR (no backing claim yet)' : '')
+      );
+    })
+    .join('\n');
+}
+
+// venuesWithYieldWarn — per-wave copy of the prospector venues for the brainer prompt, with a
+// ' — ⚠ 0 yield in N lanes' suffix baked into `goodFor` for any venue assigned to ≥2 lanes that yielded
+// NOTHING (no ingested claim, no fresh lead) across the run so far. Pure: never mutates `venues` or the
+// stats map; a venue with no entry (or a healthy one) passes through unchanged.
+function venuesWithYieldWarn(
+  venues         ,
+  venueStats                                                       ,
+)          {
+  return venues.map((v) => {
+    const s = venueStats[v.source];
+    if (!s || s.assigned < CONFIG.VENUE_WARN_MIN || s.yielded !== 0) return v;
+    return { ...v, goodFor: v.goodFor + ' — ⚠ 0 yield in ' + s.assigned + ' lanes' };
+  });
+}
+
+// vocabSummary — the scheduler's COMMUNITY VOCABULARY clause input: the top `cap` terms by uses,
+// "term (n)" comma-joined; '' when the vocabulary is empty (the caller's clause is then omitted).
+const vocabSummary = (vocab        , cap        )         =>
+  [...(vocab || [])]
+    .sort((a, b) => b.uses - a.uses)
+    .slice(0, cap)
+    .map((t) => t.term + ' (' + t.uses + ')')
+    .join(', ');
 
 // packReaders — the MECHANICAL splitter (B5/B2/B7). Bin-pack a lane's sized sources into reader-units, each ≤
 // `budget` tokens AND ≤ budget×charsPerToken CHARS. The UNIT is the budget, not the source: small sources that
@@ -638,26 +1121,12 @@ const bullets = (arr                             )         =>
   arr && arr.length ? arr.map((x) => '- ' + x).join('\n') : '_none_';
 function resultSoFarMd(r                    )         {
   if (!r || typeof r !== 'object') return '_none_';
-  const ev = (r.evidence || [])
-    .map(
-      (e          ) =>
-        '- [' +
-        (e.status || '?') +
-        '] **' +
-        (e.fact || '') +
-        ':** ' +
-        (e.value || '') +
-        (e.source ? ' — ' + e.source : ''),
-    )
-    .join('\n');
   return (
     '**Answer:** ' +
     (r.answer || '_(none)_') +
     '\n\n**Confidence:** ' +
     (r.confidence || '_(none)_') +
     (r.working ? '\n\n**Working:**\n\n' + r.working : '') +
-    '\n\n**Evidence:**\n' +
-    (ev || '_none_') +
     (r.assumptions && r.assumptions.length
       ? '\n\n**Assumptions:**\n' +
         r.assumptions.map((a) => '- **' + (a.claim || '') + '** — ' + (a.basis || '')).join('\n')
@@ -745,39 +1214,248 @@ function waveMd(
     '\n'
   );
 }
+
+// claimsMd — the human-readable ledger artifact (_claims.md): every non-retracted claim, grouped by its
+// COMPUTED status (settled → tentative → contested), one line each: `- c<id> [status·cluster·audit] claim
+// = value — source (wave N, lane)`; then the nullAttacks ("Challenged and survived" — a completed
+// counter-search that found nothing is first-class, distinct from "never challenged"); then the vocabulary.
+function claimsMd(bs   
+                  
+                            
+                     
+ )         {
+  const line = (c       )         =>
+    '- c' +
+    c.id +
+    ' [' +
+    c.status +
+    '·' +
+    c.cluster +
+    '·' +
+    c.audit +
+    '] ' +
+    c.claim +
+    (c.value ? ' = ' + c.value : '') +
+    ' — ' +
+    c.source +
+    ' (wave ' +
+    c.wave +
+    ', ' +
+    c.lane +
+    ')';
+  const group = (status             )         =>
+    bs.claims
+      .filter((c) => !c.retracted && c.status === status)
+      .map(line)
+      .join('\n') || '_none_';
+  const nullSection =
+    bs.nullAttacks
+      .map(
+        (na) =>
+          '- **' +
+          na.topic +
+          '** — queries: ' +
+          na.queries.join(', ') +
+          (na.claimIds.length ? ' → c' + na.claimIds.join(', c') : ''),
+      )
+      .join('\n') || '_none_';
+  const vocabSection =
+    bs.vocabulary
+      .map((t) => '- **' + t.term + '**' + (t.gloss ? ' — ' + t.gloss : '') + ' (' + t.uses + ')')
+      .join('\n') || '_none_';
+  return (
+    '# Claim ledger\n\n## Settled\n\n' +
+    group('settled') +
+    '\n\n## Tentative\n\n' +
+    group('tentative') +
+    '\n\n## Contested\n\n' +
+    group('contested') +
+    '\n\n## Challenged and survived\n\n' +
+    nullSection +
+    '\n\n## Vocabulary\n\n' +
+    vocabSection +
+    '\n'
+  );
+}
 // ╔══ module: src/agents/scout/prompts.ts ═════════════════════════════════
-// SCOUT prompts — the wave-0 seed template + its assembly function. The template strings are
-// module-level consts; buildScout only assembles/substitutes (it holds no template text itself).
+// SCOUT SWARM prompts — three templates + their assembly functions: scoutPlanner (senses the landscape,
+// decomposes the query, proposes search angles) → scout (one PROBE per angle) → scoutMerger (folds every
+// probe into the final ScoutOut). Template strings are module-level consts; each build* fn only
+// assembles/substitutes — it holds no template text itself.
 
-                                                      
 
-const SCOUT_TPL = `{{! scout — one broad sweep that maps the web landscape and seeds the first rabbit-holes }}
-Scout the web landscape for: "{{query}}". {{net}}
-Step 1 — run one broad WebSearch to map the landscape and collect candidate sources (URLs).
-Step 2 — pick the up-to-5 most relevant sources and fetch each via mcp__harvester__fetch — built-in WebFetch is denied. For each fetched page, first surface the key facts about "{{query}}", then apply this instruction: <<{{footer}}>>
-Step 3 — return: landscape (one paragraph); pages[] (each: url, 2-3 sentence summary, rabbitHoles[] copied from the page's "Rabbit holes" section as {keyword, why}); deadEnds[] for any source that timed out, was parked, or was off-topic — do not invent rabbit-holes for those. If every source is dead/unreachable, still return a valid result: landscape from your search, pages [], the dead sources in deadEnds.{{researcherClause}}
+                                                                                         
+
+// ── stage 1: scoutPlanner — ground the angle vocabulary in real search results before proposing anything;
+// decompose the query into its distinct axes; propose the probe swarm's search angles ──
+const SCOUT_PLANNER_TPL = `{{! scoutPlanner — grounds the angle vocabulary in real search results, decomposes the query, proposes the probe swarm's angles }}
+Query: "{{query}}" (mode: {{mode}}). {{net}}
+Step 1 — run 1-2 quick WebSearches to sense the landscape's lay. The angle vocabulary below MUST come from what these searches actually surface — never from imagination.
+Step 2 — return decomposition: the query's distinct axes, one line each — everything that must ALL be understood to answer it.
+Step 3 — return angles: 3 to ${CONFIG.SCOUT_PROBES} distinct search angles for a swarm of scout probes, each {name, searchQuery, why, lens}. searchQuery is a concrete, distinct query for THIS angle — never a reworded restatement of another angle's. No two angles may overlap: each must be built to surface pages the others will not.
+MANDATORY whenever it applies to this query:
+(a) a DIRECT angle — the query as asked, straight up.
+(b) a SKEPTIC angle — counter-evidence: criticism, limitations, failed replications, debunking phrasing.
+(c) a RECENT angle — the last ~12 months of developments.
+Fill any remaining slots with whichever of these fit THIS query best: datasets/benchmarks, practitioner communities, regulatory/official sources, industry analyses, adjacent-field framings.{{researcherClause}}
 `;
 
-const buildScout = ({ query, net, footer, researcherNote }           ) => {
+const buildScoutPlanner = ({ query, mode, net, researcherNote }                  ) => {
   const researcherClause = researcherNote ? '\n' + researcherNote : '';
-  return render(SCOUT_TPL, { query, net, footer, researcherClause });
+  return render(SCOUT_PLANNER_TPL, { query, mode, net, researcherClause });
 };
+
+// ── stage 2: scout — one PROBE of the swarm, scoped to a single angle. Unchanged reading substrate from
+// v2's single scout (one WebSearch → fetch ≤N sources → the same footer discipline); only the SCOPE
+// narrows from "the whole topic" to "this one angle". ──
+const SCOUT_TPL = `{{! scout — one probe of the swarm, scoped to a single angle: sweeps it and seeds its rabbit-holes }}
+You are scout probe {{index}} of {{total}}, on the angle «{{angleName}}» — {{angleWhy}}. Lens: {{angleLens}}. {{net}}
+Step 1 — run WebSearch with: "{{searchQuery}}". You may refine it ONCE if the results are off-angle — stay on THIS angle, do not wander onto another probe's.
+Step 2 — pick the up-to-${CONFIG.SCOUT_PROBE_SOURCES} most relevant sources FOR THIS ANGLE and fetch each via mcp__harvester__fetch — built-in WebFetch is denied. For each fetched page, first surface the key facts about "{{query}}" as this angle reveals them, then apply this instruction: <<{{footer}}>> If the fetch result reports a local cache path for the page, you may set that claim's cachePath to it — never invent one when the tool did not report it. Skip the footer's Surprise section — no prior claims exist yet.
+Step 3 — return: landscape (2-3 sentences on what THIS ANGLE revealed — not the whole topic, just what this angle's sources showed); pages[] (each: url, 2-3 sentence summary, rabbitHoles[] copied from the page's "Rabbit holes" section as {keyword, why}); nextSources[] union of the pages' "Next sources" sections, each {ref, why}; claims[] union of the pages' "Claims" sections, each pinned to a verbatim quote — a claim without its verbatim quote is worthless, no quote no claim; newTerms[] union of the pages' "New terms" sections; deadEnds[] for any source that timed out, was parked, or was off-topic — do not invent rabbit-holes for those. If every source is dead/unreachable, still return a valid result: landscape from your search, pages [], the dead sources in deadEnds.{{researcherClause}}
+`;
+
+const buildScout = ({
+  query,
+  net,
+  footer,
+  angleName,
+  angleWhy,
+  angleLens,
+  searchQuery,
+  index,
+  total,
+  researcherNote,
+}           ) => {
+  const researcherClause = researcherNote ? '\n' + researcherNote : '';
+  return render(SCOUT_TPL, {
+    query,
+    net,
+    footer,
+    angleName,
+    angleWhy,
+    angleLens,
+    searchQuery,
+    index,
+    total,
+    researcherClause,
+  });
+};
+
+// ── stage 3: scoutMerger — folds every surviving probe's output into ONE final ScoutOut (same schema).
+// No tools: a plain subagent reducing material the probes already gathered — there is no tool-use rabbit
+// hole to guard against (mirrors lineageClerk: no FINISH clause). ──
+const SCOUT_MERGER_TPL = `{{! scoutMerger — folds every angle probe's output into the final ScoutOut, naming the tensions between angles }}
+Query: "{{query}}".
+Decomposition (the query's distinct axes): {{decomposition}}
+Every surviving probe's output (angle name, what it revealed, its pages/claims/newTerms/deadEnds):
+{{probes}}
+Return the FINAL scout result:
+landscape: ONE rich paragraph weaving every angle together — and NAME THE TENSIONS between them (where, say, the SKEPTIC angle contradicts the DIRECT angle). That tension is the single most valuable seed the next stage can receive — surface it explicitly, never bury it.
+pages: the union of every probe's pages, deduped by url, keeping the strongest up to ${CONFIG.SCOUT_PAGES_CAP} — carry each kept page's summary and rabbitHoles EXACTLY as its probe wrote them; you are SELECTING, not rewriting.
+nextSources: the union of every probe's nextSources, deduped by ref.
+claims: the union of every probe's claims, dropping exact duplicates (the same quote reported by more than one probe).
+newTerms: the union, deduped by term.
+deadEnds: the union.
+Only use what the probes actually returned — never invent a page, claim, or term no probe reported.
+`;
+
+const buildScoutMerger = ({ query, decomposition, probes }                 ) =>
+  render(SCOUT_MERGER_TPL, { query, decomposition, probes: plain(probes) });
 // ╔══ module: src/agents/scout/index.ts ═══════════════════════════════════
-// SCOUT — wave-0 seed. One broad WebSearch maps the landscape, then up-to-5 Harvester fetches seed the
-// first rabbit-holes. Tier: haiku — the page reading is the FIXED haiku reader's job, leaving
-// the scout a bounded "map + extract rabbit-holes" task (user directive + measured: haiku summaries
-// were accurate + specific). Effort: medium (worker load). Escalate only on measured failure.
+// SCOUT SWARM — the wave-0 seed, now three stages instead of one broad sweep: scoutPlanner (sonnet, high)
+// runs 1-2 quick WebSearches to ground the landscape then decomposes the query + proposes 3..SCOUT_PROBES
+// search angles; a swarm of `scout` probes (haiku, medium — UNCHANGED tier: the page reading stays the
+// fixed haiku reader's job, only its scope narrows to one angle) each sweep one angle; scoutMerger (sonnet,
+// high, no tools) folds every surviving probe into the final ScoutOut, naming the tensions between angles.
+// Every stage degrades to a named JS fallback — see run.ts.
 
 
 
-                                                                     
+             
+        
+            
+                  
+                   
+         
+                              
 
+// ── stage 1 schema — the planner's decomposition + proposed angles ──
+const SCOUT_ANGLE         = {
+  type: 'object',
+  properties: {
+    name: {
+      type: 'string',
+      description: 'short angle label, e.g. "direct", "skeptic", "recent"',
+    },
+    searchQuery: {
+      type: 'string',
+      description: 'a concrete, distinct search query for THIS angle — never a reworded sibling',
+    },
+    why: { type: 'string', description: 'why this angle matters for the query' },
+    lens: {
+      type: 'string',
+      description: 'the interpretive lens the probe should read its sources through',
+    },
+  },
+  required: ['name', 'searchQuery', 'why'],
+};
+
+const SCOUT_PLANNER         = {
+  type: 'object',
+  properties: {
+    decomposition: { type: 'string', description: "the query's distinct axes, one line each" },
+    angles: {
+      type: 'array',
+      items: SCOUT_ANGLE,
+      description: `3..${CONFIG.SCOUT_PROBES} distinct, non-overlapping search angles for the probe swarm`,
+    },
+  },
+  required: ['decomposition', 'angles'],
+};
+
+const scoutPlanner                          = {
+  tier: CONFIG.TIER.scoutPlanner,
+  effort: CONFIG.EFFORT.scoutPlanner,
+  schema: SCOUT_PLANNER,
+  buildPrompt: buildScoutPlanner,
+};
+
+// ── stage 2 schema — one probe's return. UNCHANGED shape from v2's single scout: field-compatible so
+// scoutMerger (and both JS fallbacks) can reuse this exact schema for the FINAL ScoutOut too. ──
 const SCOUT         = {
   type: 'object',
   properties: {
     landscape: { type: 'string' },
     pages: { type: 'array', items: PAGE },
     deadEnds: { type: 'array', items: { type: 'string' } },
+    claims: {
+      type: 'array',
+      items: CLAIM_ITEM,
+      description:
+        "union of the fetched pages' load-bearing facts, each pinned to a verbatim quote — no digest exists yet, so never carries `stance`",
+    },
+    nextSources: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          ref: {
+            type: 'string',
+            description: 'an exact url or DOI a fetched page points to, worth fetching directly',
+          },
+          why: { type: 'string', description: 'one line on why following it matters' },
+        },
+        required: ['ref', 'why'],
+      },
+      description:
+        "union of the fetched pages' highest-value outbound citations — no ledger exists yet, so never carries expect/target",
+    },
+    newTerms: {
+      type: 'array',
+      items: TERM_SEED,
+      description: "union of the fetched pages' community terms of art that we did not use",
+    },
   },
   required: ['landscape', 'pages'],
 };
@@ -787,6 +1465,14 @@ const scout                   = {
   effort: CONFIG.EFFORT.scout,
   schema: SCOUT,
   buildPrompt: buildScout,
+};
+
+// ── stage 3 — scoutMerger: folds every probe's SCOUT-shaped output into ONE final SCOUT-shaped output. ──
+const scoutMerger                         = {
+  tier: CONFIG.TIER.scoutMerger,
+  effort: CONFIG.EFFORT.scoutMerger,
+  schema: SCOUT, // same shape as a probe's output — the merger folds N of them into one
+  buildPrompt: buildScoutMerger,
 };
 // ╔══ module: src/agents/prospector/prompts.ts ════════════════════════════
 // PROSPECTOR prompts — the venue-naming template + its assembly function. Template strings are
@@ -885,6 +1571,7 @@ const prospector                        = {
 // are module-level consts; buildBrainer only assembles/substitutes the per-wave clauses.
 
 
+
                                                                             
 
 const BRAINER_TPL = `{{! brainer — the brain: scores and steers rabbit-holes, keeps resultSoFar, decides done }}
@@ -912,12 +1599,12 @@ RABBIT-HOLE STORE — open rabbit-holes (\`#id [last score or "new"] keyword —
 ALREADY PURSUED — do not look up or re-originate these (research history):
 {{pursuedList}}
 Findings this wave (from the researchers' page-reading):
-{{findings}}{{trajectory}}{{venuesClause}}{{languageClause}}
+{{findings}}{{trajectory}}{{venuesClause}}{{languageClause}}{{calibrationClause}}{{sensitivityClause}}{{chaoClause}}
 
-{{memoryClause}}
-Update and return \`resultSoFar\` as the run's memory: refine \`answer\`; append load-bearing \`evidence\` only (each {fact, value, source, status: settled|tentative|contested} — facts the answer rests on, not a transcript); record the working \`assumptions\` the answer leans on (each {claim, basis}) and revise or retire them as evidence lands; move closed parts into \`resolved\`; keep \`openGaps\` current; record any \`tensions\` (conflicting sources); {{workingClause}}; set \`confidence\`.
+{{memoryClause}}{{ledgerClause}}
+Update and return \`resultSoFar\` as the run's memory: refine \`answer\`; set \`keyClaimIds\` to the ledger ids the answer rests on; record the working \`assumptions\` the answer leans on (each {claim, basis}) and revise or retire them as evidence lands; move closed parts into \`resolved\`; keep \`openGaps\` current; record any \`tensions\` (conflicting sources); {{workingClause}}; set \`confidence\`.
 Weight findings by evidence quality — funding independence, sample size, replication, stated limitations — not mere existence; let it drive both your scores and \`confidence\`.
-For each headline / load-bearing finding, originate a lane to hunt failed replications, null trials, or refutations. Keep such a claim at status \`tentative\` (single source) until an independent source — a different group and funder — corroborates it; only then mark it \`settled\`.{{computeField}}
+For each headline / load-bearing finding, originate a lane to hunt failed replications, null trials, or refutations. Corroboration is what feeds the ledger's own settled/tentative computation — you never set status yourself; originate lanes that give the machinery independent clusters to count.{{attackClause}}{{computeField}}
 
 Then return deltas against the store:
 (1) \`rescore\`: [{id, score}] — only the rabbit-holes whose 0-100 score changes this wave (score every "new" one at least once); unlisted ones keep their last score. Score honestly per the rubric; a marginal one scores low.
@@ -925,7 +1612,7 @@ Then return deltas against the store:
 (3) \`lookupNext\`: the rabbit-holes to research now — each either {id} (a stored one) or {keyword, why, score{{scoreFields}}} (one you originate and pursue now). None may be already pursued.{{assignClause}} For EVERY lookupNext lane author a \`note\`: the research directive — WHAT to find plus ranked fallbacks ("if not X, focus on Y; give both if available"). It steers both the scheduler's source pick and the reader's extraction; keep it distinct from \`why\` (your store/scoring rationale).
 (4) \`rename\`: [{id, keyword, why?}] — relabel a rabbit-hole, keeping its id + history (optional).
 (5) \`drop\`: [id, …] — eliminate a dead/duplicate rabbit-hole; a merge = drop the duplicate and rescore the survivor (optional).{{spawnClause}}
-(6) \`stop\`: {done, reason}. {{stop}}{{goalClause}}{{validatorClause}}{{FINISH}}
+(6) \`stop\`: {done, reason}. {{stop}}{{goalClause}}{{voiClause}}{{validatorClause}}{{FINISH}}
 `;
 
 const buildBrainer = ({
@@ -953,6 +1640,10 @@ const buildBrainer = ({
   trail,
   canSpawn,
   lastWave,
+  ledger,
+  calib,
+  derivation,
+  chao,
 }             ) => {
   // brainer-tree role: a CHILD drives ONE branch and may abandon it; the ROOT carries the whole run and never can.
   const roleClause = isChild
@@ -964,7 +1655,7 @@ const buildBrainer = ({
   // spawn is offered ONLY while spawning is still permitted (caps not hit) — don't tempt a capped-out brainer.
   const spawnClause = canSpawn
     ? `\n(5b) \`spawn\` (at most ONE this wave): when the goal holds two or more INDEPENDENT investigations — separate evidence bases, sub-questions that do not inform each other — hand one to a focused child brainer THIS wave instead of carrying both in your single line: emit \`spawn\` {id (or keyword+why), mandate}. The child inherits a clean copy of your store + memory, aimed by the mandate; you drop that branch and steer the rest. Reserve a spawn for a branch substantial enough to run on its own — not a single lane — but when the run genuinely splits in two, spawn rather than interleave.`
-    : '';
+    : `\n(spawn is unavailable this wave — the parallel-brainer cap is reached; do not emit one.)`;
   const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
   const validatorClause = lastValidatorMissing
     ? `\nVALIDATOR — last wave left these unfilled; re-pursue the reopened lanes or originate new ones to close them: ${lastValidatorMissing}`
@@ -1006,11 +1697,56 @@ Some of this topic's strongest literature is non-English. Guidance: ${languageGu
     compute === false
       ? `leave \`working\` empty and treat any value you cannot source as STATED UNCERTAINTY in the answer — never hand-roll a derivation`
       : `for build-the-answer / estimate questions grow the \`working\` derivation chain (else '')`;
+  // derivationClause (compute on) — replaces v2's inline COMPUTE TO STEER: redirect from deriving-inline to
+  // AUTHORING the derivation once as a stored artifact the engine reruns cheaply every wave (kept in the
+  // `computeField` slot/variable name — same template placeholder, same compute gate as before).
   const computeField = compute
     ? `
 
-COMPUTE TO STEER: when a calculation would change your next move — a number the answer is being built toward, or an estimate of which gap matters most — derive it yourself this wave (reason it out, or write and run a short Python/Node script when the arithmetic needs it) and fold the result into \`working\`. Keep it light; you are steering, not writing the final derivation.${computeNote ? '\n\n' + computeNote : ''}`
+When the answer must be BUILT (an estimate, a synthesis with arithmetic), AUTHOR the derivation once as a stored artifact: return \`derivation\` {code, inputs} — pure seeded python3, reads one JSON arg of input values, prints {quantiles, sensitivity}. Name each input, tie it to the ledger claims backing it (claimIds), and mark unevidenced inputs prior:true with a WIDE dist — never a fake point value. The engine reruns it cheaply every wave and shows you the sensitivity; re-emit \`derivation\` only to change code or inputs. Fold the headline number into \`working\`.${computeNote ? '\n\n' + computeNote : ''}`
     : '';
+  // ledgerClause — the claim ledger digest (v3 STEERING); omitted entirely before any claim is ledgered.
+  const ledgerClause = ledger
+    ? `\nCLAIM LEDGER — the run's evidence, quote-pinned + audited by machinery (each line: c12 [status·clu2·audit] claim = value — ids look like c12, clusters like clu2):\n${ledger}\nCorroboration counts independence CLUSTERS, not sources — two claims in one cluster are ONE voice. Reference claims by their NUMBER (the digits in its c12 id) in \`keyClaimIds\` (the ids the answer rests on). Evidence lives HERE now — do not re-emit facts into resultSoFar.evidence.`
+    : '';
+  // attackClause — gated on the SAME ledger presence: nothing to challenge before the first claim lands.
+  const attackClause = ledger
+    ? ` For every keyClaim still \`tentative\` that has never been challenged (no attack lane, no nullAttack), originate ONE kind:"attack" lane hunting its strongest realistic counter-evidence — a claim that has survived attack outranks one nobody questioned.`
+    : '';
+  // calibrationClause — only kinds with a real observation (n>0) render; an all-neutral table teaches nothing.
+  const calibEntries = Object.entries(calib || {}).filter(([, v]) => v && v.n > 0);
+  const calibrationClause = calibEntries.length
+    ? `\nCALIBRATION — your lead kinds, predicted vs realized yield this run (ratio<1 = you overestimate this kind): ${calibEntries.map(([k, v]) => k + ': ' + v.ratio.toFixed(2) + ' (' + v.n + ')').join(', ')}. The engine already weights selection by these; let them temper your scores too.`
+    : '';
+  // sensitivityClause + voiClause — gated on a derivation with at least one completed rerun (lastRun);
+  // a freshly-authored, not-yet-run derivation has no sensitivity to show.
+  const priorNames = new Set(
+    (derivation ? derivation.inputs : []).filter((i) => i.prior).map((i) => i.name),
+  );
+  const sensEntries = derivation ? Object.entries(derivation.sensitivity || {}) : [];
+  const topInput = sensEntries.length ? sensEntries.reduce((a, b) => (b[1] > a[1] ? b : a))[0] : '';
+  const staleFlag =
+    derivation && derivation.stale
+      ? ' (STALE — last rerun failed; consider re-emitting the derivation.)'
+      : '';
+  const sensitivityClause = derivation
+    ? `\nDERIVATION STATE — current quantiles: ${Object.entries(derivation.quantiles || {})
+        .map(([k, v]) => k + '=' + v)
+        .join(', ')}. Variance shares by input: ${sensEntries
+        .map(([k, v]) => k + ': ' + v.toFixed(2) + (priorNames.has(k) ? ' (PRIOR)' : ''))
+        .join(
+          ', ',
+        )} (inputs marked PRIOR are placeholders awaiting evidence). Chase the inputs that dominate the variance: a lane that pins a ${topInput} beats any topical lead.${staleFlag}`
+    : '';
+  const voiClause =
+    mode === 'goal' && derivation
+      ? `\nSTOP TEST (value-of-information): when the goal is answered AND no open rabbit-hole targets a derivation input with variance share > ${CONFIG.VOI_SENS_THRESHOLD}, further waves cannot materially change the answer — set stop.done=true.`
+      : '';
+  // chaoClause — collect mode only, once the first collect-mode wave has computed a coverage estimate.
+  const chaoClause =
+    mode === 'collect' && chao
+      ? `\nCOVERAGE — statistical estimate from the claim ledger: ~${Math.round(chao.unseen)} distinct findings remain unfound (coverage ≈${Math.round(chao.coverage * 100)}%). Read it as the inventory's completeness, not a feeling.`
+      : '';
   return render(BRAINER_TPL, {
     roleClause,
     lastWaveClause,
@@ -1028,12 +1764,18 @@ COMPUTE TO STEER: when a calculation would change your next move — a number th
     trajectory,
     venuesClause,
     languageClause,
+    calibrationClause,
+    sensitivityClause,
+    chaoClause,
     memoryClause,
+    ledgerClause,
+    attackClause,
     scoreFields,
     assignClause,
     workingClause,
     stop,
     goalClause,
+    voiClause,
     validatorClause,
     computeField,
     FINISH,
@@ -1057,7 +1799,7 @@ Derive with rigor:
 - write and run a short script for any non-trivial arithmetic — load Bash + Write via ToolSearch if absent, run python (or node) — compute, do not estimate;
 - propagate the input uncertainties into an explicit ± error range;
 - adversarially check your own work: re-derive a second way or sanity-check against an anchor, and fix any unit / formula / arithmetic slip.{{noteClause}}{{thinkerClause}}
-Return the updated \`resultSoFar\`: fold the completed derivation into \`working\` (the verified inputs, the steps, the numbers, the ± result, the self-check), put the headline computed result in \`answer\`, and keep evidence / resolved / openGaps / tensions / confidence current.{{FINISH}}
+Return the updated \`resultSoFar\`: fold the completed derivation into \`working\` (the verified inputs, the steps, the numbers, the ± result, the self-check), put the headline computed result in \`answer\`, and keep \`keyClaimIds\` / \`resolved\` / \`openGaps\` / \`tensions\` / \`confidence\` current — \`keyClaimIds\` are the ledger claim ids the answer rests on; the deprecated \`evidence\` array is never populated.{{FINISH}}
 `;
 
 const buildBrainerCompute = ({
@@ -1162,6 +1904,39 @@ const COORD         = {
       required: ['mandate'],
       description:
         'OPTIONAL, at most ONE per wave: spawn a focused child brainer onto a branch that deserves a dedicated brain. Only when you are SURE the branch is worth it — spawns are expensive. Omit when not spawning.',
+    },
+    derivation: {
+      type: 'object',
+      properties: {
+        code: {
+          type: 'string',
+          description:
+            'pure python3 script: reads ONE json arg {inputName: value}, prints ONE json {quantiles:{p10,p50,p90}, sensitivity:{inputName: varianceShare 0-1}}; seeded (fixed seed) — same inputs, same output',
+        },
+        inputs: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              dist: {
+                type: 'string',
+                description:
+                  'the value/distribution to feed, e.g. "lognormal(mu=…, sigma=…)" or a point value',
+              },
+              claimIds: { type: 'array', items: { type: 'number' } },
+              prior: {
+                type: 'boolean',
+                description: 'true = wide-prior placeholder, not evidence-backed',
+              },
+            },
+            required: ['name', 'dist', 'claimIds', 'prior'],
+          },
+        },
+      },
+      required: ['code', 'inputs'],
+      description:
+        "OPTIONAL: author (or re-author) the run's stored derivation once — a pure, seeded artifact the engine reruns cheaply every wave. Re-emit only to change the code or the inputs.",
     },
     stop: {
       type: 'object',
@@ -1286,7 +2061,7 @@ LANES — each carries a rabbit-hole, the brainer's directive \`note\` (WHAT to 
 Work in TWO batched rounds — never one-source-at-a-time round-trips:
 1. DISCOVER — run ALL lanes' searches in ONE parallel batch (WebSearch / mcp__harvester__search / findWorks). Prefer each lane's assigned venues; let its \`note\` decide which results serve it. A lane carrying a concrete ref takes that ref as a source directly — no search needed for it.
 2. SIZE — call mcp__harvester__fetch with size_only:true on EVERY candidate across all lanes in ONE parallel batch. With size_only it fetches + caches the full text and returns {size in tokens, path to the cache file, chars} and NO body. Drop any candidate that failed or came back walled/thin and pick another from the same lane.
-For each lane, return its chosen sources as {source (the exact url or DOI), path (the cache path from size_only), size (tokens), chars}. Group them under the lane's id. A lane may return several sources; return an empty list for a lane only when every candidate failed.{{translateClause}}{{researcherClause}}
+For each lane, return its chosen sources as {source (the exact url or DOI), path (the cache path from size_only), size (tokens), chars}. Group them under the lane's id. A lane may return several sources; return an empty list for a lane only when every candidate failed.{{translateClause}}{{researcherClause}}{{vocabClause}}
 Return \`lanes\`: one entry per input lane id, each {id, sources:[{source, path, size, chars}]}. Use the sizes you measured — never invent them.
 `;
 
@@ -1308,18 +2083,30 @@ const laneLine = (l                    )         =>
     .join('; ') || '(none — general search)') +
   (l.ref ? '\n  ref (fetch directly): ' + l.ref : '');
 
-const buildResearchScheduler = ({ query, lanes, researcherNote }                       ) => {
+const buildResearchScheduler = ({
+  query,
+  lanes,
+  researcherNote,
+  vocabulary,
+}                       ) => {
   const anyLang = lanes.some((l) => (l.venues || []).some((v) => v.lang));
   const translateClause = anyLang
     ? `
 For a lane routed to a non-English venue (tagged [zh], [ja], …), translate its query terms into that language, search the native venue, and choose the native-language sources — the readers translate the content back to English.`
     : '';
   const researcherClause = researcherNote ? '\n' + researcherNote : '';
+  // vocabClause — the field's own terms of art (v3 STEERING), so venue queries speak the community's
+  // language rather than the operator's; omitted entirely when the vocabulary is still empty.
+  const vocabClause = vocabulary
+    ? `
+COMMUNITY VOCABULARY — the field's own terms of art (usage counts); phrase venue queries in THESE terms, not the operator's wording, where they fit: ${vocabulary}`
+    : '';
   return render(SCHEDULER_TPL, {
     query,
     lanes: lanes.map(laneLine).join('\n') || '(no lanes)',
     translateClause,
     researcherClause,
+    vocabClause,
   });
 };
 // ╔══ module: src/agents/researchScheduler/index.ts ═══════════════════════
@@ -1391,6 +2178,7 @@ const researchScheduler                               = {
 // (the scheduler owns discovery). Prompt order: task + which slice to read FIRST; the "answer so far"
 // handoff LAST; "reader i of N" stated once.
 
+
                                                                       
 
 const RESEARCHER_TPL = `{{! researcher — a lane reader: reads its assigned cache slice(s) from disk via code, then digests into the running answer }}
@@ -1398,12 +2186,13 @@ You are reader {{readerIndex}} of {{readerCount}} on one research lane — read 
 TOP GOAL: "{{query}}".
 TRAIL (top goal → … → this lane): {{trail}}.
 This lane: "{{keyword}}" (why it matters: {{why}}).
-DIRECTIVE — what to extract, with ranked fallbacks: {{note}}
+DIRECTIVE — what to extract, with ranked fallbacks: {{note}}{{claimSection}}
 READ NOW — your assigned slice(s), from the local cache on disk (already fetched; never re-fetch). First confirm each file exists and is non-empty (e.g. wc -c PATH); then read each char window with code, e.g. python3 -c "print(open('PATH',encoding='utf-8',errors='replace').read()[OFFSET:OFFSET+LIMIT])" — if the output is truncated, read it in sub-parts (OFFSET, OFFSET+step, … to OFFSET+LIMIT) until the whole window is consumed:
 {{reads}}
 HONEST READ — if an assigned file is MISSING, empty, or unreadable, do NOT invent its content: record it in deadEnds, leave the running answer unchanged (an honest gap, never a fabricated summary), and the engine will reopen the lane. A confident wrong summary is worse than an admitted empty read.
-Extract everything that serves the DIRECTIVE and the top goal — facts, numbers, and for any trial or study its funding source, conflicts of interest, sample size, and key limitations. You may read images to understand the content. If the content is in another language, translate your findings to English, keeping each cited source's original-language title alongside the translation.{{wallClause}}
-Return: runningAnswer (extend the prior answer with what you found, kept a coherent whole — or begin it if you are reader 1); rabbitHoles (new gap searches the content raises, {keyword, why}); nextSources (up to 5 of the content's top outbound citations/links, each {ref: exact url or DOI, why}); deadEnds (any slice that was missing/empty/garbled/walled). <<{{footer}}>>{{researcherClause}}{{priorClause}}
+Extract everything that serves the DIRECTIVE and the top goal — facts, numbers, and for any trial or study its funding source, conflicts of interest, sample size, and key limitations. You may read images to understand the content. If the content is in another language, translate your findings to English, keeping each cited source's original-language title alongside the translation.
+Extract each load-bearing fact as a claim: {claim (one sentence), value (the number/verdict if any), quote (VERBATIM from the content, ≤${CONFIG.QUOTE_MAX_CHARS} chars — the exact span that carries the fact), source (url/DOI), cachePath (the cache file you read it in), entities (authors/funder/dataset/venue when visible)}. A claim without its verbatim quote is worthless — no quote, no claim.{{attackClause}}{{wallClause}}
+Return: runningAnswer (extend the prior answer with what you found, kept a coherent whole — or begin it if you are reader 1); rabbitHoles (new gap searches the content raises, {keyword, why}); nextSources (up to 5 of the content's top outbound citations/links, each {ref: exact url or DOI, why, expect: support/attack/neutral, target: the claim id it bears on}); claims (each load-bearing fact pinned to a verbatim quote, this read's cachePath, its source, and entities when visible); newTerms (the community's terms of art this slice uses that we don't, {term, gloss}); surprise (one line, ONLY when this slice contradicts a KEY CLAIM above); deadEnds (any slice that was missing/empty/garbled/walled). <<{{footer}}>>{{researcherClause}}{{priorClause}}
 `;
 
 const readLine = (r           , i        )         =>
@@ -1434,6 +2223,8 @@ const buildResearcher = ({
   readerIndex,
   readerCount,
   priorAnswer,
+  claimDigest,
+  laneKind,
   researcherNote,
 }                ) => {
   const wallClause = `
@@ -1444,6 +2235,19 @@ If your assigned content is a paywall, stub, or too thin for the directive, extr
 ANSWER SO FAR — the running answer from the earlier readers on this lane; extend and correct it, do not restate it wholesale:
 ${priorAnswer}`
     : '';
+  // claimSection — the KEY CLAIMS digest a stance can target; omitted entirely (byte-identical to no ledger yet)
+  // when the ledger is empty, rather than padding with a placeholder line.
+  const claimSection = claimDigest
+    ? `
+KEY CLAIMS SO FAR (\`c12 claim\` — ids look like c12) — when your content SUPPORTS or ATTACKS one of these, say so via \`stance\` {target: the NUMBER from its c12 id}; a contradiction is also your Surprise note:
+${claimDigest}`
+    : '';
+  // attackClause — an ATTACK-kind lane (RabbitHole.kind, set when the brainer originates a counter-evidence
+  // search) exists to try to break a claim: its primary output is counter-evidence, never manufactured doubt.
+  const attackClause =
+    laneKind === 'attack'
+      ? " This is an ATTACK lane: your PRIMARY output is counter-evidence — claims with stance {target, kind:'attacks'} against the target claim, or an honest empty claims list when you find none; never manufacture doubt."
+      : '';
   return render(RESEARCHER_TPL, {
     readerIndex,
     readerCount,
@@ -1452,8 +2256,10 @@ ${priorAnswer}`
     keyword,
     why,
     note: note || '(no directive — extract what best serves the lane + goal)',
+    claimSection,
     reads: (reads || []).map(readLine).join('\n') || '(no slice assigned)',
     wallClause,
+    attackClause,
     footer,
     researcherClause,
     priorClause,
@@ -1492,14 +2298,44 @@ const RESEARCH         = {
             description: 'an exact url or DOI the content points to, worth fetching directly',
           },
           why: { type: 'string', description: 'one line on why following it advances the goal' },
+          expect: {
+            type: 'string',
+            enum: ['support', 'attack', 'neutral'],
+            description:
+              'whether following it is expected to SUPPORT or ATTACK `target`, or is neutral',
+          },
+          target: {
+            type: 'number',
+            description: 'id of the existing claim this source is expected to support or attack',
+          },
         },
         required: ['ref', 'why'],
       },
       description:
         "up to 5 of the content's highest-value outbound citations/links as concrete fetch targets — a later lane fetches each directly",
     },
+    claims: {
+      type: 'array',
+      items: CLAIM_ITEM_STANCE,
+      description:
+        'load-bearing facts this slice carries — each pinned to a verbatim quote; only facts the answer could rest on, never a transcript of everything read',
+    },
+    newTerms: {
+      type: 'array',
+      items: TERM_SEED,
+      description:
+        "the community's terms of art this slice uses that the digest/query does not — empty when the slice speaks our vocabulary",
+    },
+    surprise: {
+      type: 'string',
+      description:
+        'one line naming the contradiction — set ONLY when this slice contradicts one of the KEY CLAIMS in the digest',
+    },
     deadEnds: { type: 'array', items: { type: 'string' } },
   },
+  // claims/newTerms are NOT required — a reader may legitimately surface neither on a thin/off-topic
+  // slice; the engine's `|| []` guards (ingestWave, mergeVocabulary) already treat their absence as
+  // empty. This matches ReaderOut's TS optionality (types/agents.ts) — the schema no longer over-requires.
   required: ['runningAnswer'],
 };
 
@@ -1521,15 +2357,15 @@ You direct the FINALIZE phase for: "{{query}}". The research is done; below is e
 The finish runs in two parts, and you set how each starts:
 1. REFINEMENT — one refine agent per item adversarially fact-checks that group of load-bearing facts and returns them corrected and hardened. You decide the grouping. (A judge then evaluates the hardened answer and may trigger a derivation or a re-check; you do not plan that.)
 2. SYNTHESIS — writes the final report from the hardened, judged answer. You give it a focus note.
-The run's accumulated RESULT (the brainer's living memory — answer, the \`working\` derivation, evidence, gaps, tensions):
+The run's accumulated RESULT (the brainer's living memory — answer, the \`working\` derivation, keyClaimIds, gaps, tensions):
 {{resultSoFar}}
 Per-wave log:
 {{waveLog}}
 Scout landscape: {{landscape}}
 Top open rabbit-holes left unpursued:
-{{openRabbitHoles}}
+{{openRabbitHoles}}{{ledgerClause}}{{sensitivityClause}}
 Return:
-- refinement.facts[] — the load-bearing facts to harden, aggressively grouped: bundle facts that share sources or stand or fall together into ONE item (each {fact, why}); prefer a few broad groups over many atomic facts. Cover every fact that would change the answer if wrong; skip soft restatements.
+- refinement.facts[] — the load-bearing facts to harden, aggressively grouped: bundle facts that share sources or stand or fall together into ONE item (each {fact, why, claimId?}); prefer a few broad groups over many atomic facts. Cover every fact that would change the answer if wrong; skip soft restatements. Where a fact corresponds to a ledger claim, set its claimId — hardening then updates that claim's record.
 - synthesiser.focus — one note on what the report must emphasize / the shape the answer should take.{{thinkerClause}}{{FINISH}}
 `;
 
@@ -1541,6 +2377,8 @@ const buildInitiator = ({
   openRabbitHoles,
   mode,
   thinkerNote,
+  ledger,
+  sensitivity,
 }               ) => {
   const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
   // collect mode ⇒ harden the BREADTH (coverage of the landscape), not the shape of a single answer.
@@ -1548,6 +2386,22 @@ const buildInitiator = ({
     mode === 'collect'
       ? ' This run was a COLLECT inventory, not a single-answer goal — harden BREADTH: the key claims and the major sub-areas that span the landscape, and set the report focus to completeness of the catalogue rather than the shape of one answer.'
       : '';
+  // ledgerClause — the ledger-fed initiator (v3 FINALIZE): names of already-pinned claims so facts can bind
+  // to them via claimId instead of restating them.
+  const ledgerClause = ledger
+    ? `
+CLAIM LEDGER — the run's evidence (ids look like c12, clusters like clu2: c12 [status·clu2·audit] claim = value):
+${ledger}`
+    : '';
+  // sensitivityClause — SENSITIVITY RANKING (v3 FINALIZE): once a derivation has a completed rerun, prioritize
+  // hardening the claims behind the inputs that dominate the variance — a lane wasted on a low-variance input
+  // cannot move the answer.
+  const sensitivityClause = sensitivity
+    ? `
+SENSITIVITY RANKING — derivation inputs by variance share (with their backing claims):
+${sensitivity}
+Prioritize hardening the claims behind the top-variance inputs.`
+    : '';
   return render(INITIATOR_TPL, {
     query,
     resultSoFar: plain(resultSoFar),
@@ -1555,6 +2409,8 @@ const buildInitiator = ({
     landscape,
     openRabbitHoles: plain(openRabbitHoles),
     modeClause,
+    ledgerClause,
+    sensitivityClause,
     thinkerClause,
     FINISH,
   });
@@ -1588,6 +2444,11 @@ const INITIATOR         = {
               why: {
                 type: 'string',
                 description: 'why this group is load-bearing — what breaks if it is wrong',
+              },
+              claimId: {
+                type: 'number',
+                description:
+                  'ledger claim id this fact corresponds to, when one exists — hardening then updates that claim record',
               },
             },
             required: ['fact', 'why'],
@@ -1626,19 +2487,30 @@ const initiator                       = {
 
                                                        
 
-const REFINE_TPL = `{{! refine — adversarially fact-check ONE load-bearing fact and return its corrected, hardened version }}
+const REFINE_TPL = `{{! refine — adversarially fact-check ONE load-bearing fact and return its corrected, hardened version; attack-recording, not just fact-hardening }}
 Fact-check and harden this load-bearing fact for the goal "{{query}}". {{net}}
 Fact: {{fact}}
-Why it is load-bearing: {{why}}
-First verify it adversarially: hunt counter-evidence, newer information, and the real numbers — actively look for where it is false, outdated, or imprecise. Do not rubber-stamp a well-supported fact; do not manufacture doubt about one you cannot actually break. Then settle every doubt against the sources and return only the clean, corrected claim(s) — the right values, current and verified, dropping anything that does not hold. Cite sources inline.{{directiveClause}}
-Return report (markdown): the hardened claim(s) for this fact.{{WEB_ONLY}}
+Why it is load-bearing: {{why}}{{pinnedClause}}
+First verify it adversarially: hunt counter-evidence, newer information, and the real numbers — actively look for where it is false, outdated, or imprecise. Record every counter-search query you actually run, verbatim, in queriesTried — the record of the attack matters as much as its outcome. Do not rubber-stamp a well-supported fact; do not manufacture doubt about one you cannot actually break. Then settle every doubt against the sources and return only the clean, corrected claim(s) — the right values, current and verified, dropping anything that does not hold. Cite sources inline.{{directiveClause}}
+Return report (markdown: the hardened claim(s) for this fact), queriesTried (the exact counter-search queries you ran), counterFound (true only when a real counter-example/contradiction turned up — a completed search that found nothing is false, not a lie), counterNote (what the counter-evidence was, when counterFound; '' otherwise).{{WEB_ONLY}}
 `;
 
-const buildRefiner = ({ net, query, fact, why, directive }            ) => {
+const buildRefiner = ({
+  net,
+  query,
+  fact,
+  why,
+  directive,
+  claimQuote,
+  claimSource,
+}            ) => {
   const directiveClause = directive
     ? `\nA judge flagged the prior verification — re-check it: ${directive}`
     : '';
-  return render(REFINE_TPL, { net, query, fact, why, directiveClause, WEB_ONLY });
+  const pinnedClause = claimQuote
+    ? `\nTHE CLAIM AS PINNED: "${claimQuote}" — ${claimSource || ''}`
+    : '';
+  return render(REFINE_TPL, { net, query, fact, why, pinnedClause, directiveClause, WEB_ONLY });
 };
 // ╔══ module: src/agents/refiner/index.ts ═════════════════════════════════
 // REFINER — one per load-bearing fact (parallel) in the Finalize phase. Adversarially fact-checks a fact
@@ -1656,8 +2528,21 @@ const REFINE         = {
       description:
         'markdown: the clean / corrected claim(s) for this fact after adversarial fact-checking against the sources',
     },
+    queriesTried: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'the exact counter-searches you ran',
+    },
+    counterFound: {
+      type: 'boolean',
+      description: 'true only when a real counter-example/contradiction turned up',
+    },
+    counterNote: {
+      type: 'string',
+      description: 'what the counter-evidence was, when counterFound is true',
+    },
   },
-  required: ['report'],
+  required: ['report', 'queriesTried', 'counterFound'],
 };
 
 const refiner                    = {
@@ -1675,11 +2560,11 @@ const refiner                    = {
 
 const JUDGE_TPL = `{{! judge — finalize-phase terminal skeptic: judges the hardened answer before the report is written }}
 You are the JUDGE — the terminal skeptic of the FINALIZE phase for: "{{query}}". The crawl is done and its load-bearing facts were just hardened. Judge whether the answer is actually sound before the report is written.
-The answer + its evidence + \`working\` derivation (the run's living memory):
+The answer + its keyClaimIds + \`working\` derivation (the run's living memory):
 {{resultSoFar}}
 Hardened facts (each adversarially fact-checked + source-corrected by a refine pass):
 {{cleanReports}}
-What the answer must deliver: {{focus}}{{openClause}}{{modeClause}}
+What the answer must deliver: {{focus}}{{openClause}}{{modeClause}}{{ledgerClause}}{{nullAttacksClause}}{{confidenceClause}}{{stopClause}}
 Before upholding, actively try to disprove the load-bearing claim as hard as you can — \`verificationSound\` holds only when it survives every angle:
 - funding / conflict of interest — is the trial run or funded by the product's own seller?
 - independent replication — does a separate group confirm it, or does the headline rest on a single source?
@@ -1693,7 +2578,7 @@ Judge four things, each a strict boolean:
 - needsCompute — the answer rests on a quantitative derivation it does not yet hold.{{computeClause}}
 - computeSound — any derivation already present is valid (right inputs, propagated error bars, no arithmetic slip); true when none is needed.
 Uphold a sound finish: when goalMet, verificationSound, and computeSound all hold, return them true with an empty directive. Otherwise name the single most load-bearing problem and the precise fix.
-Return goalMet, verificationSound, needsCompute, computeSound, reasoning (the load-bearing reason for the verdict), directive (the exact fix or derivation to perform; '' when satisfied), reopenRabbitHoles (1-3 {keyword, why} ONLY when a real evidence/coverage gap needs more crawling, else []).{{thinkerClause}}{{FINISH}}
+Return goalMet, verificationSound, needsCompute, computeSound, reasoning (the load-bearing reason for the verdict), directive (the exact fix or derivation to perform; '' when satisfied), reopenRabbitHoles (1-3 {keyword, why} ONLY when a real evidence/coverage gap needs more crawling, else []), retractClaimIds (ledger claim ids whose evidence is discredited — retraction, fabrication, or misattribution surfaced during verification; [] otherwise).{{thinkerClause}}{{FINISH}}
 `;
 
 const buildJudge = ({
@@ -1706,6 +2591,11 @@ const buildJudge = ({
   mode,
   computeNote,
   thinkerNote,
+  ledger,
+  survivedAttacks,
+  neverChallenged,
+  computedConfidence,
+  stop,
 }           ) => {
   const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
   // collect mode ⇒ goalMet is INVENTORY COMPLETENESS + per-item verification, not whether one answer is reached.
@@ -1723,6 +2613,38 @@ MODE = collect — judge goalMet as INVENTORY COMPLETENESS: every major sub-area
 LEFTOVER OPEN RABBIT-HOLES — leads the crawl surfaced but never pursued (it stopped first). Decide whether any names a REAL gap the answer needs; if one does, set goalMet false and return it in reopenRabbitHoles to reopen the crawl on it — otherwise ignore them:
 ${plain(openRabbitHoles)}`
       : '';
+  // ledgerClause — the CLAIM LEDGER digest + the independence discipline (v3 FINALIZE): corroboration counts
+  // CLUSTERS, not distinct-sounding source names — a claim whose supports share one cluster is single-source
+  // however many names it wears.
+  const ledgerClause = ledger
+    ? `
+CLAIM LEDGER — the run's evidence (ids look like c12, clusters like clu2: c12 [status·clu2·audit] claim = value):
+${ledger}
+Corroboration counts CLUSTERS: a claim whose supports share one cluster is SINGLE-SOURCE however many names it wears — flag any "independent" label the answer asserts that the clusters do not back.`
+    : '';
+  // nullAttacksClause — challenged-and-survived vs never-challenged (v3 FINALIZE): a completed counter-search
+  // that found nothing is first-class state, distinct from a key claim nobody has put to the test yet.
+  const survivedLine =
+    survivedAttacks && survivedAttacks.length
+      ? 'CHALLENGED AND SURVIVED (counter-searched, nothing found): ' + survivedAttacks.join('; ')
+      : '';
+  const neverLine =
+    neverChallenged && neverChallenged.length
+      ? 'NEVER CHALLENGED key claims: ' + neverChallenged.join('; ')
+      : '';
+  const nullAttacksClause =
+    survivedLine || neverLine ? '\n' + [survivedLine, neverLine].filter(Boolean).join('\n') : '';
+  // confidenceClause — the computed-confidence, lower-only discipline (v3 FINALIZE).
+  const confidenceClause = computedConfidence
+    ? `
+Machinery-computed confidence from evidence topology: ${computedConfidence} — weigh it when judging \`verificationSound\`; you do not set confidence yourself (only the synthesiser does, and it may only lower this value).`
+    : '';
+  // stopClause — STOP RECONCILE (v3 FINALIZE, run-forensics fix): the crawl's own final word, so a directive
+  // to keep digging is never silently converted into a shipped caveat.
+  const stopClause = stop
+    ? `
+THE CRAWL'S LAST WORD: stopped with done=${stop.done}, reason="${stop.reason}". If that reason names remaining work, either return reopenRabbitHoles for it or explicitly justify the override in your reasoning — never silently convert remaining work into a caveat.`
+    : '';
   return render(JUDGE_TPL, {
     query,
     resultSoFar: plain(resultSoFar),
@@ -1731,6 +2653,10 @@ ${plain(openRabbitHoles)}`
     openClause,
     modeClause,
     computeClause,
+    ledgerClause,
+    nullAttacksClause,
+    confidenceClause,
+    stopClause,
     thinkerClause,
     FINISH,
   });
@@ -1782,6 +2708,12 @@ const JUDGE         = {
       description:
         '1-3 concrete gap searches ONLY when a real evidence/coverage gap needs more crawling (NONE already pursued); empty otherwise',
     },
+    retractClaimIds: {
+      type: 'array',
+      items: { type: 'number' },
+      description:
+        'ledger claim ids whose evidence is discredited (retraction/fabrication/misattribution) — the engine retracts them and recomputes everything downstream',
+    },
   },
   required: ['goalMet', 'verificationSound', 'needsCompute', 'computeSound', 'reasoning'],
 };
@@ -1801,17 +2733,17 @@ const judge                   = {
 
 const SYNTHESISER_TPL = `{{! synthesiser — writes the final multi-section cited report }}
 Write the final research report (mode={{mode}}) for: "{{query}}".{{focusClause}}{{thinkerClause}}
-Work from: the run's accumulated RESULT (the brainer's living memory — answer, working derivation, evidence, resolved, open gaps, tensions), the hardened facts (each adversarially fact-checked + source-corrected), not raw findings.
+Work from: the run's accumulated RESULT (the brainer's living memory — answer, working derivation, keyClaimIds, resolved, open gaps, tensions), the hardened facts (each adversarially fact-checked + source-corrected), not raw findings.
 Lean on the hardened facts as the source of truth: drop anything they leave unsupported and use the corrected value wherever they revised one.{{computeMention}} Cite sources inline where they matter.
 Scout landscape: {{landscape}}
-Run result so far (the answer as it ended + its evidence + the \`working\` derivation):
+Run result so far (the answer as it ended + its keyClaimIds + the \`working\` derivation):
 {{resultSoFar}}
 Per-wave log (what each wave pursued + where the answer stood — for the §2 narrative):
 {{waveLog}}
 Hardened facts (the corrected claims):
 {{cleanReports}}
 Top remaining open rabbit-holes (for Open questions):
-{{openRabbitHoles}}
+{{openRabbitHoles}}{{ledgerClause}}{{nullAttacksClause}}{{confidenceClause}}
 Write \`report\` as markdown with exactly these sections in order: (1) Prompt — the goal; (2) Research waves — per wave: what was pursued and how the answer sharpened (from the per-wave log); (3) Scout landscape; (4) Findings — the synthesized answer, {{computeLeading}}weaving each hardened fact in with its corrected value; (5) Assumptions — the working assumptions the answer leans on (from resultSoFar.assumptions), each with its basis, flagging any that is load-bearing but unconfirmed; (6) Verdict + overall confidence; (7) Plan — concrete operator actions; (8) Open questions. Also return verdict (1-3 sentences), confidence, plan (array of action strings), openQuestions (array).{{FINISH}}
 `;
 
@@ -1826,6 +2758,9 @@ const buildSynthesiser = ({
   openRabbitHoles,
   compute,
   thinkerNote,
+  ledger,
+  nullAttacksSummary,
+  computedConfidence,
 }                 ) => {
   // the brain folds any finalize derivation into resultSoFar.working — present that as the quantitative result.
   // Key this on CONFIG.compute, NOT merely on a non-empty `working`: with compute OFF a derivation must NEVER be
@@ -1844,6 +2779,24 @@ Emphasis from the finalize director: ${focus}`
   const computeLeading = hasCompute
     ? 'LEADING with the computed result + its error bars from `working` and showing the derivation, then '
     : '';
+  // ledgerClause — cite the ledger inline (v3 FINALIZE): every [cN] the report writes must be a REAL id from
+  // this digest; independence is labeled ONLY from cluster counts, never from how many distinctly-named
+  // sources happen to appear.
+  const ledgerClause = ledger
+    ? `
+CLAIM LEDGER (ids look like c12, clusters like clu2: c12 [status·clu2·audit] claim = value):
+${ledger}
+Cite ledger claims inline as [c12] wherever a load-bearing fact appears — every [c12]-style marker must be a real ledger id from the digest above (same c12 notation); label independence ONLY from cluster counts, never from distinct-sounding source names.`
+    : '';
+  const nullAttacksClause =
+    nullAttacksSummary && nullAttacksSummary.length
+      ? `
+CHALLENGED AND SURVIVED (counter-searched, nothing found): ${plain(nullAttacksSummary)}`
+      : '';
+  const confidenceClause = computedConfidence
+    ? `
+Machinery-computed confidence: ${computedConfidence} — your returned confidence may be lower with a stated reason, never higher.`
+    : '';
   return render(SYNTHESISER_TPL, {
     mode,
     query,
@@ -1855,6 +2808,9 @@ Emphasis from the finalize director: ${focus}`
     waveLog: plain(waveLog),
     cleanReports: plain(cleanReports),
     openRabbitHoles: plain(openRabbitHoles),
+    ledgerClause,
+    nullAttacksClause,
+    confidenceClause,
     computeLeading,
     FINISH,
   });
@@ -1904,6 +2860,7 @@ Walk it phase by phase — scout → prospector → each research wave → final
 Prospector→researcher utilization (run this check): the prospector named these venues:
 {{highValueSources}}
 Each lane in laneRecords carries the \`assignedVenues\` the brainer gave it; from that lane's summary + rabbitHoles, judge whether the researcher actually drew on those venues. Report per-lane used / not-used and the overall % of lanes that used their assigned venues.{{focusClause}}
+v3 ledger machinery to sanity-check: claims are quote-pinned + audited by a claimAuditor (dead auditor ⇒ claims stuck pending), clustered by a lineageClerk (bad clustering ⇒ wrong settled/tentative), derivations rerun by a rerunner, checkpoints by a scribe — all degrade to null. Check metrics.claimsTotal / nullAttacksTotal / citationsBogus / chao for anomalies (e.g. all claims pending, zero nullAttacks on a contested topic, bogus citations stripped).
 Metrics:
 {{metrics}}
 Lane records (wave, keyword, assignedVenues, summary, rabbitHoles):
@@ -1964,6 +2921,211 @@ const debugAnalyst                          = {
   schema: DIAG,
   buildPrompt: buildDebugAnalyst,
 };
+// ╔══ module: src/agents/claimAuditor/prompts.ts ══════════════════════════
+// CLAIM AUDITOR prompts — the batched mechanical quote-audit template + its assembly function. Template
+// strings are module-level consts; buildClaimAuditor only assembles/substitutes the items list.
+
+
+                                                           
+
+const CLAIM_AUDIT_TPL = `{{! claimAuditor — batched mechanical quote audit: does each claim's quote exist verbatim in its cache file, and does it carry the claim on its own? }}
+You are the CLAIM AUDITOR. For each item below, mechanically verify its quote against the cache file on disk — you are grepping for a pin, not judging truth.
+Items (\`#id claim | quote | cachePath\`):
+{{items}}
+For EACH item, use python3 for a robust substring search: read the file at cachePath with errors='replace'; collapse runs of whitespace to a single space in BOTH the file text and the quote; then test whether the normalized quote is a substring of the normalized file text. If the file cannot be read for any reason (missing, permission error, anything) NEVER fabricate a verdict — that item's verdict is 'fail' with note "file unreadable".
+When the quote IS found verbatim, also judge whether the quoted text, on its own, actually carries the claim (not merely nearby context) — verdict 'pass' only when both hold; otherwise 'fail' with a one-line note.
+Return checks: one {id, verdict, note?} per item — verdict is 'pass' or 'fail'.{{FINISH}}
+`;
+
+const buildClaimAuditor = ({ items }                ) =>
+  render(CLAIM_AUDIT_TPL, { items: plain(items), FINISH });
+// ╔══ module: src/agents/claimAuditor/index.ts ════════════════════════════
+// CLAIM AUDITOR — batched per wave: for each new claim with a cachePath, mechanically verify (Bash/python3
+// grep) that its verbatim quote exists in the cache file AND carries the claim on its own. Tier: haiku (a
+// bounded, mechanical per-batch job). Effort: medium. Dies → its claims stay 'pending' (unpinned downstream).
+
+
+                                                                          
+
+const CLAIM_AUDIT         = {
+  type: 'object',
+  properties: {
+    checks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'the claim id this verdict is for' },
+          verdict: { type: 'string', enum: ['pass', 'fail'] },
+          note: {
+            type: 'string',
+            description: 'one line, e.g. "file unreadable" or why the audit failed',
+          },
+        },
+        required: ['id', 'verdict'],
+      },
+      description: 'one verdict per audited claim',
+    },
+  },
+  required: ['checks'],
+};
+
+const claimAuditor                        = {
+  tier: CONFIG.TIER.claimAuditor,
+  effort: CONFIG.EFFORT.claimAuditor,
+  schema: CLAIM_AUDIT,
+  buildPrompt: buildClaimAuditor,
+};
+// ╔══ module: src/agents/lineageClerk/prompts.ts ══════════════════════════
+// LINEAGE CLERK prompts — the batched entity-canonicalization template + its assembly function. Template
+// strings are module-level consts; buildLineageClerk only assembles/substitutes the items + known keys.
+// No FINISH here: the clerk carries no tools (a plain subagent) — there is no tool-use rabbit hole to guard against.
+
+                                                             
+
+const LINEAGE_TPL = `{{! lineageClerk — canonicalize provenance entities so JS can union-find independence clusters }}
+You are the LINEAGE CLERK. Canonicalize each new claim's provenance entities into stable keys so independence clusters can be computed mechanically downstream — this IS the whole job: the SAME real-world entity spelled differently must map to the SAME key ("Pfizer Inc." and "Pfizer" both → funder:pfizer).
+New claims (\`#id source | entities\`):
+{{items}}
+Known canonical keys already in use this run (reuse one of these EXACTLY whenever a claim's entity is the same real-world thing, however it is spelled):
+{{knownKeys}}
+For each claim return its canonical keys: lowercase, kebab-ish, prefixed by entity type — author:j-smith, funder:pfizer, dataset:gaia-dr3, venue:apj. Only emit a key for an entity actually present on that claim; skip absent/unknown entities entirely (never invent one to fill a slot).
+Return links: one {id, keys} per claim.
+`;
+
+const buildLineageClerk = ({ items, knownKeys }                  ) =>
+  render(LINEAGE_TPL, { items: plain(items), knownKeys: plain(knownKeys) });
+// ╔══ module: src/agents/lineageClerk/index.ts ════════════════════════════
+// LINEAGE CLERK — batched per wave: canonicalizes new claims' provenance entities against the known
+// canonical-key list so JS can union-find independence clusters. Tier: haiku (bounded, mechanical
+// canonicalization — no tools, a plain subagent). Effort: medium. Dies → deterministic JS fallback
+// (utils.lineageKeyOf clusters by norm(funder || venue || source-domain); unresolvable → cluster 0).
+
+
+                                                                            
+
+const LINEAGE         = {
+  type: 'object',
+  properties: {
+    links: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'the claim id these canonical keys belong to' },
+          keys: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'canonical entity keys present on this claim, e.g. "funder:pfizer"',
+          },
+        },
+        required: ['id', 'keys'],
+      },
+      description: 'one canonical-key set per claim',
+    },
+  },
+  required: ['links'],
+};
+
+const lineageClerk                          = {
+  tier: CONFIG.TIER.lineageClerk,
+  effort: CONFIG.EFFORT.lineageClerk,
+  schema: LINEAGE,
+  buildPrompt: buildLineageClerk,
+};
+// ╔══ module: src/agents/rerunner/prompts.ts ══════════════════════════════
+// RERUNNER prompts — the derivation re-execution template + its assembly function. Template strings are
+// module-level consts; buildRerunner only assembles/substitutes the code + current inputs.
+
+
+                                                         
+
+const RERUN_TPL = `{{! rerunner — re-executes the stored derivation artifact, verbatim, with the run's current inputs }}
+You are the RERUNNER. A derivation was authored once as a pure, seeded Python script; re-execute it EXACTLY as given with the current inputs — the script is canonical. NEVER repair or rewrite it, even to fix an obvious bug: a broken artifact is the brainer's problem, not yours.
+The script (reads ONE JSON argument, prints ONE JSON object {quantiles, sensitivity}):
+\`\`\`python
+{{code}}
+\`\`\`
+Current inputs — the single JSON argument to pass, verbatim:
+{{inputsJson}}
+Steps: write the script verbatim to a temp file via a Bash heredoc; run \`python3 FILE 'INPUTS'\` (FILE = the temp path, INPUTS = the JSON shown above, unescaped/verbatim); return exactly what it printed.
+If it errors for any reason, return ok:false with the error message in note — do not repair, do not rewrite, do not retry with a fix of your own.
+Return ok, quantiles, sensitivity, note.{{FINISH}}
+`;
+
+const buildRerunner = ({ code, inputsJson }              ) =>
+  render(RERUN_TPL, { code, inputsJson, FINISH });
+// ╔══ module: src/agents/rerunner/index.ts ════════════════════════════════
+// RERUNNER — re-executes the stored derivation artifact (a pure, seeded Python script) with the run's
+// current inputs. Tier: haiku (bounded, mechanical re-execution — never repairs the artifact). Effort: low.
+// Dies or errors → lastRun stays stale; the caller keeps the last good run and tells the brainer it is stale.
+
+
+                                                                        
+
+const RERUN         = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    quantiles: {
+      type: 'object',
+      additionalProperties: { type: 'number' },
+      description: "the script's printed quantiles, verbatim",
+    },
+    sensitivity: {
+      type: 'object',
+      additionalProperties: { type: 'number' },
+      description: "the script's printed variance-share sensitivity, verbatim",
+    },
+    note: { type: 'string', description: 'the error message when ok is false' },
+  },
+  required: ['ok'],
+};
+
+const rerunner                      = {
+  tier: CONFIG.TIER.rerunner,
+  effort: CONFIG.EFFORT.rerunner,
+  schema: RERUN,
+  buildPrompt: buildRerunner,
+};
+// ╔══ module: src/agents/scribe/prompts.ts ════════════════════════════════
+// SCRIBE prompts — the crash-safety checkpoint template + its assembly function. Template strings are
+// module-level consts; buildScribe only assembles/substitutes the dir + content.
+
+
+                                                       
+
+const SCRIBE_TPL = `{{! scribe — per-wave crash-safety checkpoint: write the given content verbatim to _checkpoint.json }}
+You are the SCRIBE. Write a crash-safety checkpoint — the content below arrives ready to write exactly as given; never clip, reformat, or otherwise alter it.
+Directory: {{dir}}
+Content — write VERBATIM:
+{{content}}
+Steps: mkdir -p {{dir}}; write the content above VERBATIM to {{dir}}/_checkpoint.json via a Bash heredoc with a QUOTED delimiter (e.g. <<'EOF', so shell metacharacters inside the content are never expanded) or python3 -c — never truncate it; then verify the write with \`wc -c\` on the file.
+Return ok:true once verified.{{FINISH}}
+`;
+
+const buildScribe = ({ content, dir }            ) =>
+  render(SCRIBE_TPL, { content, dir, FINISH });
+// ╔══ module: src/agents/scribe/index.ts ══════════════════════════════════
+// SCRIBE — per-wave crash-safety checkpoint. Writes the given content VERBATIM to dir/_checkpoint.json via
+// Bash; runs INSIDE the same parallel() as the lane readers (zero extra wall-clock cost). Tier: haiku (a
+// bounded mechanical file write). Effort: low. Dies → no checkpoint that wave (the last one on disk stands).
+
+
+                                                                      
+
+const SCRIBE         = {
+  type: 'object',
+  properties: { ok: { type: 'boolean' } },
+  required: ['ok'],
+};
+
+const scribe                    = {
+  tier: CONFIG.TIER.scribe,
+  effort: CONFIG.EFFORT.scribe,
+  schema: SCRIBE,
+  buildPrompt: buildScribe,
+};
 // ╔══ module: src/store.ts ════════════════════════════════════════════════
 
 
@@ -1993,7 +3155,9 @@ const debugAnalyst                          = {
   
 
 // light near-duplicate check — Jaccard token-set overlap ≥ CONFIG.NEAR_DUP counts as "the same lead, reworded"
-// (catches re-orderings the exact norm() match misses); the threshold is kept high so distinct leads are never merged.
+// (catches re-orderings the exact norm() match misses); the threshold is kept high so distinct leads are never
+// merged. Exported: the v3 chao1 coverage estimate (engine.ts) reuses it to group near-duplicate claims —
+// ONE Jaccard near-dup definition for the whole engine, never a second copy.
 const tokenSet = (s        )              => new Set(norm(s).split(' ').filter(Boolean));
 const nearDup = (a        , b        )          => {
   const A = tokenSet(a);
@@ -2009,7 +3173,7 @@ const nearDup = (a        , b        )          => {
 // (never re-open a pursued lane or re-fetch a pursued citation). New entries get a fresh id; scoreHistory seeded only when scored.
 function addRabbitHole(
   state            ,
-  { keyword, why, path, score, wave, ref }                   ,
+  { keyword, why, path, score, wave, ref, kind }                   ,
 )                    {
   const k = norm(keyword);
   const r = ref ? normRef(ref) : '';
@@ -2034,6 +3198,7 @@ function addRabbitHole(
     path: path || [],
   };
   if (ref) rh.ref = ref;
+  if (kind) rh.kind = kind; // the lead's origin channel — keys the yieldCalib table
   state.rabbitHoles.push(rh);
   return rh;
 }
@@ -2059,7 +3224,14 @@ function applyDeltas(state            , coord            , wave        )       {
     }
   }
   for (const a of coord.add || [])
-    addRabbitHole(state, { keyword: a.keyword, why: a.why, path: [], score: a.score, wave });
+    addRabbitHole(state, {
+      keyword: a.keyword,
+      why: a.why,
+      path: [],
+      score: a.score,
+      wave,
+      kind: a.kind,
+    });
 }
 
 // resolve the brainer's `lookupNext` into open-store entries to pursue NOW: id → existing lead; keyword → originate (or find). Drop any
@@ -2082,6 +3254,7 @@ function resolveLookupNext(
         score: item.score,
         wave,
         ref: item.ref,
+        kind: item.kind, // origin channel rides along when the brainer originates a lane
       });
     if (!rh || state.pursuedKeys.has(norm(rh.keyword))) continue;
     if (item.sources) rh.sources = item.sources;
@@ -2089,7 +3262,19 @@ function resolveLookupNext(
     if (item.ref && !rh.ref) rh.ref = item.ref;
     if (!picks.some((p) => p.id === rh.id)) picks.push(rh);
   }
-  return picks.sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, laneCount);
+  // v3 CALIBRATION — the sort key is the score weighted by its kind's predicted-vs-realized yield (selection
+  // only; the stored score itself is never touched). kind = the stored lead's own kind (an id-resolved pick
+  // already carries it; an originated one got it from addRabbitHole's `kind: item.kind` above); an unseen
+  // kind (or none) is neutral (calibFactor defaults to 1) — degrades to the old plain-score sort untouched.
+  const weighted = (p            )         =>
+    (p.score ?? 0) *
+    calibFactor(
+      state.yieldCalib ?? {},
+      p.kind ?? 'origin',
+      CONFIG.CALIB_CLAMP_LO,
+      CONFIG.CALIB_CLAMP_HI,
+    );
+  return picks.sort((a, b) => weighted(b) - weighted(a)).slice(0, laneCount);
 }
 
 // REOPEN — the inverse of pursue (validator-driven): move a pursued lead back into the open store so the next
@@ -2122,10 +3307,14 @@ function pursue(state            , picks              )       {
 }
 // ╔══ module: src/brainerState.ts ═════════════════════════════════════════
              
+            
+        
               
         
+             
                
            
+             
              
                 
             
@@ -2134,9 +3323,11 @@ function pursue(state            , picks              )       {
            
            
              
+       
                     
         
                
+             
                           
 
 // the speculative GATE's reusable outputs — runGate hardens these once; finalizeWinner reuses them for the report.
@@ -2210,9 +3401,25 @@ class BrainerState {
   pursuedList          ;
   pursuedArchive              ;
 
+  // ── claim ledger (own — the v3 belief substrate) ──
+  claims         ; // append-only quote-pinned facts; JS assigns ids + computes cluster/status
+  nextClaimId        ; // the ledger's own auto-counter (mirrors nextId on the rabbit-hole store)
+  nullAttacks              ; // counter-searches that found nothing (challenged-and-survived state)
+  vocabulary        ; // community terms of art collected from the pages
+  derivation                   ; // the stored seeded Python artifact + its latest rerun (null until authored)
+  derivationDirty         ; // a fresh derivation delta landed this wave — the next ingest forces a rerun regardless of which claims changed
+  derivationStale         ; // the last rerun attempt failed — lastRun is kept but the brainer is told it is stale; cleared on the next successful rerun
+  lastChangedClaimIds             ; // claim ids added/status-changed THIS wave (ingestWave) — drives the "did a derivation input change" rerun test
+  yieldCalib            ; // per-kind predicted-vs-realized lead-yield EMAs
+  clusterOf                        ; // lineage KEY → cluster id — the persistent union-find; its OWN keys ARE the "known keys" the lineageClerk is told about (one canonical structure, no second list)
+  nextClusterId        ; // next fresh cluster id to mint; 0 is reserved for the shared "unknown lineage" cluster
+  chao                  ; // collect-mode coverage estimate over the claim ledger; null until the first collect wave computes it
+  venueStats                                                       ; // per-venue-source lane assignment/yield tally — flags a 0-yield venue to the brainer
+
   // ── crawl accumulators (own) ──
   resultSoFar                    ; // this brainer's living memory
   topScores          ; // its own decay signal (plateau detection)
+  topScoresBase        ; // where THIS brainer's own waves start in topScores (a child slices its plateau window from its spawn point)
   waveLog                ;
   resultLog                  ;
   validatorLog                     ;
@@ -2229,6 +3436,7 @@ class BrainerState {
   rabbitHolesOut                 ;
   synthesiserOut                  ;
   reportOk         ;
+  citationsBogus        ; // synthesiser citation lint: [cN] markers stripped because the id was unknown/retracted
 
   constructor(g            , id                 ) {
     this.name = id.name;
@@ -2250,9 +3458,24 @@ class BrainerState {
     this.pursuedRefs = new Set();
     this.pursuedList = [];
     this.pursuedArchive = [];
+    // own claim ledger
+    this.claims = [];
+    this.nextClaimId = 1;
+    this.nullAttacks = [];
+    this.vocabulary = [];
+    this.derivation = null;
+    this.derivationDirty = false;
+    this.derivationStale = false;
+    this.lastChangedClaimIds = new Set();
+    this.yieldCalib = {};
+    this.clusterOf = {};
+    this.nextClusterId = 1;
+    this.chao = null;
+    this.venueStats = {};
     // own accumulators
     this.resultSoFar = null;
     this.topScores = [];
+    this.topScoresBase = 0;
     this.waveLog = [];
     this.resultLog = [];
     this.validatorLog = [];
@@ -2268,6 +3491,7 @@ class BrainerState {
     this.rabbitHolesOut = [];
     this.synthesiserOut = null;
     this.reportOk = false;
+    this.citationsBogus = 0;
   }
 
   get isRoot()          {
@@ -2299,6 +3523,24 @@ function spawnBrainer(
   child.pursuedRefs = new Set(parent.pursuedRefs);
   child.pursuedList = parent.pursuedList.slice();
   child.topScores = parent.topScores.slice();
+  // the claim ledger branches with the brainer — JSON-clone the plain-data stores; yieldCalib entries are
+  // never mutated in place (updateCalib is pure), so a shallow copy into a fresh object suffices. clusterOf
+  // is plain data too (string → number), so a shallow copy is rebuild-safe — no shared reference back to
+  // the parent's union-find.
+  child.claims = JSON.parse(JSON.stringify(parent.claims));
+  child.nextClaimId = parent.nextClaimId;
+  child.nullAttacks = JSON.parse(JSON.stringify(parent.nullAttacks));
+  child.vocabulary = JSON.parse(JSON.stringify(parent.vocabulary));
+  child.derivation = parent.derivation ? JSON.parse(JSON.stringify(parent.derivation)) : null;
+  child.derivationDirty = parent.derivationDirty;
+  child.derivationStale = parent.derivationStale;
+  child.lastChangedClaimIds = new Set(parent.lastChangedClaimIds);
+  child.yieldCalib = { ...parent.yieldCalib };
+  child.clusterOf = { ...parent.clusterOf };
+  child.nextClusterId = parent.nextClusterId;
+  child.chao = parent.chao ? { ...parent.chao } : null;
+  child.venueStats = JSON.parse(JSON.stringify(parent.venueStats));
+  child.topScoresBase = parent.topScores.length; // the child's plateau window starts at ITS spawn point
   // the parent AUTHORS the child's resultSoFar — a deep clone of its own living memory, the seed the mandate aims.
   child.resultSoFar = parent.resultSoFar ? JSON.parse(JSON.stringify(parent.resultSoFar)) : null;
   child.wave = parent.wave;
@@ -2376,37 +3618,206 @@ const retryAgent = async    (prompt        , opts           )                   
 
 
 
-                                                      
-                                                               
 
-// Scout (wave-0 seed): broad WebSearch → fetch sources with the rabbit-hole footer → seed rabbit-holes.
-// Sets rr.scout + rr.scoutRabbitHoles and returns the seed leads (the engine seeds the open store from them).
+                                                      
+             
+            
+             
+       
+             
+           
+                  
+                   
+           
+           
+                              
+
+// FALLBACK A — the planner died (or returned no usable angle): degrade to v2's single-scout behavior, one
+// probe on the naive query itself. Exported for direct unit coverage.
+const FALLBACK_ANGLE             = {
+  name: 'direct',
+  searchQuery: CONFIG.query,
+  why: 'planner died — v2 single-scout fallback',
+  lens: '',
+};
+
+// a planner angle is usable only when it carries the fields a probe actually needs.
+const isUsableAngle = (a         )                  =>
+  !!a &&
+  typeof (a              ).name === 'string' &&
+  !!(a              ).name &&
+  typeof (a              ).searchQuery === 'string' &&
+  !!(a              ).searchQuery;
+
+// FALLBACK B — the merger died: a pure, deterministic JS merge of every surviving probe's output. Exported
+// for direct unit coverage. url dedup via normRef (survivor order, first occurrence wins), capped at
+// SCOUT_PAGES_CAP; claims/newTerms deduped by norm() of their quote/term; deadEnds is a plain union.
+function mechanicalMerge(survivors                                        )           {
+  const landscape = survivors
+    .map(({ angle, out }) => '«' + angle.name + '»: ' + out.landscape)
+    .join('\n');
+  const seenUrls = new Set        ();
+  const pages         = [];
+  for (const { out } of survivors)
+    for (const p of out.pages || [])
+      if (p && p.url && !seenUrls.has(normRef(p.url))) {
+        seenUrls.add(normRef(p.url));
+        pages.push(p);
+      }
+  const seenQuotes = new Set        ();
+  const claims              = [];
+  for (const { out } of survivors)
+    for (const c of out.claims || [])
+      if (c && !seenQuotes.has(norm(c.quote))) {
+        seenQuotes.add(norm(c.quote));
+        claims.push(c);
+      }
+  const seenRefs = new Set        ();
+  const nextSources               = [];
+  for (const { out } of survivors)
+    for (const s of out.nextSources || [])
+      if (s && s.ref && !seenRefs.has(normRef(s.ref))) {
+        seenRefs.add(normRef(s.ref));
+        nextSources.push(s);
+      }
+  const seenTerms = new Set        ();
+  const newTerms             = [];
+  for (const { out } of survivors)
+    for (const t of out.newTerms || [])
+      if (t && !seenTerms.has(norm(t.term))) {
+        seenTerms.add(norm(t.term));
+        newTerms.push(t);
+      }
+  const deadEnds = survivors.flatMap(({ out }) => out.deadEnds || []);
+  return {
+    landscape,
+    pages: pages.slice(0, CONFIG.SCOUT_PAGES_CAP),
+    claims,
+    nextSources,
+    newTerms,
+    deadEnds,
+  };
+}
+
+// SCOUT SWARM (wave-0 seed): scoutPlanner decomposes the query + proposes 3..SCOUT_PROBES search angles →
+// a `scout` probe sweeps each angle in parallel (broad WebSearch → fetch with the rabbit-hole footer,
+// scoped to its angle) → scoutMerger folds every surviving probe into the FINAL ScoutOut, naming the
+// tensions between angles. Each stage degrades to a named JS fallback; only a total probe wipeout is
+// fatal (unchanged from v2's single-scout semantics). Sets rr.scout + rr.scoutRabbitHoles and returns the
+// seed leads (the engine seeds the open store from them) — signature/return/assignment unchanged from v2.
 async function runScout(rr                )                      {
   phase(CONFIG.PHASE.scout);
-  log('· scout DISPATCH · ' + scout.tier);
-  const scoutOut = await retryAgent          (
-    scout.buildPrompt({
+
+  // ── stage 1: scoutPlanner ──
+  log('· scout planner DISPATCH · ' + scoutPlanner.tier);
+  const planner = await retryAgent                 (
+    scoutPlanner.buildPrompt({
       query: CONFIG.query,
+      mode: CONFIG.mode,
       net: CONFIG.NET,
-      footer: CONFIG.FOOTER,
       researcherNote: CONFIG.RESEARCHER_NOTE,
     }),
     {
-      label: 'scout',
+      label: 'scout-planner',
       phase: CONFIG.PHASE.scout,
-      model: scout.tier,
-      effort: scout.effort,
+      model: scoutPlanner.tier,
+      effort: scoutPlanner.effort,
       agentType: CONFIG.GENERAL_PURPOSE,
-      schema: scout.schema,
+      schema: scoutPlanner.schema,
     },
   );
-  if (!scoutOut) {
+  const usableAngles =
+    planner && Array.isArray(planner.angles) ? planner.angles.filter(isUsableAngle) : [];
+  const plannerFellBack = !planner || !usableAngles.length;
+  const angles               = plannerFellBack
+    ? [FALLBACK_ANGLE]
+    : usableAngles.slice(0, CONFIG.SCOUT_PROBES);
+  const decomposition = (planner && planner.decomposition) || '';
+  if (plannerFellBack) log('  ⚠ scout planner died → v2 single-scout fallback (angle: direct)');
+  log('· scout planner · ' + angles.length + ' angles');
+
+  // ── stage 2: the probe swarm — one `scout` call per angle, in parallel ──
+  const probeResults = await parallel(
+    angles.map((angle, i) => async () => {
+      const out = await retryAgent          (
+        scout.buildPrompt({
+          query: CONFIG.query,
+          net: CONFIG.NET,
+          footer: CONFIG.FOOTER,
+          angleName: angle.name,
+          angleWhy: angle.why,
+          angleLens: angle.lens || '',
+          searchQuery: angle.searchQuery,
+          index: i + 1,
+          total: angles.length,
+          researcherNote: CONFIG.RESEARCHER_NOTE,
+        }),
+        {
+          label: 'scout-probe:' + lab(angle.name),
+          phase: CONFIG.PHASE.scout,
+          model: scout.tier,
+          effort: scout.effort,
+          agentType: CONFIG.GENERAL_PURPOSE,
+          schema: scout.schema,
+        },
+      );
+      return { angle, out };
+    }),
+  );
+  const survivors = probeResults.filter((r)                                            => !!r.out);
+  survivors.forEach(({ angle, out }) =>
+    log('· scout probe «' + angle.name + '» RETURN · pages=' + out.pages.length),
+  );
+  probeResults
+    .filter((r) => !r.out)
+    .forEach(({ angle }) => log('  ✗ scout probe «' + angle.name + '» DIED'));
+  if (!survivors.length) {
     log('✗ scout DIED');
     throw new Error('scout died');
   }
+
+  // ── stage 3: scoutMerger ──
+  const mergerProbes                     = survivors.map(({ angle, out }) => ({
+    name: angle.name,
+    landscape: out.landscape,
+    pages: out.pages || [],
+    claims: out.claims || [],
+    nextSources: out.nextSources || [],
+    newTerms: out.newTerms || [],
+    deadEnds: out.deadEnds || [],
+  }));
+  const merged = await retryAgent          (
+    scoutMerger.buildPrompt({ query: CONFIG.query, decomposition, probes: mergerProbes }),
+    {
+      label: 'scout-merger',
+      phase: CONFIG.PHASE.scout,
+      model: scoutMerger.tier,
+      effort: scoutMerger.effort,
+      schema: scoutMerger.schema,
+    },
+  );
+  const mergerFellBack = !merged;
+  const scoutOut           = merged || mechanicalMerge(survivors);
+  const fallbackLabel =
+    [plannerFellBack && 'planner', mergerFellBack && 'merger'].filter(Boolean).join('+') || 'none';
+  log(
+    '· scout merged · pages=' +
+      scoutOut.pages.length +
+      ' · claims=' +
+      (scoutOut.claims || []).length +
+      ' (fallback: ' +
+      fallbackLabel +
+      ')',
+  );
+
   rr.scout = scoutOut;
   const scoutRabbitHoles             = scoutOut.pages.flatMap((p) =>
-    (p.rabbitHoles || []).map((l) => ({ keyword: l.keyword, why: l.why, path: []             })),
+    (p.rabbitHoles || []).map((l) => ({
+      keyword: l.keyword,
+      why: l.why,
+      path: []            ,
+      kind: 'seed'         ,
+    })),
   ); // PATH: scout rabbit-holes descend directly from the goal
   rr.scoutRabbitHoles = scoutRabbitHoles;
   log(
@@ -2414,6 +3825,10 @@ async function runScout(rr                )                      {
       scoutOut.pages.length +
       ' · rabbit-holes=' +
       scoutRabbitHoles.length +
+      ' · claims=' +
+      (scoutOut.claims || []).length +
+      ' · newTerms=' +
+      (scoutOut.newTerms || []).length +
       ' · deadEnds=' +
       (scoutOut.deadEnds || []).length,
   );
@@ -2507,6 +3922,18 @@ async function runBrainer(
   ctx                                             ,
 )                        {
   const open = bs.rabbitHoles.map(openLine);
+  // v3 STEERING — the ledger digest + calibration/sensitivity/coverage state, computed here (pure reads off
+  // bs) and handed to buildBrainer, which decides per-clause whether there is anything to say.
+  const ledger = ledgerLines(bs, CONFIG.BRAINER_LEDGER_CAP);
+  const derivation =
+    bs.derivation && bs.derivation.lastRun
+      ? {
+          quantiles: bs.derivation.lastRun.quantiles,
+          sensitivity: bs.derivation.lastRun.sensitivity,
+          inputs: bs.derivation.inputs,
+          stale: !!bs.derivationStale,
+        }
+      : undefined;
   return retryAgent       (
     brainer.buildPrompt({
       wave,
@@ -2518,16 +3945,19 @@ async function runBrainer(
       findings,
       topScores: bs.topScores,
       resultSoFar: bs.resultSoFar,
-      assignSources: CONFIG.parallelSourcesPerLaneResearchAgent === 'auto',
       stop: CONFIG.STOP,
       mode: CONFIG.mode,
-      venues: bs.highValueSources,
+      venues: venuesWithYieldWarn(bs.highValueSources, bs.venueStats),
       languageGuidance: bs.languageGuidance,
       lastValidatorMissing: bs.lastValidatorMissing,
       compute: CONFIG.compute,
       computeNote: CONFIG.COMPUTE_NOTE,
       thinkerNote: CONFIG.THINKER_NOTE,
       researcherNote: CONFIG.RESEARCHER_NOTE,
+      ledger,
+      calib: bs.yieldCalib,
+      derivation,
+      chao: bs.chao,
       // brainer-tree context — identity off the brainer, per-wave permissions off ctx (both inert in single-brainer runs)
       isChild: !bs.isRoot,
       parentName: bs.parentName || undefined,
@@ -2635,6 +4065,7 @@ async function runScheduler(
         ref: p.ref,
       })),
       researcherNote: CONFIG.RESEARCHER_NOTE,
+      vocabulary: vocabSummary(bs.vocabulary, CONFIG.SCHED_VOCAB_CAP),
     }),
     {
       label: 'scheduler-' + tag,
@@ -2668,6 +4099,8 @@ async function runScheduler(
 
                                                           
              
+            
+           
              
              
                  
@@ -2675,24 +4108,31 @@ async function runScheduler(
             
               
                   
+           
                               
 
 // LANE THREAD (B5) — one SEQUENTIAL reader thread for a lane, carrying the running answer across every read.
 // `readers` is the bin-packed list of reader-units (each a set of cache char-windows). Each reader reads its
 // slice(s) off disk + digests; only the clean parsed `runningAnswer` is forwarded (handoff hygiene — no
 // tool-call/StructuredOutput serialization). Yields one accumulated ResearchOut (or null if every reader failed).
+// `claimDigest` + `laneKind` come from the caller (runResearchers computes claimDigest ONCE per wave off the
+// ledger; laneKind is this lane's RabbitHole.kind — 'attack' flips the reader's brief to counter-evidence).
 async function runLaneThread(
-  bs              ,
   p            ,
   readers               ,
   tag        ,
   phaseName        ,
+  claimDigest        ,
+  laneKind           ,
 )                              {
   const N = readers.length;
   let priorAnswer = '';
   const rabbitHoles                   = [];
   const nextSources               = [];
   const deadEnds           = [];
+  const claims              = [];
+  const newTerms             = [];
+  let surprise = ''; // keep the FIRST non-empty surprise note — the earliest contradiction this lane hit
   let any = false;
   let failed = false; // B3: any reader returned null (retries exhausted / open() threw) → the lane is INCOMPLETE
   for (let i = 0; i < N; i++) {
@@ -2708,6 +4148,8 @@ async function runLaneThread(
         readerIndex: i + 1,
         readerCount: N,
         priorAnswer, // clean parsed running answer from the prior reader ('' for reader 1) — renders LAST
+        claimDigest,
+        laneKind,
         researcherNote: CONFIG.RESEARCHER_NOTE,
       }),
       {
@@ -2726,6 +4168,9 @@ async function runLaneThread(
       for (const rh of out.rabbitHoles || []) rabbitHoles.push(rh);
       for (const ns of out.nextSources || []) nextSources.push(ns);
       for (const d of out.deadEnds || []) deadEnds.push(d);
+      for (const c of out.claims || []) claims.push(c);
+      for (const t of out.newTerms || []) newTerms.push(t);
+      if (!surprise && out.surprise && out.surprise.trim()) surprise = out.surprise;
     } else {
       failed = true; // a dropped chunk must NOT hide behind the surviving readers
     }
@@ -2733,18 +4178,24 @@ async function runLaneThread(
   // B3 — if ANY reader on the lane failed (or none produced anything), return null so the validator gate
   // (anyNull) reopens the lane; never emit a confident summary that silently dropped a chunk.
   if (!any || failed) return null;
-  return {
+  const out              = {
     summary: priorAnswer || '(reader returned no answer)',
     rabbitHoles,
     nextSources,
     deadEnds,
+    claims,
+    newTerms,
   };
+  if (surprise) out.surprise = surprise;
+  return out;
 }
 
 // RUN RESEARCHERS (B5) — consume the scheduler's per-lane source sets: bin-pack each lane into ≤budget
 // reader-units, then spawn ONE sequential reader thread per lane in PARALLEL across lanes. A lane with no
 // scheduled source returns null (a dead lane → the validator gate reopens it). Returns each lane's accumulated
-// ResearchOut (or null), in pick order.
+// ResearchOut (or null), in pick order. The claim digest is computed ONCE here (the ledger only turns over
+// between waves, not within one) and threaded into every lane, alongside each pick's own kind (attack-lane
+// awareness) — down through runLaneThread into every reader's prompt.
 async function runResearchers(
   bs              ,
   picks              ,
@@ -2752,6 +4203,7 @@ async function runResearchers(
   tag        ,
   phaseName        ,
 )                                  {
+  const claimDigest = claimDigestOf(bs);
   return parallel(
     picks.map((p) => () => {
       // B7: cap sources-per-lane before packing; B2/B7: hand packReaders the slice cap + the token→char ratio.
@@ -2767,7 +4219,7 @@ async function runResearchers(
         log('    lane #' + p.id + ' ' + lab(p.keyword) + ' — no source scheduled → skipped');
         return Promise.resolve(null);
       }
-      return runLaneThread(bs, p, readers, tag, phaseName);
+      return runLaneThread(p, readers, tag, phaseName, claimDigest, p.kind);
     }),
   );
 }
@@ -2790,6 +4242,17 @@ async function runInitiator(
       initiator.tier +
       ' · naming the facts to harden + the report focus',
   );
+  // v3 FINALIZE — the ledger digest (facts can bind to an existing claim via claimId) + the sensitivity
+  // ranking (once a derivation has a completed rerun) — pre-rendered so initiator/prompts.ts stays pure
+  // clause assembly.
+  const ledger = ledgerLines(bs, CONFIG.BRAINER_LEDGER_CAP);
+  const sensitivity =
+    bs.derivation && bs.derivation.lastRun
+      ? sensitivityRanking(
+          { inputs: bs.derivation.inputs, sensitivity: bs.derivation.lastRun.sensitivity },
+          bs.claims,
+        )
+      : '';
   const plan = await retryAgent              (
     initiator.buildPrompt({
       query: CONFIG.query,
@@ -2799,6 +4262,8 @@ async function runInitiator(
       openRabbitHoles: topOpen,
       mode: CONFIG.mode,
       thinkerNote: CONFIG.THINKER_NOTE,
+      ledger,
+      sensitivity,
     }),
     {
       label: 'initiator',
@@ -2838,34 +4303,40 @@ async function runInitiator(
                                                                                  
 
 // REFINE the named load-bearing facts in parallel — one sonnet refine agent per fact; on a re-run the judge `directive`
-// rides into each so it re-checks what the judge flagged. Returns the hardened reports + the refinement artifact markdown
-// (the engine writes/overwrites the refinement file). passTag keeps labels unique per pass.
+// rides into each so it re-checks what the judge flagged. A fact carrying a `claimId` gets that ledger claim's
+// pinned quote + source rendered into its prompt (THE CLAIM AS PINNED). Returns the hardened reports + the
+// refinement artifact markdown (the engine writes/overwrites the refinement file) + the RAW per-fact outputs
+// (queriesTried/counterFound/counterNote) so the engine — never this pure run fn — can fold the attack outcome
+// into the ledger. passTag keeps labels unique per pass.
 async function runRefine(
   bs              ,
   facts                ,
   directive        ,
   passTag        ,
-)                                                             {
+)                                                                                            {
   const refined = await parallel(
-    facts.map(
-      (f, i) => () =>
-        retryAgent           (
-          refiner.buildPrompt({
-            net: CONFIG.NET,
-            query: CONFIG.query,
-            fact: f.fact,
-            why: f.why,
-            directive,
-          }),
-          {
-            label: 'refine-' + passTag + i,
-            phase: CONFIG.PHASE.finalize,
-            model: refiner.tier,
-            effort: refiner.effort,
-            schema: refiner.schema,
-          },
-        ),
-    ),
+    facts.map((f, i) => () => {
+      const pinned =
+        typeof f.claimId === 'number' ? bs.claims.find((c) => c.id === f.claimId) : undefined;
+      return retryAgent           (
+        refiner.buildPrompt({
+          net: CONFIG.NET,
+          query: CONFIG.query,
+          fact: f.fact,
+          why: f.why,
+          directive,
+          claimQuote: pinned?.quote,
+          claimSource: pinned?.source,
+        }),
+        {
+          label: 'refine-' + passTag + i,
+          phase: CONFIG.PHASE.finalize,
+          model: refiner.tier,
+          effort: refiner.effort,
+          schema: refiner.schema,
+        },
+      );
+    }),
   );
   const cleanReports                = facts.map((f, i) => ({
     fact: f.fact,
@@ -2876,8 +4347,19 @@ async function runRefine(
     '# Refinement — fact-check & harden the load-bearing facts\n\n' +
     (facts.length
       ? facts
-          .map(
-            (f, i) =>
+          .map((f, i) => {
+            const r = refined[i];
+            const attackNote = r
+              ? '\n\n_counter-search: ' +
+                (r.counterFound
+                  ? 'FOUND — ' + (r.counterNote || '(unspecified)')
+                  : 'none found (survived)') +
+                (r.queriesTried && r.queriesTried.length
+                  ? ' · queries: ' + r.queriesTried.join('; ')
+                  : '') +
+                '_'
+              : '';
+            return (
               '## ' +
               (i + 1) +
               ' — ' +
@@ -2885,12 +4367,14 @@ async function runRefine(
               '\n\n_' +
               f.why +
               '_\n\n' +
-              ((refined[i] && refined[i] .report) || '_(refine failed)_'),
-          )
+              ((r && r.report) || '_(refine failed)_') +
+              attackNote
+            );
+          })
           .join('\n\n')
       : '_no facts to harden_') +
     '\n';
-  return { cleanReports, artifact };
+  return { cleanReports, artifact, refined };
 }
 // ╔══ module: src/agents/judge/run.ts ═════════════════════════════════════
 
@@ -2898,7 +4382,7 @@ async function runRefine(
 
 
                                                           
-                                                                  
+                                                                         
 
 // the prefix shared by the compute-off limitation message and the engine's openGaps dedup, so editing the wording edits both.
 const COMPUTE_LIMIT_PREFIX = 'Quantitative derivation unavailable';
@@ -2917,6 +4401,27 @@ async function runJudge(
     .sort((a, b) => (lastScore(b) ?? -1) - (lastScore(a) ?? -1))
     .slice(0, CONFIG.FINALIZE_TOP_OPEN)
     .map((r) => '[' + (lastScore(r) ?? 'new') + '] ' + r.keyword + ' — ' + r.why);
+  // v3 FINALIZE — the ledger digest, the challenged-vs-never-challenged split, the computed confidence, and
+  // the crawl's own final stop (STOP RECONCILE): all pre-rendered here so judge/prompts.ts stays pure clause
+  // assembly. keyClaimIds is the answer's OWN load-bearing set — "never challenged" is scoped to those, not
+  // every tentative claim in the ledger.
+  const ledger = ledgerLines(bs, CONFIG.BRAINER_LEDGER_CAP);
+  const keyClaimIds = (bs.resultSoFar && bs.resultSoFar.keyClaimIds) || [];
+  const survivedAttacks = bs.nullAttacks.map(
+    (na) =>
+      na.topic +
+      (na.claimIds.length ? ' → c' + na.claimIds.join(', c') : '') +
+      ' (queries: ' +
+      na.queries.join('; ') +
+      ')',
+  );
+  const challengedIds = new Set(bs.nullAttacks.flatMap((na) => na.claimIds));
+  const neverChallenged = keyClaimIds
+    .map((id) => bs.claims.find((c) => c.id === id))
+    .filter(
+      (c)             => !!c && !c.retracted && !challengedIds.has(c.id) && !c.attacksSurvived,
+    )
+    .map((c) => 'c' + c.id + ' ' + clip(c.claim, CONFIG.CLAIM_DIGEST_CLIP));
   const out = await retryAgent          (
     judge.buildPrompt({
       query: CONFIG.query,
@@ -2928,6 +4433,11 @@ async function runJudge(
       mode: CONFIG.mode,
       computeNote: CONFIG.COMPUTE_NOTE,
       thinkerNote: CONFIG.THINKER_NOTE,
+      ledger,
+      survivedAttacks,
+      neverChallenged,
+      computedConfidence: computedConfidence(keyClaimIds, bs.claims),
+      stop: bs.coord ? bs.coord.stop : undefined,
     }),
     {
       label: 'judge-' + pass,
@@ -2970,6 +4480,7 @@ async function runJudge(
 
 
 
+
                                                           
                                                                    
 
@@ -2994,6 +4505,13 @@ async function runSynthesiser(
       ' · writing the report' +
       (hasDerivation ? ' (with derivation)' : ''),
   );
+  // v3 FINALIZE — cite the ledger + the challenged-and-survived summary + the computed confidence floor
+  // (pre-rendered here so synthesiser/prompts.ts stays pure clause assembly, mirroring judge/run.ts).
+  const ledger = ledgerLines(bs, CONFIG.BRAINER_LEDGER_CAP);
+  const nullAttacksSummary = bs.nullAttacks.map(
+    (na) => na.topic + (na.claimIds.length ? ' → c' + na.claimIds.join(', c') : ''),
+  );
+  const keyClaimIds = (bs.resultSoFar && bs.resultSoFar.keyClaimIds) || [];
   return retryAgent           (
     synthesiser.buildPrompt({
       mode: CONFIG.mode,
@@ -3006,6 +4524,9 @@ async function runSynthesiser(
       openRabbitHoles: topOpen,
       compute: CONFIG.compute,
       thinkerNote: CONFIG.THINKER_NOTE,
+      ledger,
+      nullAttacksSummary,
+      computedConfidence: computedConfidence(keyClaimIds, bs.claims),
     }),
     {
       label: 'synthesiser',
@@ -3105,6 +4626,164 @@ async function runDebug(
   log('· debug DONE · _debug.md assembled');
   return artifact;
 }
+// ╔══ module: src/agents/claimAuditor/run.ts ══════════════════════════════
+// CLAIM AUDITOR dispatch — batches new claims with a cachePath into ≤AUDIT_BATCH-item chunks, one
+// retryAgent call per chunk, all chunks dispatched CONCURRENTLY via parallel(). A dead (null) chunk
+// contributes nothing — its claims simply stay 'pending' (the caller treats pending as unpinned
+// downstream). Hallucinated ids (not in the chunk's own input set) are dropped. Zero auditable claims →
+// no agent spawned at all.
+
+
+
+
+                                                          
+                                                                 
+
+async function runClaimAuditor(
+  bs              ,
+  claims         ,
+  tag        ,
+  phaseName        ,
+)                                                                    {
+  const out = new Map                                                     ();
+  const auditable = claims.filter((c) => !!c.cachePath); // only claims that can actually be greped
+  if (!auditable.length) return out;
+  const chunks = chunk(auditable, CONFIG.AUDIT_BATCH);
+  const results = await parallel(
+    chunks.map((ch, i) => async () => {
+      const ids = new Set(ch.map((c) => c.id));
+      const res = await retryAgent               (
+        claimAuditor.buildPrompt({
+          items: ch.map((c) => ({
+            id: c.id,
+            claim: c.claim,
+            quote: c.quote,
+            cachePath: c.cachePath ,
+          })),
+        }),
+        {
+          label: 'claim-audit-' + tag + (chunks.length > 1 ? '-b' + i : ''),
+          phase: phaseName,
+          model: claimAuditor.tier,
+          effort: claimAuditor.effort,
+          agentType: CONFIG.GENERAL_PURPOSE,
+          schema: claimAuditor.schema,
+        },
+      );
+      return { res, ids };
+    }),
+  );
+  for (const { res, ids } of results) {
+    if (!res) continue; // dead chunk — its claims stay 'pending'
+    for (const c of res.checks || [])
+      if (c && ids.has(c.id) && (c.verdict === 'pass' || c.verdict === 'fail'))
+        out.set(c.id, { verdict: c.verdict, note: c.note });
+  }
+  return out;
+}
+// ╔══ module: src/agents/lineageClerk/run.ts ══════════════════════════════
+// LINEAGE CLERK dispatch — batches new claims into ≤LINEAGE_BATCH-item chunks, one retryAgent call per
+// chunk, all chunks dispatched CONCURRENTLY via parallel(). A dead (null) chunk contributes nothing — its
+// claims fall back to the deterministic lineageKeyOf clustering (the caller's job, not this module's).
+// Hallucinated ids (not in the chunk's own input set) are dropped. Empty input → no agent spawned at all.
+
+
+
+
+                                                          
+                                                                   
+
+async function runLineageClerk(
+  bs              ,
+  claims         ,
+  knownKeys          ,
+  tag        ,
+  phaseName        ,
+)                                 {
+  const out = new Map                  ();
+  if (!claims.length) return out;
+  const chunks = chunk(claims, CONFIG.LINEAGE_BATCH);
+  const results = await parallel(
+    chunks.map((ch, i) => async () => {
+      const ids = new Set(ch.map((c) => c.id));
+      const res = await retryAgent                 (
+        lineageClerk.buildPrompt({
+          items: ch.map((c) => ({ id: c.id, source: c.source, entities: c.entities })),
+          knownKeys,
+        }),
+        {
+          label: 'lineage-' + tag + (chunks.length > 1 ? '-b' + i : ''),
+          phase: phaseName,
+          model: lineageClerk.tier,
+          effort: lineageClerk.effort,
+          schema: lineageClerk.schema,
+        },
+      );
+      return { res, ids };
+    }),
+  );
+  for (const { res, ids } of results) {
+    if (!res) continue; // dead chunk — its claims fall back to lineageKeyOf
+    for (const l of res.links || [])
+      if (l && ids.has(l.id) && Array.isArray(l.keys)) out.set(l.id, l.keys);
+  }
+  return out;
+}
+// ╔══ module: src/agents/rerunner/run.ts ══════════════════════════════════
+// RERUNNER dispatch — reads bs.derivation (null ⇒ nothing stored yet, no agent) and re-executes its code
+// with the CURRENT inputs (bs.derivation.inputs, passed verbatim — the engine keeps them current across
+// waves). Degrades to null on a dead agent or ok:false; the caller keeps the last lastRun and marks it stale.
+
+
+
+                                                          
+                                                        
+
+async function runRerunner(
+  bs              ,
+  phaseName        ,
+)                                                                                             {
+  if (!bs.derivation) return null;
+  const inputsJson = JSON.stringify(bs.derivation.inputs);
+  const out = await retryAgent             (
+    rerunner.buildPrompt({ code: bs.derivation.code, inputsJson }),
+    {
+      label: 'rerun-w' + bs.wave,
+      phase: phaseName,
+      model: rerunner.tier,
+      effort: rerunner.effort,
+      agentType: CONFIG.GENERAL_PURPOSE,
+      schema: rerunner.schema,
+    },
+  );
+  if (!out || !out.ok) return null;
+  return { quantiles: out.quantiles || {}, sensitivity: out.sensitivity || {} };
+}
+// ╔══ module: src/agents/scribe/run.ts ════════════════════════════════════
+// SCRIBE dispatch — crash-safety checkpoint: writes `content` VERBATIM to dir/_checkpoint.json. Skips (no
+// agent spawned) on empty content; degrades to false on a dead agent or ok:false (no checkpoint that wave).
+
+
+
+                                                      
+
+async function runScribe(
+  content        ,
+  dir        ,
+  tag        ,
+  phaseName        ,
+)                   {
+  if (!content) return false;
+  const out = await retryAgent           (scribe.buildPrompt({ content, dir }), {
+    label: 'scribe-' + tag,
+    phase: phaseName,
+    model: scribe.tier,
+    effort: scribe.effort,
+    agentType: CONFIG.GENERAL_PURPOSE,
+    schema: scribe.schema,
+  });
+  return !!(out && out.ok);
+}
 // ╔══ module: src/engine.ts ═══════════════════════════════════════════════
 
 
@@ -3122,9 +4801,16 @@ async function runDebug(
 
 
 
+
+
+
+
              
+        
+            
               
         
+               
         
           
            
@@ -3134,6 +4820,8 @@ async function runDebug(
                 
                  
             
+            
+              
                  
               
             
@@ -3141,6 +4829,7 @@ async function runDebug(
            
            
              
+           
                     
         
                
@@ -3151,6 +4840,19 @@ log('▶ RR START · mode=' + CONFIG.mode + ' · maxWave=' + CONFIG.maxWave + ' 
 // compact "Run arguments" record — the COMPLETE launch args (CONFIG.rawArgs), verbatim as received. Surfaced at the top of result.md
 // (and persisted as the `args` object in _rabbitHoles.json) so every output file records exactly how the run was launched.
 const runArgsMd = ()         => '> **Run arguments:** `' + JSON.stringify(CONFIG.rawArgs) + '`\n\n';
+
+// idsInText — recover the claim ids an attack-lane's own note/why text names (the brainer/reader reference
+// an existing claim the same way the ledger digest renders it: `c12`). Filters to ids that are actually in
+// the ledger — never fabricates one — so a nullAttack's claimIds degrades to [] when nothing is recoverable.
+const idsInText = (text        , validIds             )           => {
+  if (!text) return [];
+  const found           = [];
+  for (const m of text.matchAll(/\bc(\d+)\b/g)) {
+    const id = Number(m[1]);
+    if (validIds.has(id) && !found.includes(id)) found.push(id);
+  }
+  return found;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ResearchReport — the pipeline backbone. Holds the crawl state; each phase method (runCrawl / runFinalize /
@@ -3197,9 +4899,321 @@ class ResearchReport {
     return runScheduler(bs, picks, tag, phaseName);
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════════════════════════
+  // CLAIM-LEDGER INGESTION (v3) — the ONE shared pipeline both wave paths (runCrawl / runOneWave) and
+  // the wave-0 scout seed feed through. Order (mirrors V3-DESIGN.md "Per-wave engine order"): sanitize →
+  // claim ingest → audit ∥ lineage → status → attack bookkeeping → vocabulary → surprise → yieldCalib →
+  // chao. Every agent in the middle (claimAuditor/lineageClerk) degrades to a named null path — a dead
+  // agent leaves claims 'pending'/lineageKeyOf-clustered, never blocks the wave. Engine owns every
+  // mutation here; the agents' own run.ts stay pure request/response.
+  // ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+  // steps 2–4 — claim ingest (clip/dedupe/hallucinated-stance-filter) + the audited/lineage-clerked batch
+  // + status recompute. Shared by ingestWave (N real lanes) and ingestScoutClaims (one wave-0 pseudo-lane)
+  // so there is exactly ONE claim-ingest code path, not two. Returns the FRESH claims this call ledgered.
+  async ingestClaimSeeds(
+    bs              ,
+    lanes                                                     ,
+    wave        ,
+    tag        ,
+    phaseName        ,
+  )                   {
+    // stance targets may only point at claims the reader's digest could actually have shown it — i.e. ones
+    // that existed BEFORE this call started, never a sibling claim minted later in this very batch.
+    const priorIds = new Set(bs.claims.map((c) => c.id));
+    const fresh          = [];
+    for (const { claims, lane } of lanes) {
+      for (const c of claims || []) {
+        if (!c || !c.claim || !c.quote) continue; // drop: no claim text or no quote
+        const quote = clip(c.quote, CONFIG.QUOTE_MAX_CHARS);
+        const dedupeKey = norm(quote) + '|' + norm(c.source);
+        // dedupe: an identical quote+source already ledgered (from an earlier wave or another lane this wave)
+        if (bs.claims.some((e) => norm(e.quote) + '|' + norm(e.source) === dedupeKey)) continue;
+        const stance = c.stance && priorIds.has(c.stance.target) ? c.stance : undefined; // hallucinated-id filter
+        const claim        = {
+          id: bs.nextClaimId++,
+          claim: c.claim,
+          value: c.value,
+          quote,
+          source: c.source,
+          cachePath: c.cachePath,
+          entities: c.entities,
+          cluster: -1, // resolved below (applyLineage) — never left unset
+          audit: c.cachePath ? 'pending' : 'unpinned',
+          status: 'tentative',
+          stance,
+          attacksSurvived: 0,
+          retracted: false,
+          wave,
+          lane,
+        };
+        bs.claims.push(claim);
+        fresh.push(claim);
+      }
+    }
+    if (fresh.length) {
+      // bs.clusterOf's OWN keys are the canonical "known keys" list — one structure, never a second copy.
+      const knownKeys = Object.keys(bs.clusterOf);
+      const [auditMap, lineageMap] = await Promise.all([
+        runClaimAuditor(bs, fresh, tag, phaseName),
+        runLineageClerk(bs, fresh, knownKeys, tag, phaseName),
+      ]);
+      for (const c of fresh) {
+        const v = auditMap.get(c.id);
+        if (v) c.audit = v.verdict; // a dead auditor leaves it 'pending' (unpinned downstream) — never guessed
+      }
+      const keyMap = new Map                  ();
+      for (const c of fresh)
+        keyMap.set(
+          c.id,
+          lineageMap.has(c.id) ? lineageMap.get(c.id)  : [lineageKeyOf(c)].filter(Boolean),
+        );
+      this.applyLineage(bs, fresh, keyMap);
+    }
+    // STATUS — recompute for every non-retracted claim (cheap at this scale); a new claim can change an
+    // OLDER claim's status too (a fresh supporter/attacker), so this is a full pass, not just `fresh`.
+    for (const c of bs.claims)
+      if (!c.retracted)
+        c.status = claimStatus(c, bs.claims, bs.nullAttacks, {
+          SETTLED_MIN_CLUSTERS: CONFIG.SETTLED_MIN_CLUSTERS,
+        });
+    return fresh;
+  }
+
+  // lineage clustering — a PERSISTENT, incremental union-find keyed by lineage KEY (bs.clusterOf), so a
+  // later claim can retroactively MERGE two previously-separate clusters (every existing member of the
+  // merged-away cluster is rewritten, both in bs.clusterOf and on every already-ledgered claim). Empty keys
+  // (the clerk + the lineageKeyOf fallback both resolved to nothing) → cluster 0, the shared unknown-lineage bucket.
+  applyLineage(bs              , fresh         , keyMap                       )       {
+    for (const c of fresh) {
+      const keys = [...new Set((keyMap.get(c.id) || []).filter(Boolean))];
+      if (!keys.length) {
+        c.cluster = 0;
+        continue;
+      }
+      const existingIds = [
+        ...new Set(keys.map((k) => bs.clusterOf[k]).filter((v) => v !== undefined)),
+      ];
+      let target        ;
+      if (!existingIds.length) target = bs.nextClusterId++;
+      else {
+        target = Math.min(...existingIds);
+        const merge = new Set(existingIds.filter((id) => id !== target));
+        if (merge.size) {
+          for (const k of Object.keys(bs.clusterOf))
+            if (merge.has(bs.clusterOf[k])) bs.clusterOf[k] = target;
+          for (const other of bs.claims) if (merge.has(other.cluster)) other.cluster = target;
+        }
+      }
+      for (const k of keys) bs.clusterOf[k] = target;
+      c.cluster = target;
+    }
+  }
+
+  // step 6 — VOCABULARY: merge newTerms into bs.vocabulary by norm(term); a repeat bumps `uses` and keeps
+  // the FIRST gloss (never overwritten by a later, possibly thinner, one).
+  mergeVocabulary(bs              , terms                        )       {
+    for (const t of terms || []) {
+      if (!t || !t.term) continue;
+      const key = norm(t.term);
+      const existing = bs.vocabulary.find((v) => norm(v.term) === key);
+      if (existing) existing.uses++;
+      else bs.vocabulary.push({ term: t.term, gloss: t.gloss, uses: 1 });
+    }
+  }
+
+  // step 9 — CHAO (collect mode only): group non-retracted claims by near-dup of norm(claim) (the store's
+  // OWN Jaccard near-dup — one definition, reused, never a second copy); abundance = distinct sources/group.
+  updateChao(bs              )       {
+    const active = bs.claims.filter((c) => !c.retracted);
+    const groups            = [];
+    for (const c of active) {
+      const g = groups.find((g) => nearDup(c.claim, g[0].claim));
+      if (g) g.push(c);
+      else groups.push([c]);
+    }
+    bs.chao = chao1(groups.map((g) => ({ sources: new Set(g.map((m) => norm(m.source))).size })));
+  }
+
+  // the ONE shared per-wave ingest step — called from BOTH runCrawl and runOneWave immediately after
+  // runResearchers, replacing nothing in the existing validator/brainer flow. `raw`/its ClaimSeeds are
+  // MUTATED in place (scrub + the surprise append) so the caller's existing `findings = raw.map(...)`
+  // construction picks up the scrubbed/annotated text with no change to that code.
+  async ingestWave(
+    bs              ,
+    toPursue              ,
+    raw                        ,
+    wave        ,
+    phaseName        ,
+  )                {
+    const tag = (bs.isRoot ? '' : bs.name + '-') + 'w' + wave;
+    // 1 — SANITIZE: strip structured-output/tool-call leakage from every reader-returned text field
+    // (quotes are scrubbed BEFORE the auditor ever sees them).
+    for (const r of raw) {
+      if (!r) continue;
+      r.summary = scrubArtifacts(r.summary);
+      for (const c of r.claims || []) {
+        c.claim = scrubArtifacts(c.claim);
+        c.quote = scrubArtifacts(c.quote);
+      }
+    }
+    // 2–4 — claim ingest + audit ∥ lineage + status (shared with the scout seed). Snapshot every claim's
+    // status BEFORE the ingest so the diff below can tell the derivation-rerun test (D2) which ids actually
+    // moved this wave — added, or flipped status (e.g. an attack just landed) — not just "the ledger grew".
+    const beforeStatus = new Map(bs.claims.map((c) => [c.id, c.status]));
+    const lanes = toPursue.map((p, i) => ({ claims: raw[i]?.claims, lane: p.keyword }));
+    const fresh = await this.ingestClaimSeeds(bs, lanes, wave, tag, phaseName);
+    const changedIds = new Set        (fresh.map((c) => c.id));
+    for (const c of bs.claims) {
+      if (c.retracted) continue;
+      const prior = beforeStatus.get(c.id);
+      if (prior !== undefined && prior !== c.status) changedIds.add(c.id);
+    }
+    bs.lastChangedClaimIds = changedIds;
+    // 5 — ATTACK BOOKKEEPING: an 'attack'-kind lane that landed a counter-claim contests its target; one
+    // that landed NOTHING is a completed counter-search that found nothing — first-class state, not silence.
+    const validIds = new Set(bs.claims.map((c) => c.id));
+    toPursue.forEach((p, i) => {
+      if (p.kind !== 'attack') return;
+      const rawClaims = raw[i]?.claims || [];
+      const landedAnAttack = rawClaims.some((c) => c.stance && c.stance.kind === 'attacks');
+      if (landedAnAttack) {
+        for (const a of fresh.filter((c) => c.lane === p.keyword && c.stance?.kind === 'attacks')) {
+          const target = bs.claims.find((c) => c.id === a.stance .target);
+          if (target) target.counter = a.claim; // status recompute (step 4, next wave) picks up 'contested'
+        }
+      } else {
+        const claimIds = idsInText((p.note || '') + ' ' + (p.why || ''), validIds);
+        bs.nullAttacks.push({
+          topic: p.keyword,
+          claimIds,
+          queries: [p.keyword],
+          wave,
+          phase: phaseName,
+        });
+        for (const id of claimIds) {
+          const t = bs.claims.find((c) => c.id === id);
+          if (t) t.attacksSurvived = (t.attacksSurvived || 0) + 1;
+        }
+      }
+    });
+    // 6 — VOCABULARY
+    for (const r of raw) if (r) this.mergeVocabulary(bs, r.newTerms);
+    // 7 — SURPRISE: fold into that lane's own finding summary — no schema change, the brainer just sees it.
+    raw.forEach((r, i) => {
+      if (r && r.surprise)
+        r.summary =
+          (r.summary || '') + '\n\n⚡ SURPRISE (lane «' + toPursue[i].keyword + '»): ' + r.surprise;
+    });
+    // 8 — YIELDCALIB: predicted from the lane's last score, realized from what it actually produced.
+    toPursue.forEach((p, i) => {
+      const kind = p.kind ?? 'origin';
+      const predicted = (lastScore(p) ?? CONFIG.CALIB_DEFAULT_SCORE) / 100;
+      const auditedPass = fresh.filter((c) => c.lane === p.keyword && c.audit === 'pass').length;
+      const freshLeads = (raw[i]?.rabbitHoles?.length || 0) + (raw[i]?.nextSources?.length || 0);
+      const realized = Math.min(
+        CONFIG.CALIB_REALIZED_MAX,
+        (auditedPass + CONFIG.CALIB_LEAD_WEIGHT * freshLeads) / CONFIG.CALIB_NORM,
+      );
+      bs.yieldCalib[kind] = updateCalib(
+        bs.yieldCalib,
+        kind,
+        predicted,
+        realized,
+        CONFIG.CALIB_ALPHA,
+      );
+    });
+    // 8b — VENUE YIELD: per pursued lane, tally each assigned venue's assigned/yielded count — a lane
+    // "yielded" when it landed ≥1 ledgered claim or ≥1 fresh lead. Flags a persistently-dry venue to the
+    // brainer (see utils venuesWithYieldWarn) without ever touching the prospector's own venue schema.
+    toPursue.forEach((p, i) => {
+      const yielded =
+        fresh.some((c) => c.lane === p.keyword) ||
+        (raw[i]?.rabbitHoles?.length || 0) + (raw[i]?.nextSources?.length || 0) > 0;
+      for (const src of p.sources || []) {
+        const s = bs.venueStats[src] || (bs.venueStats[src] = { assigned: 0, yielded: 0 });
+        s.assigned++;
+        if (yielded) s.yielded++;
+      }
+    });
+    // 9 — CHAO (collect mode only)
+    if (CONFIG.mode === 'collect') this.updateChao(bs);
+  }
+
+  // D1 — STORE the brainer's freshly-authored derivation delta (v3 STEERING). Engine owns the mutation:
+  // same code as already stored ⇒ keep the last good rerun (only the inputs metadata changed); new/changed
+  // code ⇒ reset lastRun to null (a fresh rerun is owed before the sensitivity numbers can be trusted
+  // again). Always dirties the derivation so maybeRerunDerivation's next check fires at least once.
+  applyDerivation(bs              , coord       )       {
+    const d = coord.derivation;
+    if (!CONFIG.compute || !d || !d.code) return;
+    const sameCode = !!(bs.derivation && bs.derivation.code === d.code);
+    bs.derivation = {
+      code: d.code,
+      inputs: d.inputs || [],
+      lastRun: sameCode ? bs.derivation .lastRun : null,
+    };
+    bs.derivationDirty = true;
+  }
+
+  // D2 — RERUN the stored derivation when it is dirty (freshly authored/re-authored this wave) OR when a
+  // claim one of its inputs cites changed this wave (ingestWave's lastChangedClaimIds). A dead rerunner or a
+  // script error degrades to a stale flag — lastRun is kept, the brainer is told it is stale (see
+  // sensitivityClause), never blocked. Called right after ingestWave, before the validator gate.
+  async maybeRerunDerivation(bs              , wave        , phaseName        )                {
+    if (!CONFIG.compute || !bs.derivation) return;
+    const inputIds = new Set(bs.derivation.inputs.flatMap((i) => i.claimIds || []));
+    const inputsChanged = [...bs.lastChangedClaimIds].some((id) => inputIds.has(id));
+    if (!bs.derivationDirty && !inputsChanged) return;
+    const run = await runRerunner(bs, phaseName);
+    if (run) {
+      bs.derivation.lastRun = { quantiles: run.quantiles, sensitivity: run.sensitivity, wave };
+      bs.derivationDirty = false;
+      bs.derivationStale = false;
+      log(
+        '  · derivation rerun · p50=' +
+          (run.quantiles.p50 ?? '?') +
+          ' · top=' +
+          (topSensitivityInput(run.sensitivity) || '?'),
+      );
+    } else {
+      bs.derivationStale = true;
+      log('  · derivation rerun FAILED — lastRun kept, marked stale');
+    }
+  }
+
+  // ADOPT RESULT SO FAR (v3 batch 6) — the ONE call site every `bs.resultSoFar = coord.resultSoFar`-style
+  // assignment goes through. A degenerate wave (e.g. a brain-compute pass distracted by its derivation) can
+  // return an EMPTY keyClaimIds even though the prior resultSoFar carried a real one — adopting it verbatim
+  // would silently wipe the confidence floor's own input. Guard: when the incoming result carries no
+  // keyClaimIds but the prior one did, preserve the prior ids; a genuinely new non-empty set always replaces.
+  adoptResultSoFar(bs              , rs             )       {
+    const priorIds = bs.resultSoFar && bs.resultSoFar.keyClaimIds;
+    bs.resultSoFar =
+      (!rs.keyClaimIds || !rs.keyClaimIds.length) && priorIds && priorIds.length
+        ? { ...rs, keyClaimIds: priorIds }
+        : rs;
+  }
+
+  // SCOUT INGEST (wave 0) — the scout's own claims/newTerms flow through the SAME claim-ingest machinery
+  // (steps 2/3/4/6) as one pseudo-lane 'scout', kind 'seed'. No digest existed yet (scout claims never
+  // carry a stance) and there is no lane to attack/calibrate/chao yet — those steps are skipped outright.
+  async ingestScoutClaims(bs              , scoutOut          )                {
+    if (!(scoutOut.claims || []).length && !(scoutOut.newTerms || []).length) return;
+    await this.ingestClaimSeeds(
+      bs,
+      [{ claims: scoutOut.claims, lane: 'scout' }],
+      0,
+      'scout',
+      CONFIG.PHASE.scout,
+    );
+    this.mergeVocabulary(bs, scoutOut.newTerms);
+  }
+
   // Crawl: wave 0 = score the scout rabbit-holes; waves 1..N = pursue → research → re-coordinate until the brainer stops.
   async runCrawl(bs              , scoutRabbitHoles            )                {
     const scoutOut = this.scout ;
+    await this.ingestScoutClaims(bs, scoutOut); // v3: seed the claim ledger from the scout's own claims/newTerms
 
     this.files['01-scout.md'] = withPrompt(
       'scout',
@@ -3228,7 +5242,25 @@ class ResearchReport {
 
     // seed the open store with the scout rabbit-holes (UNSCORED — the brainer scores them this wave via rescore).
     scoutRabbitHoles.forEach((l) =>
-      addRabbitHole(bs, { keyword: l.keyword, why: l.why, path: l.path || [], wave: 0 }),
+      addRabbitHole(bs, {
+        keyword: l.keyword,
+        why: l.why,
+        path: l.path || [],
+        wave: 0,
+        kind: l.kind,
+      }),
+    );
+    // v3: the scout's own followed-citation leads seed the store the same way a crawl wave's nextSources do —
+    // never dropped on the floor just because there is no digest yet at wave 0.
+    (scoutOut.nextSources || []).forEach((s) =>
+      addRabbitHole(bs, {
+        keyword: s.why,
+        why: 'followed citation',
+        ref: s.ref,
+        kind: 'citation',
+        path: [],
+        wave: 0,
+      }),
     );
 
     const seedFindings            = scoutOut.pages.map((p) => ({
@@ -3248,7 +5280,8 @@ class ResearchReport {
       throw new Error('brainer died at wave 0');
     }
     applyDeltas(bs, coord, 0);
-    if (coord.resultSoFar) bs.resultSoFar = coord.resultSoFar;
+    this.applyDerivation(bs, coord);
+    if (coord.resultSoFar) this.adoptResultSoFar(bs, coord.resultSoFar);
     bs.resultLog.push({ wave: 0, resultSoFar: bs.resultSoFar });
     let lookupNext = resolveLookupNext(bs, coord, 0, laneCount);
     bs.topScores.push(lookupNext.length ? Math.max(...lookupNext.map((p) => p.score ?? 0)) : 0);
@@ -3305,6 +5338,7 @@ class ResearchReport {
       lookupNext.length &&
       !dryStop
     ) {
+      bs.wave = wave; // keep bs.wave in step with the loop (the rerunner's label + lastRun.wave read it mid-wave)
       // PURSUE — move lookupNext into the pursued-archive (keeps id + scoreHistory + path) and out of the open store, so the brainer
       // re-scores a clean open-only set next wave.
       pursue(bs, lookupNext);
@@ -3322,8 +5356,30 @@ class ResearchReport {
       // RESEARCH wave — the SCHEDULER discovers + sizes the sources for the wave's lanes, then code bin-packs
       // each lane and runs ONE sequential reader thread per lane (parallel across lanes); each carries its full TRAIL.
       const toPursue = lookupNext;
-      const schedule = await this.scheduleSources(bs, toPursue, 'w' + wave, CONFIG.PHASE.crawl);
-      const raw = await runResearchers(bs, toPursue, schedule, 'w' + wave, CONFIG.PHASE.crawl);
+      const tag = 'w' + wave;
+      const schedule = await this.scheduleSources(bs, toPursue, tag, CONFIG.PHASE.crawl);
+      // the scribe checkpoint runs CONCURRENTLY with the lane readers (zero extra wall-clock cost); its content
+      // is the PREVIOUS wave's end state (bs is not yet mutated by this wave) — correct by construction.
+      const [raw] = await Promise.all([
+        runResearchers(bs, toPursue, schedule, tag, CONFIG.PHASE.crawl),
+        CONFIG.checkpoint
+          ? runScribe(
+              JSON.stringify({
+                wave,
+                claims: bs.claims,
+                rabbitHoles: bs.rabbitHoles,
+                pursuedList: bs.pursuedList,
+                resultSoFar: bs.resultSoFar,
+                nullAttacks: bs.nullAttacks,
+              }),
+              CONFIG.DIR,
+              tag,
+              CONFIG.PHASE.crawl,
+            )
+          : Promise.resolve(false),
+      ]);
+      await this.ingestWave(bs, toPursue, raw, wave, CONFIG.PHASE.crawl); // v3: claim-ledger ingest (mutates raw's text fields + bs)
+      await this.maybeRerunDerivation(bs, wave, CONFIG.PHASE.crawl); // v3 STEERING: rerun the stored derivation iff dirty or an input claim changed
       // B6 — guard scheduler-DEATH starvation: a wave is "starved" when the scheduler returned NO usable sources at
       // all (an empty map, or every lane's source list empty). After MAX_STARVED_WAVES in a row, break with an
       // explicit stopReason instead of grinding to HARD_CAP with nothing to read. (An all-null wave whose schedule
@@ -3366,6 +5422,7 @@ class ResearchReport {
               keyword: l.keyword,
               why: l.why,
               path: [...(toPursue[i].path || []), toPursue[i].keyword],
+              kind: l.kind ?? 'gap',
             }))
           : [],
       );
@@ -3377,15 +5434,23 @@ class ResearchReport {
               why: 'followed citation',
               ref: s.ref,
               path: [...(toPursue[i].path || []), toPursue[i].keyword],
+              kind: 'citation'         ,
             }))
           : [],
       );
       const beforeAdd = bs.rabbitHoles.length;
       fresh.forEach((l) =>
-        addRabbitHole(bs, { keyword: l.keyword, why: l.why, path: l.path, wave }),
+        addRabbitHole(bs, { keyword: l.keyword, why: l.why, path: l.path, wave, kind: l.kind }),
       );
       freshSources.forEach((l) =>
-        addRabbitHole(bs, { keyword: l.keyword, why: l.why, path: l.path, wave, ref: l.ref }),
+        addRabbitHole(bs, {
+          keyword: l.keyword,
+          why: l.why,
+          path: l.path,
+          wave,
+          ref: l.ref,
+          kind: l.kind,
+        }),
       );
       const newCount = bs.rabbitHoles.length - beforeAdd;
       log(
@@ -3475,7 +5540,8 @@ class ResearchReport {
       }
       coord = nextCoord;
       applyDeltas(bs, coord, wave);
-      if (coord.resultSoFar) bs.resultSoFar = coord.resultSoFar;
+      this.applyDerivation(bs, coord);
+      if (coord.resultSoFar) this.adoptResultSoFar(bs, coord.resultSoFar);
       bs.resultLog.push({ wave, resultSoFar: bs.resultSoFar });
       lookupNext = resolveLookupNext(bs, coord, wave, laneCount);
       bs.topScores.push(lookupNext.length ? Math.max(...lookupNext.map((p) => p.score ?? 0)) : 0);
@@ -3533,18 +5599,33 @@ class ResearchReport {
         const peak = Math.max(...crawlScores);
         const window = crawlScores.slice(-CONFIG.PLATEAU_WINDOW);
         if (peak > 0 && window.every((s) => s <= peak * CONFIG.QUERY_PLATEAU)) {
-          dryStop = true;
-          log(
-            '  wave ' +
-              wave +
-              ' · collect DRY — top novelty plateaued (' +
-              window.join(',') +
-              ' ≤ ' +
-              CONFIG.QUERY_PLATEAU +
-              '×peak ' +
-              peak +
-              ') → stopping',
-          );
+          // CHAO STOP ASSIST — a plateau alone is not enough in collect mode when the coverage estimate says
+          // there is still a lot unseen: gate the dry-stop on coverage ≥ CHAO_COVERAGE_STOP (no chao yet ⇒ the
+          // old plateau-only behavior, degrade-to-null).
+          if (bs.chao == null || bs.chao.coverage >= CONFIG.CHAO_COVERAGE_STOP) {
+            dryStop = true;
+            log(
+              '  wave ' +
+                wave +
+                ' · collect DRY — top novelty plateaued (' +
+                window.join(',') +
+                ' ≤ ' +
+                CONFIG.QUERY_PLATEAU +
+                '×peak ' +
+                peak +
+                ') → stopping',
+            );
+          } else {
+            log(
+              '  wave ' +
+                wave +
+                ' · plateau but coverage ' +
+                bs.chao.coverage.toFixed(2) +
+                ' < ' +
+                CONFIG.CHAO_COVERAGE_STOP +
+                ' — continuing',
+            );
+          }
         }
       }
       wave++;
@@ -3617,6 +5698,7 @@ class ResearchReport {
           path: ['⚖ judge'],
           score: CONFIG.INJECT_SCORE,
           wave: bs.wave,
+          kind: 'inject',
         });
         // steer the finalize lane: the judge's directive becomes the lane `note` (so the scheduler + reader get
         // the same WHAT-to-find steering the crawl lanes get); fall back to the lead's own `why` if no directive.
@@ -3631,14 +5713,286 @@ class ResearchReport {
     pursue(bs, picks);
     const schedule = await this.scheduleSources(bs, picks, 'reopen', CONFIG.PHASE.finalize);
     const raw = await runResearchers(bs, picks, schedule, 'reopen', CONFIG.PHASE.finalize);
+    // v3 HARVEST (a v2 weak point: this used to discard almost everything the readers gathered) — claims/
+    // attacks/vocab flow into the ledger exactly as a crawl wave's do (mutates raw's text fields too, so the
+    // findings built below already carry the scrubbed/annotated summaries).
+    await this.ingestWave(bs, picks, raw, bs.wave, CONFIG.PHASE.finalize);
+    await this.maybeRerunDerivation(bs, bs.wave, CONFIG.PHASE.finalize); // v3: a reopened lane can change a derivation input too — mirror the two wave-loop call sites
     const findings            = raw.map((r, i) => ({
       rabbitHole: picks[i].keyword,
       trail: trailOf(picks[i].path, picks[i].keyword),
       summary: r ? r.summary : '(researcher failed)',
     }));
+    // harvest fresh leads into the store too — same inheritance pattern as the crawl wave loop (never dropped
+    // on the floor: a judge-reopened lane that surfaces its own follow-ons used to lose them outright).
+    const fresh             = raw.flatMap((r, i) =>
+      r && r.rabbitHoles
+        ? r.rabbitHoles.map((l) => ({
+            keyword: l.keyword,
+            why: l.why,
+            path: [...(picks[i].path || []), picks[i].keyword],
+            kind: l.kind ?? 'gap',
+          }))
+        : [],
+    );
+    const freshSources             = raw.flatMap((r, i) =>
+      r && r.nextSources
+        ? r.nextSources.map((s) => ({
+            keyword: s.why,
+            why: 'followed citation',
+            ref: s.ref,
+            path: [...(picks[i].path || []), picks[i].keyword],
+            kind: 'citation'         ,
+          }))
+        : [],
+    );
+    fresh.forEach((l) =>
+      addRabbitHole(bs, {
+        keyword: l.keyword,
+        why: l.why,
+        path: l.path,
+        wave: bs.wave,
+        kind: l.kind,
+      }),
+    );
+    freshSources.forEach((l) =>
+      addRabbitHole(bs, {
+        keyword: l.keyword,
+        why: l.why,
+        path: l.path,
+        wave: bs.wave,
+        ref: l.ref,
+        kind: l.kind,
+      }),
+    );
     const coord = await runBrainer(bs, bs.wave, findings, CONFIG.PHASE.finalize);
-    if (coord && coord.resultSoFar) bs.resultSoFar = coord.resultSoFar;
+    if (coord) {
+      applyDeltas(bs, coord, bs.wave); // rename/drop/rescore/add — the coord's deltas, not just resultSoFar
+      this.applyDerivation(bs, coord);
+      if (coord.resultSoFar) this.adoptResultSoFar(bs, coord.resultSoFar);
+    }
     log('· finalize · judge reopen · folded ' + picks.length + ' lane(s) into the answer');
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════════════════════════
+  // FINALIZE LEDGER MUTATIONS (v3 batch 4) — the refiner/judge/synthesiser run.ts fns stay pure request/
+  // response; every ledger write lives here, engine-owned, mirroring the crawl-phase ingestWave discipline.
+  // ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+  // REFINE → LEDGER (attack-recording) — a fact bound to a claimId (the initiator named one) folds its
+  // refiner's counter-search outcome into that claim: counterFound sets a contested `counter` note (status
+  // recompute picks up `contested` — see utils claimStatus); !counterFound is a completed counter-search
+  // that found nothing — first-class nullAttack state, and the claim's attacksSurvived grows. A fact with
+  // no claimId, or a dead refiner (refined[i] null), never touches the ledger — exactly v2.
+  applyRefineAttacks(
+    bs              ,
+    facts                ,
+    refined                      ,
+    phaseName        ,
+  )       {
+    facts.forEach((f, i) => {
+      if (!f.claimId) return;
+      const r = refined[i];
+      if (!r) return;
+      const claim = bs.claims.find((c) => c.id === f.claimId && !c.retracted);
+      if (!claim) return;
+      if (r.counterFound) {
+        claim.counter = r.counterNote || 'refiner found counter-evidence';
+      } else {
+        bs.nullAttacks.push({
+          topic: f.fact,
+          claimIds: [f.claimId],
+          queries: r.queriesTried || [],
+          wave: bs.wave,
+          phase: phaseName,
+        });
+        claim.attacksSurvived = (claim.attacksSurvived || 0) + 1;
+      }
+    });
+    for (const c of bs.claims)
+      if (!c.retracted)
+        c.status = claimStatus(c, bs.claims, bs.nullAttacks, {
+          SETTLED_MIN_CLUSTERS: CONFIG.SETTLED_MIN_CLUSTERS,
+        });
+  }
+
+  // runRefine + write the refinement file + fold its attack outcomes into the ledger — the ONE call site
+  // every refine dispatch (initial pass, judge re-refine, post-reopen re-refine, the speculative gate) goes
+  // through, so applyRefineAttacks never gets skipped on any path.
+  async refineAndLedger(
+    bs              ,
+    facts                ,
+    directive        ,
+    passTag        ,
+    fileKey        ,
+    phaseName        ,
+  )                         {
+    const r = await runRefine(bs, facts, directive, passTag);
+    this.files[fileKey] = r.artifact;
+    this.applyRefineAttacks(bs, facts, r.refined, phaseName);
+    return r.cleanReports;
+  }
+
+  // JUDGE RETRACTION — a judge naming real (non-hallucinated) ledger ids discredits them: retracted,
+  // statuses recomputed, the computed confidence recomputed (logged — the next judge/synthesiser call
+  // reads it fresh off the mutated ledger regardless). When a retracted claim backed a derivation input, ONE
+  // bounded rerunner call refreshes lastRun (bounded naturally by the MAX_JUDGE_PASSES loop this rides
+  // inside — never a second call for the same judgement). No real id named → nothing (degrade-to-null).
+  async applyJudgeRetractions(
+    bs              ,
+    judgement                 ,
+    phaseName        ,
+  )                {
+    const ids = (judgement && judgement.retractClaimIds) || [];
+    const real = ids.filter((id) => bs.claims.some((c) => c.id === id && !c.retracted));
+    if (!real.length) return;
+    for (const id of real) {
+      const c = bs.claims.find((c) => c.id === id);
+      if (c) c.retracted = true;
+    }
+    for (const c of bs.claims)
+      if (!c.retracted)
+        c.status = claimStatus(c, bs.claims, bs.nullAttacks, {
+          SETTLED_MIN_CLUSTERS: CONFIG.SETTLED_MIN_CLUSTERS,
+        });
+    const confidence = computedConfidence(
+      (bs.resultSoFar && bs.resultSoFar.keyClaimIds) || [],
+      bs.claims,
+    );
+    log(
+      '⚖ judge retracted claims: ' +
+        real.map((id) => 'c' + id).join(', ') +
+        ' · confidence now ' +
+        confidence,
+    );
+    const inputIds = new Set(
+      (bs.derivation ? bs.derivation.inputs : []).flatMap((i) => i.claimIds || []),
+    );
+    if (bs.derivation && real.some((id) => inputIds.has(id))) {
+      const run = await runRerunner(bs, phaseName);
+      if (run)
+        bs.derivation.lastRun = {
+          quantiles: run.quantiles,
+          sensitivity: run.sensitivity,
+          wave: bs.wave,
+        };
+    }
+  }
+
+  // SYNTHESISER FINISH (citation lint + confidence floor) — shared by the single-brainer finalize + the
+  // multi-brainer winner path. Lints [cN] markers against the ledger (strips + logs + counts the bogus
+  // ones), then applies the lower-only confidence floor (final = min(stated, computed) — the computed value
+  // can never RAISE it) and appends a note to the report when it lowered the stated confidence. Mutates
+  // bs.reportOk/citationsBogus/synthesiserOut and writes result.md; every RunResult/metrics field downstream
+  // reads bs.synthesiserOut, which now carries the floored `confidence` + linted `report` in place.
+  applyReportFinish(bs              , agg                  , label        )       {
+    bs.synthesiserOut = agg;
+    bs.reportOk = !!(agg && agg.report);
+    bs.citationsBogus = 0;
+    if (!bs.reportOk) {
+      log('✗ ' + label + ' FAILED — no report returned');
+      return;
+    }
+    const { report: linted, bogus } = lintCitations(agg .report, bs.claims);
+    bs.citationsBogus = bogus.length;
+    if (bogus.length)
+      log(
+        '⚠ ' +
+          label +
+          ' citation lint — stripped bogus id(s): ' +
+          bogus.map((id) => 'c' + id).join(', '),
+      );
+    const keyClaimIds = (bs.resultSoFar && bs.resultSoFar.keyClaimIds) || [];
+    const computed = computedConfidence(keyClaimIds, bs.claims);
+    const final = minConfidence(agg .confidence, computed);
+    let report = linted;
+    if (final !== agg .confidence)
+      report +=
+        '\n\n> Confidence adjusted from ' +
+        agg .confidence +
+        ' to ' +
+        final +
+        ' — computed from evidence topology (clusters × attack-survival).';
+    agg .report = report;
+    agg .confidence = final;
+    this.files['result.md'] = runArgsMd() + report;
+    log(
+      '· ' +
+        label +
+        ' DONE · confidence=' +
+        final +
+        ' · plan=' +
+        (agg .plan || []).length +
+        ' step(s) · openQ=' +
+        (agg .openQuestions || []).length +
+        (bogus.length ? ' · citationsBogus=' + bogus.length : ''),
+    );
+  }
+
+  // CHILD→PARENT CLAIM MERGE (v3 batch 4, multi-brainer only) — right before the winner (or root, if no
+  // gate ever passed) finalizes, fold every OTHER brainer's non-retracted claims into its ledger so a
+  // branch that did not win still contributes its evidence (run-forensics fix: a child's four-source
+  // [settled] finding used to flatten back to "in-flight" crossing branches). Dedupe by norm(quote)+
+  // norm(source) against the target's OWN ledger (a fact both branches independently found is one row, not
+  // two); new rows get fresh ids from the target's nextClaimId. Stances are DROPPED — a stance.target id is
+  // a claim id in the LOSER's ledger, which does not exist (or means something else) in the target's, so it
+  // cannot be remapped; re-cluster each merged claim through the target's OWN clusterOf/union-find via the
+  // SAME applyLineage helper ingestClaimSeeds uses, using the deterministic lineageKeyOf fallback (a merge
+  // never re-invokes the lineageClerk agent — a pure bookkeeping operation, not a fresh-evidence wave).
+  // nullAttacks always merge in, with claimIds remapped through the ids that survived the merge (topic-only
+  // [] for any that did not — a dupe or an id from a lane the loser never actually ledgered).
+  mergeChildClaims(target              , losers                )       {
+    const others = losers.filter((l) => l !== target);
+    if (!others.length) return;
+    for (const loser of others) {
+      const idMap = new Map                (); // loser claim id → target claim id, MERGED claims only
+      let dupes = 0;
+      const freshMerged          = [];
+      for (const c of loser.claims) {
+        if (c.retracted) continue;
+        const key = norm(c.quote) + '|' + norm(c.source);
+        const dupe = target.claims.find(
+          (t) => !t.retracted && norm(t.quote) + '|' + norm(t.source) === key,
+        );
+        if (dupe) {
+          dupes++;
+          continue;
+        }
+        const merged        = { ...c, id: target.nextClaimId++, cluster: -1, stance: undefined };
+        target.claims.push(merged);
+        freshMerged.push(merged);
+        idMap.set(c.id, merged.id);
+      }
+      if (freshMerged.length) {
+        const keyMap = new Map(freshMerged.map((m) => [m.id, [lineageKeyOf(m)].filter(Boolean)]));
+        this.applyLineage(target, freshMerged, keyMap);
+      }
+      for (const na of loser.nullAttacks)
+        target.nullAttacks.push({
+          ...na,
+          claimIds: na.claimIds
+            .map((id) => idMap.get(id))
+            .filter((id)               => id !== undefined),
+        });
+      log(
+        '⇄ merged ' +
+          freshMerged.length +
+          ' claims (+' +
+          loser.nullAttacks.length +
+          ' nullAttacks) from ' +
+          loser.name +
+          ' into ' +
+          target.name +
+          ' (' +
+          dupes +
+          ' dupes dropped)',
+      );
+    }
+    for (const c of target.claims)
+      if (!c.retracted)
+        c.status = claimStatus(c, target.claims, target.nullAttacks, {
+          SETTLED_MIN_CLUSTERS: CONFIG.SETTLED_MIN_CLUSTERS,
+        });
   }
 
   // Finalize (end-only). An opus INITIATOR names the load-bearing facts + the report focus → REFINEMENT: one sonnet REFINE pass per fact,
@@ -3664,17 +6018,19 @@ class ResearchReport {
     const { facts, synthFocus, artifact: initiatorMd } = await runInitiator(bs, topOpen);
     this.files[padIdx(bs.wave + 4) + '-initiator.md'] = initiatorMd;
 
-    // ── REFINEMENT — one REFINE agent per fact (parallel): adversarially fact-checks, returns the corrected solid claim ──
-    // a local writer keeps the refinement file (always the same key — re-refine overwrites) owned by the engine.
-    const writeRefinement = (r   
-                                  
-                       
-     )                => {
-      this.files[padIdx(bs.wave + 5) + '-refinement.md'] = r.artifact;
-      return r.cleanReports;
-    };
+    // ── REFINEMENT — one REFINE agent per fact (parallel): adversarially fact-checks, returns the corrected
+    // solid claim; refineAndLedger also folds each fact's counter-search outcome into the ledger (v3 batch 4)
+    // via applyRefineAttacks — the ONE call site every refine dispatch on this path goes through.
+    const refinementFileKey = padIdx(bs.wave + 5) + '-refinement.md';
     log('· finalize · refinement · ' + facts.length + ' fact(s) → refine · ' + refiner.tier);
-    let cleanReports = writeRefinement(await runRefine(bs, facts, '', ''));
+    let cleanReports = await this.refineAndLedger(
+      bs,
+      facts,
+      '',
+      '',
+      refinementFileKey,
+      CONFIG.PHASE.finalize,
+    );
     log('· finalize · refinement DONE · ' + cleanReports.length + ' hardened fact(s)');
 
     // ── JUDGE loop — terminal skeptic judges, then a bounded remediation loop fixes the single biggest problem and re-judges ──
@@ -3692,6 +6048,7 @@ class ResearchReport {
     const computeDirectives           = [];
     let judgement = foldComputeLimitation(await runJudge(bs, cleanReports, synthFocus, 0));
     if (judgement) judgeLog.push(judgement);
+    await this.applyJudgeRetractions(bs, judgement, CONFIG.PHASE.finalize);
     let pass = 0;
     while (
       judgement &&
@@ -3705,12 +6062,19 @@ class ResearchReport {
         // brain FINALIZE-COMPUTE — the brain (code-capable) derives the answer on the hardened facts, per the judge directive
         log('· finalize · judge pass ' + pass + ' → brain finalize-compute · ' + brainer.tier);
         const out = await runBrainerCompute(bs, cleanReports, directive, reason, pass);
-        if (out && out.resultSoFar) bs.resultSoFar = out.resultSoFar;
+        if (out && out.resultSoFar) this.adoptResultSoFar(bs, out.resultSoFar);
         computeDirectives.push(directive || '(derive the answer the goal needs)');
       } else if (!judgement.verificationSound) {
         // RE-REFINE — the judge flagged a mis-hardened / rubber-stamped fact; re-run refine with its directive
         log('· finalize · judge pass ' + pass + ' → re-refine the flagged fact(s)');
-        cleanReports = writeRefinement(await runRefine(bs, facts, directive, 'r' + pass + '-'));
+        cleanReports = await this.refineAndLedger(
+          bs,
+          facts,
+          directive,
+          'r' + pass + '-',
+          refinementFileKey,
+          CONFIG.PHASE.finalize,
+        );
       } else if (
         !judgement.goalMet &&
         judgement.reopenRabbitHoles &&
@@ -3719,7 +6083,14 @@ class ResearchReport {
         // CRAWL REOPEN (rare) — a real evidence/coverage gap; reopen the crawl on the judge's leads, then re-harden
         log('· finalize · judge pass ' + pass + ' → reopen the crawl on a real gap');
         await this.reopenCrawl(bs, judgement.reopenRabbitHoles, directive);
-        cleanReports = writeRefinement(await runRefine(bs, facts, directive, 'r' + pass + '-'));
+        cleanReports = await this.refineAndLedger(
+          bs,
+          facts,
+          directive,
+          'r' + pass + '-',
+          refinementFileKey,
+          CONFIG.PHASE.finalize,
+        );
       } else {
         log(
           '· finalize · judge pass ' +
@@ -3730,6 +6101,7 @@ class ResearchReport {
       }
       judgement = foldComputeLimitation(await runJudge(bs, cleanReports, synthFocus, pass));
       if (judgement) judgeLog.push(judgement);
+      await this.applyJudgeRetractions(bs, judgement, CONFIG.PHASE.finalize);
     }
 
     // JUDGE file — every pass: the four-flag verdict + reasoning + directive + any reopen
@@ -3776,34 +6148,23 @@ class ResearchReport {
         ((bs.resultSoFar && bs.resultSoFar.working) || '_none_') +
         '\n';
 
-    // ── SYNTHESISER — writes the END report (always) from the judged answer + the hardened facts ──
+    // ── SYNTHESISER — writes the END report (always) from the judged answer + the hardened facts; the
+    // citation-lint + confidence-floor finish (v3 batch 4) is shared with the multi-brainer winner path.
     const agg = await runSynthesiser(bs, cleanReports, synthFocus, topOpen);
-    const reportOk = !!(agg && agg.report);
-    if (reportOk) {
-      this.files['result.md'] = runArgsMd() + agg .report; // surface the launch args at the top of the deliverable
-      log(
-        '· finalize DONE · confidence=' +
-          agg .confidence +
-          ' · plan=' +
-          (agg .plan || []).length +
-          ' step(s) · openQ=' +
-          (agg .openQuestions || []).length,
-      );
-    } else {
-      log('✗ finalize FAILED — no report returned');
-    }
-    bs.synthesiserOut = agg;
-    bs.reportOk = reportOk;
+    this.applyReportFinish(bs, agg, 'finalize');
   }
 
   // metrics + _rabbitHoles.json + the crawl-tree render, then the final return shape.
   buildResult(bs              )            {
-    const { synthesiserOut, reportOk, rabbitHolesOut, coord, wave } = bs;
+    const { synthesiserOut, reportOk, rabbitHolesOut, coord } = bs;
+    // D — the real last wave, not `wave - 1` (which under-reported in multi-brainer mode: a child's `wave`
+    // field tracks the GLOBAL wave counter, not its own wave count).
+    const wavesRun = bs.waveLog.length ? bs.waveLog[bs.waveLog.length - 1].wave : 0;
 
     const metrics          = {
       mode: CONFIG.mode,
       dir: CONFIG.DIR,
-      wavesRun: wave - 1,
+      wavesRun,
       stopReason: bs.stopReason,
       scoutRabbitHoles: this.scoutRabbitHoles.length,
       prospectorVenues: this.highValueSources.length,
@@ -3814,8 +6175,20 @@ class ResearchReport {
       done: coord .stop.done,
       reportWritten: reportOk,
       confidence: reportOk ? synthesiserOut .confidence : null,
+      claimsTotal: bs.claims.length,
+      nullAttacksTotal: bs.nullAttacks.length,
+      chao: bs.chao,
+      citationsBogus: bs.citationsBogus,
     };
     log('■ RR DONE · ' + JSON.stringify(metrics));
+
+    // CLAIM LEDGER artifacts — the full machine-readable ledger, and a human-readable grouped view.
+    this.files['_claims.json'] = JSON.stringify(
+      { claims: bs.claims, nullAttacks: bs.nullAttacks, vocabulary: bs.vocabulary, chao: bs.chao },
+      null,
+      2,
+    );
+    this.files['_claims.md'] = claimsMd(bs);
 
     this.files['_rabbitHoles.json'] = JSON.stringify(
       {
@@ -3963,7 +6336,8 @@ class ResearchReport {
     }
     bs.coord = coord;
     applyDeltas(bs, coord, gw);
-    if (coord.resultSoFar) bs.resultSoFar = coord.resultSoFar;
+    this.applyDerivation(bs, coord);
+    if (coord.resultSoFar) this.adoptResultSoFar(bs, coord.resultSoFar);
     bs.resultLog.push({ wave: gw, resultSoFar: bs.resultSoFar });
     bs.lookupNext = resolveLookupNext(bs, coord, gw, laneCount);
     bs.topScores.push(
@@ -4001,9 +6375,47 @@ class ResearchReport {
     pursue(bs, toPursue);
     const tag = (bs.isRoot ? '' : bs.name + '-') + 'w' + gw;
     const schedule = await this.scheduleSources(bs, toPursue, tag, phaseName);
-    const raw = await runResearchers(bs, toPursue, schedule, tag, phaseName);
+    // the scribe checkpoint runs CONCURRENTLY with the lane readers (zero extra wall-clock cost); its
+    // content is the PREVIOUS wave's end state (bs is not yet mutated by this wave) — correct by construction.
+    const [raw] = await Promise.all([
+      runResearchers(bs, toPursue, schedule, tag, phaseName),
+      CONFIG.checkpoint
+        ? runScribe(
+            JSON.stringify({
+              wave: gw,
+              claims: bs.claims,
+              rabbitHoles: bs.rabbitHoles,
+              pursuedList: bs.pursuedList,
+              resultSoFar: bs.resultSoFar,
+              nullAttacks: bs.nullAttacks,
+            }),
+            CONFIG.DIR,
+            tag,
+            phaseName,
+          )
+        : Promise.resolve(false),
+    ]);
+    await this.ingestWave(bs, toPursue, raw, gw, phaseName); // v3: claim-ledger ingest (mutates raw's text fields + bs)
+    await this.maybeRerunDerivation(bs, gw, phaseName); // v3 STEERING: rerun the stored derivation iff dirty or an input claim changed
     const waveStarved = [...schedule.values()].every((s) => !s || !s.length);
     bs.starvedWaves = waveStarved ? bs.starvedWaves + 1 : 0;
+    // B6 — mirror runCrawl's early break: a scheduler-starved wave stops BEFORE findings/validator/brainer
+    // ever see it (there is nothing for them to read). Checked right here, not after the brainer dispatch below,
+    // so a starved wave never burns a brainer call it cannot do anything useful with.
+    if (bs.starvedWaves >= CONFIG.MAX_STARVED_WAVES) {
+      bs.status = 'drained';
+      bs.stopReason = 'scheduler-starved';
+      log(
+        '  · ' +
+          bs.name +
+          ' w' +
+          gw +
+          ' · scheduler-starved (' +
+          bs.starvedWaves +
+          ' consecutive empty waves) → drained',
+      );
+      return;
+    }
     const findings            = raw.map((r, i) => ({
       rabbitHole: toPursue[i].keyword,
       trail: trailOf(toPursue[i].path, toPursue[i].keyword),
@@ -4019,11 +6431,18 @@ class ResearchReport {
           rabbitHoles: r ? (r.rabbitHoles || []).map((l) => l.keyword) : [],
         }),
       );
+    const beforeAdd = bs.rabbitHoles.length; // D — honest newRabbitHoles count (was hardcoded 0)
     raw.forEach((r, i) => {
       if (!r) return;
       const par = [...(toPursue[i].path || []), toPursue[i].keyword];
       for (const l of r.rabbitHoles || [])
-        addRabbitHole(bs, { keyword: l.keyword, why: l.why, path: par, wave: gw });
+        addRabbitHole(bs, {
+          keyword: l.keyword,
+          why: l.why,
+          path: par,
+          wave: gw,
+          kind: l.kind ?? 'gap',
+        });
       for (const s of r.nextSources || [])
         addRabbitHole(bs, {
           keyword: s.why,
@@ -4031,8 +6450,10 @@ class ResearchReport {
           path: par,
           wave: gw,
           ref: s.ref,
+          kind: 'citation',
         });
     });
+    const newCount = bs.rabbitHoles.length - beforeAdd;
     const anyNull = raw.some((r) => !r);
     const anyThin = findings.some((f) => !f.summary || f.summary.length < CONFIG.VALIDATOR_THIN);
     if (anyNull || anyThin) {
@@ -4081,7 +6502,8 @@ class ResearchReport {
     }
     bs.coord = coord;
     applyDeltas(bs, coord, gw);
-    if (coord.resultSoFar) bs.resultSoFar = coord.resultSoFar;
+    this.applyDerivation(bs, coord);
+    if (coord.resultSoFar) this.adoptResultSoFar(bs, coord.resultSoFar);
     bs.resultLog.push({ wave: gw, resultSoFar: bs.resultSoFar });
     bs.lookupNext = isLastWave ? [] : resolveLookupNext(bs, coord, gw, laneCount);
     bs.topScores.push(
@@ -4090,7 +6512,7 @@ class ResearchReport {
     bs.waveLog.push({
       wave: gw,
       pursued: toPursue.map((p) => p.keyword),
-      newRabbitHoles: 0,
+      newRabbitHoles: newCount,
       rabbitHoles: bs.rabbitHoles.length,
       topScore: bs.topScores[bs.topScores.length - 1],
       done: coord.stop.done,
@@ -4100,6 +6522,11 @@ class ResearchReport {
       'brainer-' + (bs.isRoot ? '' : bs.name + '-') + 'w' + gw,
       waveMd(gw, coord, bs.lookupNext, findings, bs.rabbitHoles),
     );
+    // D — bestOpen kept honest every wave (was never set in this path) so metrics never report bestOpenScore:0
+    // while scored leads sit open — mirrors runCrawl's end-of-crawl computation, just refreshed per wave here.
+    bs.bestOpen = bs.rabbitHoles.length
+      ? Math.max(...bs.rabbitHoles.map((r) => lastScore(r) ?? 0))
+      : 0;
     log(
       '  · ' +
         bs.name +
@@ -4115,24 +6542,39 @@ class ResearchReport {
         coord.stop.done +
         (coord.stop.lost ? ' · LOST' : ''),
     );
+    // note: the scheduler-starved case is handled by the early return above (right after waveStarved is
+    // computed) — by the time this classification runs, bs.starvedWaves can no longer be over the cap.
     if (coord.stop.lost && !bs.isRoot) bs.status = 'lost';
     else if (isLastWave)
       bs.status = 'drained'; // the last wave: collect, do not re-gate
     else if (coord.stop.done) bs.status = 'done';
-    else if (bs.starvedWaves >= CONFIG.MAX_STARVED_WAVES) {
-      bs.status = 'drained';
-      bs.stopReason = 'scheduler-starved';
-    } else if (!bs.lookupNext.length) {
+    else if (!bs.lookupNext.length) {
       bs.status = 'drained';
       bs.stopReason = 'rabbithole-dry';
     } else if (CONFIG.mode === 'collect') {
-      const cs = bs.topScores.slice(1);
+      // a spawned child's plateau window starts at ITS OWN spawn point (topScoresBase), not the parent's
+      // history it inherited a clone of — root has topScoresBase=0 so this is slice(1), unchanged.
+      const cs = bs.topScores.slice(bs.topScoresBase + 1);
       if (cs.length >= CONFIG.PLATEAU_MIN_WAVES) {
         const peak = Math.max(...cs);
         const win = cs.slice(-CONFIG.PLATEAU_WINDOW);
         if (peak > 0 && win.every((s) => s <= peak * CONFIG.QUERY_PLATEAU)) {
-          bs.status = 'drained';
-          bs.stopReason = 'collect-dry-plateau';
+          // CHAO STOP ASSIST — see runCrawl's mirrored gate: a plateau alone does not drain the brainer when
+          // the coverage estimate says a lot remains unseen (no chao yet ⇒ the old plateau-only behavior).
+          if (bs.chao == null || bs.chao.coverage >= CONFIG.CHAO_COVERAGE_STOP) {
+            bs.status = 'drained';
+            bs.stopReason = 'collect-dry-plateau';
+          } else {
+            log(
+              '  · ' +
+                bs.name +
+                ' plateau but coverage ' +
+                bs.chao.coverage.toFixed(2) +
+                ' < ' +
+                CONFIG.CHAO_COVERAGE_STOP +
+                ' — continuing',
+            );
+          }
         }
       }
     }
@@ -4169,7 +6611,15 @@ class ResearchReport {
     const child = spawnBrainer(parent, { name, mandate: sp.mandate, trail });
     this.liveBrainers.push(child); // reserve the live slot synchronously (before the pickFirst await)
     if (branch) parent.rabbitHoles = parent.rabbitHoles.filter((r) => r.id !== branch .id); // delegate-and-release
-    log('  ✚ ' + parent.name + ' spawned ' + name + ' — ‹' + clip(sp.mandate, 60) + '›');
+    log(
+      '  ✚ ' +
+        parent.name +
+        ' spawned ' +
+        name +
+        ' — ‹' +
+        clip(sp.mandate, CONFIG.MANDATE_CLIP) +
+        '›',
+    );
     await this.pickFirst(child, [], gw, phaseName); // the child's initial pick, aimed by its mandate
   }
 
@@ -4191,9 +6641,16 @@ class ResearchReport {
     const topOpen = rabbitHolesOut.slice(0, CONFIG.FINALIZE_TOP_OPEN).map((f) => f.keyword);
     const { facts, synthFocus, artifact: initiatorMd } = await runInitiator(bs, topOpen);
     this.files[bs.name + '/initiator.md'] = initiatorMd;
-    const { cleanReports, artifact: refineMd } = await runRefine(bs, facts, '', '');
-    this.files[bs.name + '/refinement.md'] = refineMd;
+    const cleanReports = await this.refineAndLedger(
+      bs,
+      facts,
+      '',
+      '',
+      bs.name + '/refinement.md',
+      CONFIG.PHASE.finalize,
+    );
     const verdict = await runJudge(bs, cleanReports, synthFocus, 0);
+    await this.applyJudgeRetractions(bs, verdict, CONFIG.PHASE.finalize);
     bs.gateCache = { facts, synthFocus, cleanReports, topOpen };
     if (verdict)
       this.files[bs.name + '/judge.md'] =
@@ -4222,12 +6679,7 @@ class ResearchReport {
       return;
     }
     const agg = await runSynthesiser(bs, gc.cleanReports, gc.synthFocus, gc.topOpen);
-    bs.synthesiserOut = agg;
-    bs.reportOk = !!(agg && agg.report);
-    if (bs.reportOk) {
-      this.files['result.md'] = runArgsMd() + agg .report;
-      log('· winner ' + bs.name + ' finalized · confidence=' + agg .confidence);
-    } else log('✗ winner ' + bs.name + ' finalize FAILED — no report');
+    this.applyReportFinish(bs, agg, 'winner ' + bs.name);
   }
 
   // a non-winning brainer's wrapped-up state — preserved for later review (its living memory + gate verdict if any).
@@ -4265,7 +6717,7 @@ class ResearchReport {
           }
         : null,
       confidence: b.resultSoFar ? b.resultSoFar.confidence : null,
-      answer: b.resultSoFar ? clip(b.resultSoFar.answer || '', 400) : null,
+      answer: b.resultSoFar ? clip(b.resultSoFar.answer || '', CONFIG.TREE_ANSWER_CLIP) : null,
     }));
     this.files['_brainers.json'] = JSON.stringify(
       { winner: this.winner ? this.winner.name : null, brainers: recs },
@@ -4288,7 +6740,7 @@ class ResearchReport {
             (last ? '└─ ' : '├─ ') +
             c.name +
             mark +
-            (c.mandate ? '  ‹' + clip(c.mandate, 60) + '›' : ''),
+            (c.mandate ? '  ‹' + clip(c.mandate, CONFIG.MANDATE_CLIP) + '›' : ''),
         );
         walk(c.name, pre + (last ? '   ' : '│  '));
       });
@@ -4307,8 +6759,26 @@ class ResearchReport {
   // fires its gate without pausing the others; the first upheld gate wins → one last wave → drain.
   async runCrawlMulti(root              , scoutRabbitHoles            )                {
     this.writeScoutFile();
+    await this.ingestScoutClaims(root, this.scout ); // v3: seed the root's claim ledger from the scout's own claims/newTerms
     scoutRabbitHoles.forEach((l) =>
-      addRabbitHole(root, { keyword: l.keyword, why: l.why, path: l.path || [], wave: 0 }),
+      addRabbitHole(root, {
+        keyword: l.keyword,
+        why: l.why,
+        path: l.path || [],
+        wave: 0,
+        kind: l.kind,
+      }),
+    );
+    // v3: the scout's own followed-citation leads seed the store the same way a crawl wave's nextSources do.
+    (this.scout .nextSources || []).forEach((s) =>
+      addRabbitHole(root, {
+        keyword: s.why,
+        why: 'followed citation',
+        ref: s.ref,
+        kind: 'citation',
+        path: [],
+        wave: 0,
+      }),
     );
     const seedFindings            = this.scout .pages.map((p) => ({
       rabbitHole: p.url,
@@ -4385,6 +6855,7 @@ class ResearchReport {
                     keyword: l.keyword,
                     why: l.why,
                     score: CONFIG.INJECT_SCORE,
+                    kind: 'inject'         ,
                   })),
                 },
                 bs.wave,
@@ -4440,6 +6911,13 @@ class ResearchReport {
       // ── multi-brainer brainer tree (opt-in via maxParallelBrainers > 1) ──
       await this.runCrawlMulti(root, scoutRabbitHoles);
       const winner = this.winner;
+      const target = winner || root;
+      // CHILD→PARENT CLAIM MERGE — fold every OTHER brainer's evidence into the target's ledger BEFORE it
+      // finalizes, so a losing branch's findings still reach the report instead of vanishing with it.
+      this.mergeChildClaims(
+        target,
+        this.liveBrainers.filter((b) => b !== target),
+      );
       if (winner) await this.finalizeWinner(winner);
       else await this.runFinalize(root); // no gate ever passed → full finalize on the root
       for (const bs of this.liveBrainers) if (bs !== (winner || root)) this.writeLoserResult(bs);

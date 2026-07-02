@@ -1,7 +1,7 @@
 import { CONFIG } from '../../config.js';
 import { initiator } from './index.js';
 import { retryAgent } from '../../runtime.js';
-import { withPrompt } from '../../utils/index.js';
+import { ledgerLines, sensitivityRanking, withPrompt } from '../../utils/index.js';
 import type { BrainerState } from '../../brainerState.js';
 import type { FactToHarden, InitiatorOut } from '../../types/index.js';
 
@@ -16,6 +16,17 @@ export async function runInitiator(
       initiator.tier +
       ' · naming the facts to harden + the report focus',
   );
+  // v3 FINALIZE — the ledger digest (facts can bind to an existing claim via claimId) + the sensitivity
+  // ranking (once a derivation has a completed rerun) — pre-rendered so initiator/prompts.ts stays pure
+  // clause assembly.
+  const ledger = ledgerLines(bs, CONFIG.BRAINER_LEDGER_CAP);
+  const sensitivity =
+    bs.derivation && bs.derivation.lastRun
+      ? sensitivityRanking(
+          { inputs: bs.derivation.inputs, sensitivity: bs.derivation.lastRun.sensitivity },
+          bs.claims,
+        )
+      : '';
   const plan = await retryAgent<InitiatorOut>(
     initiator.buildPrompt({
       query: CONFIG.query,
@@ -25,6 +36,8 @@ export async function runInitiator(
       openRabbitHoles: topOpen,
       mode: CONFIG.mode,
       thinkerNote: CONFIG.THINKER_NOTE,
+      ledger,
+      sensitivity,
     }),
     {
       label: 'initiator',

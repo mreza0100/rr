@@ -10,6 +10,16 @@ import {
   waveMd,
   resultSoFarMd,
   laneCount,
+  scrubArtifacts,
+  claimsMd,
+  claimStatus,
+  lineageKeyOf,
+  chao1,
+  updateCalib,
+  topSensitivityInput,
+  computedConfidence,
+  minConfidence,
+  lintCitations,
 } from './utils/index.js';
 import { brainer, refiner } from './agents/index.js';
 import { runScout } from './agents/scout/run.js';
@@ -23,17 +33,25 @@ import { runRefine } from './agents/refiner/run.js';
 import { runJudge, COMPUTE_LIMIT_PREFIX } from './agents/judge/run.js';
 import { runSynthesiser } from './agents/synthesiser/run.js';
 import { runDebug } from './agents/debugAnalyst/run.js';
+import { runClaimAuditor } from './agents/claimAuditor/run.js';
+import { runLineageClerk } from './agents/lineageClerk/run.js';
+import { runRerunner } from './agents/rerunner/run.js';
+import { runScribe } from './agents/scribe/run.js';
 import {
   addRabbitHole,
   applyDeltas,
   resolveLookupNext,
   pursue,
   reopenRabbitHole,
+  nearDup,
 } from './store.js';
 import { BrainerState, spawnBrainer } from './brainerState.js';
 import type {
+  Claim,
+  ClaimSeed,
   CleanReport,
   Coord,
+  FactToHarden,
   Files,
   Finding,
   JudgeOut,
@@ -42,7 +60,9 @@ import type {
   RabbitHole,
   RabbitHoleOut,
   RabbitHoleSeed,
+  RefineOut,
   ReportOut,
+  ResearchOut,
   ResultLogEntry,
   ResultSoFar,
   RunResult,
@@ -50,6 +70,7 @@ import type {
   ScoutOut,
   SeedLead,
   StopReason,
+  TermSeed,
   ValidatorLogEntry,
   Venue,
   WaveLogEntry,
@@ -60,6 +81,19 @@ log('▶ RR START · mode=' + CONFIG.mode + ' · maxWave=' + CONFIG.maxWave + ' 
 // compact "Run arguments" record — the COMPLETE launch args (CONFIG.rawArgs), verbatim as received. Surfaced at the top of result.md
 // (and persisted as the `args` object in _rabbitHoles.json) so every output file records exactly how the run was launched.
 const runArgsMd = (): string => '> **Run arguments:** `' + JSON.stringify(CONFIG.rawArgs) + '`\n\n';
+
+// idsInText — recover the claim ids an attack-lane's own note/why text names (the brainer/reader reference
+// an existing claim the same way the ledger digest renders it: `c12`). Filters to ids that are actually in
+// the ledger — never fabricates one — so a nullAttack's claimIds degrades to [] when nothing is recoverable.
+const idsInText = (text: string, validIds: Set<number>): number[] => {
+  if (!text) return [];
+  const found: number[] = [];
+  for (const m of text.matchAll(/\bc(\d+)\b/g)) {
+    const id = Number(m[1]);
+    if (validIds.has(id) && !found.includes(id)) found.push(id);
+  }
+  return found;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ResearchReport — the pipeline backbone. Holds the crawl state; each phase method (runCrawl / runFinalize /
@@ -106,9 +140,321 @@ export class ResearchReport {
     return runScheduler(bs, picks, tag, phaseName);
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════════════════════════
+  // CLAIM-LEDGER INGESTION (v3) — the ONE shared pipeline both wave paths (runCrawl / runOneWave) and
+  // the wave-0 scout seed feed through. Order (mirrors V3-DESIGN.md "Per-wave engine order"): sanitize →
+  // claim ingest → audit ∥ lineage → status → attack bookkeeping → vocabulary → surprise → yieldCalib →
+  // chao. Every agent in the middle (claimAuditor/lineageClerk) degrades to a named null path — a dead
+  // agent leaves claims 'pending'/lineageKeyOf-clustered, never blocks the wave. Engine owns every
+  // mutation here; the agents' own run.ts stay pure request/response.
+  // ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+  // steps 2–4 — claim ingest (clip/dedupe/hallucinated-stance-filter) + the audited/lineage-clerked batch
+  // + status recompute. Shared by ingestWave (N real lanes) and ingestScoutClaims (one wave-0 pseudo-lane)
+  // so there is exactly ONE claim-ingest code path, not two. Returns the FRESH claims this call ledgered.
+  async ingestClaimSeeds(
+    bs: BrainerState,
+    lanes: { claims: ClaimSeed[] | undefined; lane: string }[],
+    wave: number,
+    tag: string,
+    phaseName: string,
+  ): Promise<Claim[]> {
+    // stance targets may only point at claims the reader's digest could actually have shown it — i.e. ones
+    // that existed BEFORE this call started, never a sibling claim minted later in this very batch.
+    const priorIds = new Set(bs.claims.map((c) => c.id));
+    const fresh: Claim[] = [];
+    for (const { claims, lane } of lanes) {
+      for (const c of claims || []) {
+        if (!c || !c.claim || !c.quote) continue; // drop: no claim text or no quote
+        const quote = clip(c.quote, CONFIG.QUOTE_MAX_CHARS);
+        const dedupeKey = norm(quote) + '|' + norm(c.source);
+        // dedupe: an identical quote+source already ledgered (from an earlier wave or another lane this wave)
+        if (bs.claims.some((e) => norm(e.quote) + '|' + norm(e.source) === dedupeKey)) continue;
+        const stance = c.stance && priorIds.has(c.stance.target) ? c.stance : undefined; // hallucinated-id filter
+        const claim: Claim = {
+          id: bs.nextClaimId++,
+          claim: c.claim,
+          value: c.value,
+          quote,
+          source: c.source,
+          cachePath: c.cachePath,
+          entities: c.entities,
+          cluster: -1, // resolved below (applyLineage) — never left unset
+          audit: c.cachePath ? 'pending' : 'unpinned',
+          status: 'tentative',
+          stance,
+          attacksSurvived: 0,
+          retracted: false,
+          wave,
+          lane,
+        };
+        bs.claims.push(claim);
+        fresh.push(claim);
+      }
+    }
+    if (fresh.length) {
+      // bs.clusterOf's OWN keys are the canonical "known keys" list — one structure, never a second copy.
+      const knownKeys = Object.keys(bs.clusterOf);
+      const [auditMap, lineageMap] = await Promise.all([
+        runClaimAuditor(bs, fresh, tag, phaseName),
+        runLineageClerk(bs, fresh, knownKeys, tag, phaseName),
+      ]);
+      for (const c of fresh) {
+        const v = auditMap.get(c.id);
+        if (v) c.audit = v.verdict; // a dead auditor leaves it 'pending' (unpinned downstream) — never guessed
+      }
+      const keyMap = new Map<number, string[]>();
+      for (const c of fresh)
+        keyMap.set(
+          c.id,
+          lineageMap.has(c.id) ? lineageMap.get(c.id)! : [lineageKeyOf(c)].filter(Boolean),
+        );
+      this.applyLineage(bs, fresh, keyMap);
+    }
+    // STATUS — recompute for every non-retracted claim (cheap at this scale); a new claim can change an
+    // OLDER claim's status too (a fresh supporter/attacker), so this is a full pass, not just `fresh`.
+    for (const c of bs.claims)
+      if (!c.retracted)
+        c.status = claimStatus(c, bs.claims, bs.nullAttacks, {
+          SETTLED_MIN_CLUSTERS: CONFIG.SETTLED_MIN_CLUSTERS,
+        });
+    return fresh;
+  }
+
+  // lineage clustering — a PERSISTENT, incremental union-find keyed by lineage KEY (bs.clusterOf), so a
+  // later claim can retroactively MERGE two previously-separate clusters (every existing member of the
+  // merged-away cluster is rewritten, both in bs.clusterOf and on every already-ledgered claim). Empty keys
+  // (the clerk + the lineageKeyOf fallback both resolved to nothing) → cluster 0, the shared unknown-lineage bucket.
+  applyLineage(bs: BrainerState, fresh: Claim[], keyMap: Map<number, string[]>): void {
+    for (const c of fresh) {
+      const keys = [...new Set((keyMap.get(c.id) || []).filter(Boolean))];
+      if (!keys.length) {
+        c.cluster = 0;
+        continue;
+      }
+      const existingIds = [
+        ...new Set(keys.map((k) => bs.clusterOf[k]).filter((v) => v !== undefined)),
+      ];
+      let target: number;
+      if (!existingIds.length) target = bs.nextClusterId++;
+      else {
+        target = Math.min(...existingIds);
+        const merge = new Set(existingIds.filter((id) => id !== target));
+        if (merge.size) {
+          for (const k of Object.keys(bs.clusterOf))
+            if (merge.has(bs.clusterOf[k])) bs.clusterOf[k] = target;
+          for (const other of bs.claims) if (merge.has(other.cluster)) other.cluster = target;
+        }
+      }
+      for (const k of keys) bs.clusterOf[k] = target;
+      c.cluster = target;
+    }
+  }
+
+  // step 6 — VOCABULARY: merge newTerms into bs.vocabulary by norm(term); a repeat bumps `uses` and keeps
+  // the FIRST gloss (never overwritten by a later, possibly thinner, one).
+  mergeVocabulary(bs: BrainerState, terms: TermSeed[] | undefined): void {
+    for (const t of terms || []) {
+      if (!t || !t.term) continue;
+      const key = norm(t.term);
+      const existing = bs.vocabulary.find((v) => norm(v.term) === key);
+      if (existing) existing.uses++;
+      else bs.vocabulary.push({ term: t.term, gloss: t.gloss, uses: 1 });
+    }
+  }
+
+  // step 9 — CHAO (collect mode only): group non-retracted claims by near-dup of norm(claim) (the store's
+  // OWN Jaccard near-dup — one definition, reused, never a second copy); abundance = distinct sources/group.
+  updateChao(bs: BrainerState): void {
+    const active = bs.claims.filter((c) => !c.retracted);
+    const groups: Claim[][] = [];
+    for (const c of active) {
+      const g = groups.find((g) => nearDup(c.claim, g[0].claim));
+      if (g) g.push(c);
+      else groups.push([c]);
+    }
+    bs.chao = chao1(groups.map((g) => ({ sources: new Set(g.map((m) => norm(m.source))).size })));
+  }
+
+  // the ONE shared per-wave ingest step — called from BOTH runCrawl and runOneWave immediately after
+  // runResearchers, replacing nothing in the existing validator/brainer flow. `raw`/its ClaimSeeds are
+  // MUTATED in place (scrub + the surprise append) so the caller's existing `findings = raw.map(...)`
+  // construction picks up the scrubbed/annotated text with no change to that code.
+  async ingestWave(
+    bs: BrainerState,
+    toPursue: RabbitHole[],
+    raw: (ResearchOut | null)[],
+    wave: number,
+    phaseName: string,
+  ): Promise<void> {
+    const tag = (bs.isRoot ? '' : bs.name + '-') + 'w' + wave;
+    // 1 — SANITIZE: strip structured-output/tool-call leakage from every reader-returned text field
+    // (quotes are scrubbed BEFORE the auditor ever sees them).
+    for (const r of raw) {
+      if (!r) continue;
+      r.summary = scrubArtifacts(r.summary);
+      for (const c of r.claims || []) {
+        c.claim = scrubArtifacts(c.claim);
+        c.quote = scrubArtifacts(c.quote);
+      }
+    }
+    // 2–4 — claim ingest + audit ∥ lineage + status (shared with the scout seed). Snapshot every claim's
+    // status BEFORE the ingest so the diff below can tell the derivation-rerun test (D2) which ids actually
+    // moved this wave — added, or flipped status (e.g. an attack just landed) — not just "the ledger grew".
+    const beforeStatus = new Map(bs.claims.map((c) => [c.id, c.status]));
+    const lanes = toPursue.map((p, i) => ({ claims: raw[i]?.claims, lane: p.keyword }));
+    const fresh = await this.ingestClaimSeeds(bs, lanes, wave, tag, phaseName);
+    const changedIds = new Set<number>(fresh.map((c) => c.id));
+    for (const c of bs.claims) {
+      if (c.retracted) continue;
+      const prior = beforeStatus.get(c.id);
+      if (prior !== undefined && prior !== c.status) changedIds.add(c.id);
+    }
+    bs.lastChangedClaimIds = changedIds;
+    // 5 — ATTACK BOOKKEEPING: an 'attack'-kind lane that landed a counter-claim contests its target; one
+    // that landed NOTHING is a completed counter-search that found nothing — first-class state, not silence.
+    const validIds = new Set(bs.claims.map((c) => c.id));
+    toPursue.forEach((p, i) => {
+      if (p.kind !== 'attack') return;
+      const rawClaims = raw[i]?.claims || [];
+      const landedAnAttack = rawClaims.some((c) => c.stance && c.stance.kind === 'attacks');
+      if (landedAnAttack) {
+        for (const a of fresh.filter((c) => c.lane === p.keyword && c.stance?.kind === 'attacks')) {
+          const target = bs.claims.find((c) => c.id === a.stance!.target);
+          if (target) target.counter = a.claim; // status recompute (step 4, next wave) picks up 'contested'
+        }
+      } else {
+        const claimIds = idsInText((p.note || '') + ' ' + (p.why || ''), validIds);
+        bs.nullAttacks.push({
+          topic: p.keyword,
+          claimIds,
+          queries: [p.keyword],
+          wave,
+          phase: phaseName,
+        });
+        for (const id of claimIds) {
+          const t = bs.claims.find((c) => c.id === id);
+          if (t) t.attacksSurvived = (t.attacksSurvived || 0) + 1;
+        }
+      }
+    });
+    // 6 — VOCABULARY
+    for (const r of raw) if (r) this.mergeVocabulary(bs, r.newTerms);
+    // 7 — SURPRISE: fold into that lane's own finding summary — no schema change, the brainer just sees it.
+    raw.forEach((r, i) => {
+      if (r && r.surprise)
+        r.summary =
+          (r.summary || '') + '\n\n⚡ SURPRISE (lane «' + toPursue[i].keyword + '»): ' + r.surprise;
+    });
+    // 8 — YIELDCALIB: predicted from the lane's last score, realized from what it actually produced.
+    toPursue.forEach((p, i) => {
+      const kind = p.kind ?? 'origin';
+      const predicted = (lastScore(p) ?? CONFIG.CALIB_DEFAULT_SCORE) / 100;
+      const auditedPass = fresh.filter((c) => c.lane === p.keyword && c.audit === 'pass').length;
+      const freshLeads = (raw[i]?.rabbitHoles?.length || 0) + (raw[i]?.nextSources?.length || 0);
+      const realized = Math.min(
+        CONFIG.CALIB_REALIZED_MAX,
+        (auditedPass + CONFIG.CALIB_LEAD_WEIGHT * freshLeads) / CONFIG.CALIB_NORM,
+      );
+      bs.yieldCalib[kind] = updateCalib(
+        bs.yieldCalib,
+        kind,
+        predicted,
+        realized,
+        CONFIG.CALIB_ALPHA,
+      );
+    });
+    // 8b — VENUE YIELD: per pursued lane, tally each assigned venue's assigned/yielded count — a lane
+    // "yielded" when it landed ≥1 ledgered claim or ≥1 fresh lead. Flags a persistently-dry venue to the
+    // brainer (see utils venuesWithYieldWarn) without ever touching the prospector's own venue schema.
+    toPursue.forEach((p, i) => {
+      const yielded =
+        fresh.some((c) => c.lane === p.keyword) ||
+        (raw[i]?.rabbitHoles?.length || 0) + (raw[i]?.nextSources?.length || 0) > 0;
+      for (const src of p.sources || []) {
+        const s = bs.venueStats[src] || (bs.venueStats[src] = { assigned: 0, yielded: 0 });
+        s.assigned++;
+        if (yielded) s.yielded++;
+      }
+    });
+    // 9 — CHAO (collect mode only)
+    if (CONFIG.mode === 'collect') this.updateChao(bs);
+  }
+
+  // D1 — STORE the brainer's freshly-authored derivation delta (v3 STEERING). Engine owns the mutation:
+  // same code as already stored ⇒ keep the last good rerun (only the inputs metadata changed); new/changed
+  // code ⇒ reset lastRun to null (a fresh rerun is owed before the sensitivity numbers can be trusted
+  // again). Always dirties the derivation so maybeRerunDerivation's next check fires at least once.
+  applyDerivation(bs: BrainerState, coord: Coord): void {
+    const d = coord.derivation;
+    if (!CONFIG.compute || !d || !d.code) return;
+    const sameCode = !!(bs.derivation && bs.derivation.code === d.code);
+    bs.derivation = {
+      code: d.code,
+      inputs: d.inputs || [],
+      lastRun: sameCode ? bs.derivation!.lastRun : null,
+    };
+    bs.derivationDirty = true;
+  }
+
+  // D2 — RERUN the stored derivation when it is dirty (freshly authored/re-authored this wave) OR when a
+  // claim one of its inputs cites changed this wave (ingestWave's lastChangedClaimIds). A dead rerunner or a
+  // script error degrades to a stale flag — lastRun is kept, the brainer is told it is stale (see
+  // sensitivityClause), never blocked. Called right after ingestWave, before the validator gate.
+  async maybeRerunDerivation(bs: BrainerState, wave: number, phaseName: string): Promise<void> {
+    if (!CONFIG.compute || !bs.derivation) return;
+    const inputIds = new Set(bs.derivation.inputs.flatMap((i) => i.claimIds || []));
+    const inputsChanged = [...bs.lastChangedClaimIds].some((id) => inputIds.has(id));
+    if (!bs.derivationDirty && !inputsChanged) return;
+    const run = await runRerunner(bs, phaseName);
+    if (run) {
+      bs.derivation.lastRun = { quantiles: run.quantiles, sensitivity: run.sensitivity, wave };
+      bs.derivationDirty = false;
+      bs.derivationStale = false;
+      log(
+        '  · derivation rerun · p50=' +
+          (run.quantiles.p50 ?? '?') +
+          ' · top=' +
+          (topSensitivityInput(run.sensitivity) || '?'),
+      );
+    } else {
+      bs.derivationStale = true;
+      log('  · derivation rerun FAILED — lastRun kept, marked stale');
+    }
+  }
+
+  // ADOPT RESULT SO FAR (v3 batch 6) — the ONE call site every `bs.resultSoFar = coord.resultSoFar`-style
+  // assignment goes through. A degenerate wave (e.g. a brain-compute pass distracted by its derivation) can
+  // return an EMPTY keyClaimIds even though the prior resultSoFar carried a real one — adopting it verbatim
+  // would silently wipe the confidence floor's own input. Guard: when the incoming result carries no
+  // keyClaimIds but the prior one did, preserve the prior ids; a genuinely new non-empty set always replaces.
+  adoptResultSoFar(bs: BrainerState, rs: ResultSoFar): void {
+    const priorIds = bs.resultSoFar && bs.resultSoFar.keyClaimIds;
+    bs.resultSoFar =
+      (!rs.keyClaimIds || !rs.keyClaimIds.length) && priorIds && priorIds.length
+        ? { ...rs, keyClaimIds: priorIds }
+        : rs;
+  }
+
+  // SCOUT INGEST (wave 0) — the scout's own claims/newTerms flow through the SAME claim-ingest machinery
+  // (steps 2/3/4/6) as one pseudo-lane 'scout', kind 'seed'. No digest existed yet (scout claims never
+  // carry a stance) and there is no lane to attack/calibrate/chao yet — those steps are skipped outright.
+  async ingestScoutClaims(bs: BrainerState, scoutOut: ScoutOut): Promise<void> {
+    if (!(scoutOut.claims || []).length && !(scoutOut.newTerms || []).length) return;
+    await this.ingestClaimSeeds(
+      bs,
+      [{ claims: scoutOut.claims, lane: 'scout' }],
+      0,
+      'scout',
+      CONFIG.PHASE.scout,
+    );
+    this.mergeVocabulary(bs, scoutOut.newTerms);
+  }
+
   // Crawl: wave 0 = score the scout rabbit-holes; waves 1..N = pursue → research → re-coordinate until the brainer stops.
   async runCrawl(bs: BrainerState, scoutRabbitHoles: SeedLead[]): Promise<void> {
     const scoutOut = this.scout!;
+    await this.ingestScoutClaims(bs, scoutOut); // v3: seed the claim ledger from the scout's own claims/newTerms
 
     this.files['01-scout.md'] = withPrompt(
       'scout',
@@ -137,7 +483,25 @@ export class ResearchReport {
 
     // seed the open store with the scout rabbit-holes (UNSCORED — the brainer scores them this wave via rescore).
     scoutRabbitHoles.forEach((l) =>
-      addRabbitHole(bs, { keyword: l.keyword, why: l.why, path: l.path || [], wave: 0 }),
+      addRabbitHole(bs, {
+        keyword: l.keyword,
+        why: l.why,
+        path: l.path || [],
+        wave: 0,
+        kind: l.kind,
+      }),
+    );
+    // v3: the scout's own followed-citation leads seed the store the same way a crawl wave's nextSources do —
+    // never dropped on the floor just because there is no digest yet at wave 0.
+    (scoutOut.nextSources || []).forEach((s) =>
+      addRabbitHole(bs, {
+        keyword: s.why,
+        why: 'followed citation',
+        ref: s.ref,
+        kind: 'citation',
+        path: [],
+        wave: 0,
+      }),
     );
 
     const seedFindings: Finding[] = scoutOut.pages.map((p) => ({
@@ -157,7 +521,8 @@ export class ResearchReport {
       throw new Error('brainer died at wave 0');
     }
     applyDeltas(bs, coord, 0);
-    if (coord.resultSoFar) bs.resultSoFar = coord.resultSoFar;
+    this.applyDerivation(bs, coord);
+    if (coord.resultSoFar) this.adoptResultSoFar(bs, coord.resultSoFar);
     bs.resultLog.push({ wave: 0, resultSoFar: bs.resultSoFar });
     let lookupNext = resolveLookupNext(bs, coord, 0, laneCount);
     bs.topScores.push(lookupNext.length ? Math.max(...lookupNext.map((p) => p.score ?? 0)) : 0);
@@ -214,6 +579,7 @@ export class ResearchReport {
       lookupNext.length &&
       !dryStop
     ) {
+      bs.wave = wave; // keep bs.wave in step with the loop (the rerunner's label + lastRun.wave read it mid-wave)
       // PURSUE — move lookupNext into the pursued-archive (keeps id + scoreHistory + path) and out of the open store, so the brainer
       // re-scores a clean open-only set next wave.
       pursue(bs, lookupNext);
@@ -231,8 +597,30 @@ export class ResearchReport {
       // RESEARCH wave — the SCHEDULER discovers + sizes the sources for the wave's lanes, then code bin-packs
       // each lane and runs ONE sequential reader thread per lane (parallel across lanes); each carries its full TRAIL.
       const toPursue = lookupNext;
-      const schedule = await this.scheduleSources(bs, toPursue, 'w' + wave, CONFIG.PHASE.crawl);
-      const raw = await runResearchers(bs, toPursue, schedule, 'w' + wave, CONFIG.PHASE.crawl);
+      const tag = 'w' + wave;
+      const schedule = await this.scheduleSources(bs, toPursue, tag, CONFIG.PHASE.crawl);
+      // the scribe checkpoint runs CONCURRENTLY with the lane readers (zero extra wall-clock cost); its content
+      // is the PREVIOUS wave's end state (bs is not yet mutated by this wave) — correct by construction.
+      const [raw] = await Promise.all([
+        runResearchers(bs, toPursue, schedule, tag, CONFIG.PHASE.crawl),
+        CONFIG.checkpoint
+          ? runScribe(
+              JSON.stringify({
+                wave,
+                claims: bs.claims,
+                rabbitHoles: bs.rabbitHoles,
+                pursuedList: bs.pursuedList,
+                resultSoFar: bs.resultSoFar,
+                nullAttacks: bs.nullAttacks,
+              }),
+              CONFIG.DIR,
+              tag,
+              CONFIG.PHASE.crawl,
+            )
+          : Promise.resolve(false),
+      ]);
+      await this.ingestWave(bs, toPursue, raw, wave, CONFIG.PHASE.crawl); // v3: claim-ledger ingest (mutates raw's text fields + bs)
+      await this.maybeRerunDerivation(bs, wave, CONFIG.PHASE.crawl); // v3 STEERING: rerun the stored derivation iff dirty or an input claim changed
       // B6 — guard scheduler-DEATH starvation: a wave is "starved" when the scheduler returned NO usable sources at
       // all (an empty map, or every lane's source list empty). After MAX_STARVED_WAVES in a row, break with an
       // explicit stopReason instead of grinding to HARD_CAP with nothing to read. (An all-null wave whose schedule
@@ -275,6 +663,7 @@ export class ResearchReport {
               keyword: l.keyword,
               why: l.why,
               path: [...(toPursue[i].path || []), toPursue[i].keyword],
+              kind: l.kind ?? 'gap',
             }))
           : [],
       );
@@ -286,15 +675,23 @@ export class ResearchReport {
               why: 'followed citation',
               ref: s.ref,
               path: [...(toPursue[i].path || []), toPursue[i].keyword],
+              kind: 'citation' as const,
             }))
           : [],
       );
       const beforeAdd = bs.rabbitHoles.length;
       fresh.forEach((l) =>
-        addRabbitHole(bs, { keyword: l.keyword, why: l.why, path: l.path, wave }),
+        addRabbitHole(bs, { keyword: l.keyword, why: l.why, path: l.path, wave, kind: l.kind }),
       );
       freshSources.forEach((l) =>
-        addRabbitHole(bs, { keyword: l.keyword, why: l.why, path: l.path, wave, ref: l.ref }),
+        addRabbitHole(bs, {
+          keyword: l.keyword,
+          why: l.why,
+          path: l.path,
+          wave,
+          ref: l.ref,
+          kind: l.kind,
+        }),
       );
       const newCount = bs.rabbitHoles.length - beforeAdd;
       log(
@@ -384,7 +781,8 @@ export class ResearchReport {
       }
       coord = nextCoord;
       applyDeltas(bs, coord, wave);
-      if (coord.resultSoFar) bs.resultSoFar = coord.resultSoFar;
+      this.applyDerivation(bs, coord);
+      if (coord.resultSoFar) this.adoptResultSoFar(bs, coord.resultSoFar);
       bs.resultLog.push({ wave, resultSoFar: bs.resultSoFar });
       lookupNext = resolveLookupNext(bs, coord, wave, laneCount);
       bs.topScores.push(lookupNext.length ? Math.max(...lookupNext.map((p) => p.score ?? 0)) : 0);
@@ -442,18 +840,33 @@ export class ResearchReport {
         const peak = Math.max(...crawlScores);
         const window = crawlScores.slice(-CONFIG.PLATEAU_WINDOW);
         if (peak > 0 && window.every((s) => s <= peak * CONFIG.QUERY_PLATEAU)) {
-          dryStop = true;
-          log(
-            '  wave ' +
-              wave +
-              ' · collect DRY — top novelty plateaued (' +
-              window.join(',') +
-              ' ≤ ' +
-              CONFIG.QUERY_PLATEAU +
-              '×peak ' +
-              peak +
-              ') → stopping',
-          );
+          // CHAO STOP ASSIST — a plateau alone is not enough in collect mode when the coverage estimate says
+          // there is still a lot unseen: gate the dry-stop on coverage ≥ CHAO_COVERAGE_STOP (no chao yet ⇒ the
+          // old plateau-only behavior, degrade-to-null).
+          if (bs.chao == null || bs.chao.coverage >= CONFIG.CHAO_COVERAGE_STOP) {
+            dryStop = true;
+            log(
+              '  wave ' +
+                wave +
+                ' · collect DRY — top novelty plateaued (' +
+                window.join(',') +
+                ' ≤ ' +
+                CONFIG.QUERY_PLATEAU +
+                '×peak ' +
+                peak +
+                ') → stopping',
+            );
+          } else {
+            log(
+              '  wave ' +
+                wave +
+                ' · plateau but coverage ' +
+                bs.chao.coverage.toFixed(2) +
+                ' < ' +
+                CONFIG.CHAO_COVERAGE_STOP +
+                ' — continuing',
+            );
+          }
         }
       }
       wave++;
@@ -526,6 +939,7 @@ export class ResearchReport {
           path: ['⚖ judge'],
           score: CONFIG.INJECT_SCORE,
           wave: bs.wave,
+          kind: 'inject',
         });
         // steer the finalize lane: the judge's directive becomes the lane `note` (so the scheduler + reader get
         // the same WHAT-to-find steering the crawl lanes get); fall back to the lead's own `why` if no directive.
@@ -540,14 +954,286 @@ export class ResearchReport {
     pursue(bs, picks);
     const schedule = await this.scheduleSources(bs, picks, 'reopen', CONFIG.PHASE.finalize);
     const raw = await runResearchers(bs, picks, schedule, 'reopen', CONFIG.PHASE.finalize);
+    // v3 HARVEST (a v2 weak point: this used to discard almost everything the readers gathered) — claims/
+    // attacks/vocab flow into the ledger exactly as a crawl wave's do (mutates raw's text fields too, so the
+    // findings built below already carry the scrubbed/annotated summaries).
+    await this.ingestWave(bs, picks, raw, bs.wave, CONFIG.PHASE.finalize);
+    await this.maybeRerunDerivation(bs, bs.wave, CONFIG.PHASE.finalize); // v3: a reopened lane can change a derivation input too — mirror the two wave-loop call sites
     const findings: Finding[] = raw.map((r, i) => ({
       rabbitHole: picks[i].keyword,
       trail: trailOf(picks[i].path, picks[i].keyword),
       summary: r ? r.summary : '(researcher failed)',
     }));
+    // harvest fresh leads into the store too — same inheritance pattern as the crawl wave loop (never dropped
+    // on the floor: a judge-reopened lane that surfaces its own follow-ons used to lose them outright).
+    const fresh: SeedLead[] = raw.flatMap((r, i) =>
+      r && r.rabbitHoles
+        ? r.rabbitHoles.map((l) => ({
+            keyword: l.keyword,
+            why: l.why,
+            path: [...(picks[i].path || []), picks[i].keyword],
+            kind: l.kind ?? 'gap',
+          }))
+        : [],
+    );
+    const freshSources: SeedLead[] = raw.flatMap((r, i) =>
+      r && r.nextSources
+        ? r.nextSources.map((s) => ({
+            keyword: s.why,
+            why: 'followed citation',
+            ref: s.ref,
+            path: [...(picks[i].path || []), picks[i].keyword],
+            kind: 'citation' as const,
+          }))
+        : [],
+    );
+    fresh.forEach((l) =>
+      addRabbitHole(bs, {
+        keyword: l.keyword,
+        why: l.why,
+        path: l.path,
+        wave: bs.wave,
+        kind: l.kind,
+      }),
+    );
+    freshSources.forEach((l) =>
+      addRabbitHole(bs, {
+        keyword: l.keyword,
+        why: l.why,
+        path: l.path,
+        wave: bs.wave,
+        ref: l.ref,
+        kind: l.kind,
+      }),
+    );
     const coord = await runBrainer(bs, bs.wave, findings, CONFIG.PHASE.finalize);
-    if (coord && coord.resultSoFar) bs.resultSoFar = coord.resultSoFar;
+    if (coord) {
+      applyDeltas(bs, coord, bs.wave); // rename/drop/rescore/add — the coord's deltas, not just resultSoFar
+      this.applyDerivation(bs, coord);
+      if (coord.resultSoFar) this.adoptResultSoFar(bs, coord.resultSoFar);
+    }
     log('· finalize · judge reopen · folded ' + picks.length + ' lane(s) into the answer');
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════════════════════════
+  // FINALIZE LEDGER MUTATIONS (v3 batch 4) — the refiner/judge/synthesiser run.ts fns stay pure request/
+  // response; every ledger write lives here, engine-owned, mirroring the crawl-phase ingestWave discipline.
+  // ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+  // REFINE → LEDGER (attack-recording) — a fact bound to a claimId (the initiator named one) folds its
+  // refiner's counter-search outcome into that claim: counterFound sets a contested `counter` note (status
+  // recompute picks up `contested` — see utils claimStatus); !counterFound is a completed counter-search
+  // that found nothing — first-class nullAttack state, and the claim's attacksSurvived grows. A fact with
+  // no claimId, or a dead refiner (refined[i] null), never touches the ledger — exactly v2.
+  applyRefineAttacks(
+    bs: BrainerState,
+    facts: FactToHarden[],
+    refined: (RefineOut | null)[],
+    phaseName: string,
+  ): void {
+    facts.forEach((f, i) => {
+      if (!f.claimId) return;
+      const r = refined[i];
+      if (!r) return;
+      const claim = bs.claims.find((c) => c.id === f.claimId && !c.retracted);
+      if (!claim) return;
+      if (r.counterFound) {
+        claim.counter = r.counterNote || 'refiner found counter-evidence';
+      } else {
+        bs.nullAttacks.push({
+          topic: f.fact,
+          claimIds: [f.claimId],
+          queries: r.queriesTried || [],
+          wave: bs.wave,
+          phase: phaseName,
+        });
+        claim.attacksSurvived = (claim.attacksSurvived || 0) + 1;
+      }
+    });
+    for (const c of bs.claims)
+      if (!c.retracted)
+        c.status = claimStatus(c, bs.claims, bs.nullAttacks, {
+          SETTLED_MIN_CLUSTERS: CONFIG.SETTLED_MIN_CLUSTERS,
+        });
+  }
+
+  // runRefine + write the refinement file + fold its attack outcomes into the ledger — the ONE call site
+  // every refine dispatch (initial pass, judge re-refine, post-reopen re-refine, the speculative gate) goes
+  // through, so applyRefineAttacks never gets skipped on any path.
+  async refineAndLedger(
+    bs: BrainerState,
+    facts: FactToHarden[],
+    directive: string,
+    passTag: string,
+    fileKey: string,
+    phaseName: string,
+  ): Promise<CleanReport[]> {
+    const r = await runRefine(bs, facts, directive, passTag);
+    this.files[fileKey] = r.artifact;
+    this.applyRefineAttacks(bs, facts, r.refined, phaseName);
+    return r.cleanReports;
+  }
+
+  // JUDGE RETRACTION — a judge naming real (non-hallucinated) ledger ids discredits them: retracted,
+  // statuses recomputed, the computed confidence recomputed (logged — the next judge/synthesiser call
+  // reads it fresh off the mutated ledger regardless). When a retracted claim backed a derivation input, ONE
+  // bounded rerunner call refreshes lastRun (bounded naturally by the MAX_JUDGE_PASSES loop this rides
+  // inside — never a second call for the same judgement). No real id named → nothing (degrade-to-null).
+  async applyJudgeRetractions(
+    bs: BrainerState,
+    judgement: JudgeOut | null,
+    phaseName: string,
+  ): Promise<void> {
+    const ids = (judgement && judgement.retractClaimIds) || [];
+    const real = ids.filter((id) => bs.claims.some((c) => c.id === id && !c.retracted));
+    if (!real.length) return;
+    for (const id of real) {
+      const c = bs.claims.find((c) => c.id === id);
+      if (c) c.retracted = true;
+    }
+    for (const c of bs.claims)
+      if (!c.retracted)
+        c.status = claimStatus(c, bs.claims, bs.nullAttacks, {
+          SETTLED_MIN_CLUSTERS: CONFIG.SETTLED_MIN_CLUSTERS,
+        });
+    const confidence = computedConfidence(
+      (bs.resultSoFar && bs.resultSoFar.keyClaimIds) || [],
+      bs.claims,
+    );
+    log(
+      '⚖ judge retracted claims: ' +
+        real.map((id) => 'c' + id).join(', ') +
+        ' · confidence now ' +
+        confidence,
+    );
+    const inputIds = new Set(
+      (bs.derivation ? bs.derivation.inputs : []).flatMap((i) => i.claimIds || []),
+    );
+    if (bs.derivation && real.some((id) => inputIds.has(id))) {
+      const run = await runRerunner(bs, phaseName);
+      if (run)
+        bs.derivation.lastRun = {
+          quantiles: run.quantiles,
+          sensitivity: run.sensitivity,
+          wave: bs.wave,
+        };
+    }
+  }
+
+  // SYNTHESISER FINISH (citation lint + confidence floor) — shared by the single-brainer finalize + the
+  // multi-brainer winner path. Lints [cN] markers against the ledger (strips + logs + counts the bogus
+  // ones), then applies the lower-only confidence floor (final = min(stated, computed) — the computed value
+  // can never RAISE it) and appends a note to the report when it lowered the stated confidence. Mutates
+  // bs.reportOk/citationsBogus/synthesiserOut and writes result.md; every RunResult/metrics field downstream
+  // reads bs.synthesiserOut, which now carries the floored `confidence` + linted `report` in place.
+  applyReportFinish(bs: BrainerState, agg: ReportOut | null, label: string): void {
+    bs.synthesiserOut = agg;
+    bs.reportOk = !!(agg && agg.report);
+    bs.citationsBogus = 0;
+    if (!bs.reportOk) {
+      log('✗ ' + label + ' FAILED — no report returned');
+      return;
+    }
+    const { report: linted, bogus } = lintCitations(agg!.report, bs.claims);
+    bs.citationsBogus = bogus.length;
+    if (bogus.length)
+      log(
+        '⚠ ' +
+          label +
+          ' citation lint — stripped bogus id(s): ' +
+          bogus.map((id) => 'c' + id).join(', '),
+      );
+    const keyClaimIds = (bs.resultSoFar && bs.resultSoFar.keyClaimIds) || [];
+    const computed = computedConfidence(keyClaimIds, bs.claims);
+    const final = minConfidence(agg!.confidence, computed);
+    let report = linted;
+    if (final !== agg!.confidence)
+      report +=
+        '\n\n> Confidence adjusted from ' +
+        agg!.confidence +
+        ' to ' +
+        final +
+        ' — computed from evidence topology (clusters × attack-survival).';
+    agg!.report = report;
+    agg!.confidence = final;
+    this.files['result.md'] = runArgsMd() + report;
+    log(
+      '· ' +
+        label +
+        ' DONE · confidence=' +
+        final +
+        ' · plan=' +
+        (agg!.plan || []).length +
+        ' step(s) · openQ=' +
+        (agg!.openQuestions || []).length +
+        (bogus.length ? ' · citationsBogus=' + bogus.length : ''),
+    );
+  }
+
+  // CHILD→PARENT CLAIM MERGE (v3 batch 4, multi-brainer only) — right before the winner (or root, if no
+  // gate ever passed) finalizes, fold every OTHER brainer's non-retracted claims into its ledger so a
+  // branch that did not win still contributes its evidence (run-forensics fix: a child's four-source
+  // [settled] finding used to flatten back to "in-flight" crossing branches). Dedupe by norm(quote)+
+  // norm(source) against the target's OWN ledger (a fact both branches independently found is one row, not
+  // two); new rows get fresh ids from the target's nextClaimId. Stances are DROPPED — a stance.target id is
+  // a claim id in the LOSER's ledger, which does not exist (or means something else) in the target's, so it
+  // cannot be remapped; re-cluster each merged claim through the target's OWN clusterOf/union-find via the
+  // SAME applyLineage helper ingestClaimSeeds uses, using the deterministic lineageKeyOf fallback (a merge
+  // never re-invokes the lineageClerk agent — a pure bookkeeping operation, not a fresh-evidence wave).
+  // nullAttacks always merge in, with claimIds remapped through the ids that survived the merge (topic-only
+  // [] for any that did not — a dupe or an id from a lane the loser never actually ledgered).
+  mergeChildClaims(target: BrainerState, losers: BrainerState[]): void {
+    const others = losers.filter((l) => l !== target);
+    if (!others.length) return;
+    for (const loser of others) {
+      const idMap = new Map<number, number>(); // loser claim id → target claim id, MERGED claims only
+      let dupes = 0;
+      const freshMerged: Claim[] = [];
+      for (const c of loser.claims) {
+        if (c.retracted) continue;
+        const key = norm(c.quote) + '|' + norm(c.source);
+        const dupe = target.claims.find(
+          (t) => !t.retracted && norm(t.quote) + '|' + norm(t.source) === key,
+        );
+        if (dupe) {
+          dupes++;
+          continue;
+        }
+        const merged: Claim = { ...c, id: target.nextClaimId++, cluster: -1, stance: undefined };
+        target.claims.push(merged);
+        freshMerged.push(merged);
+        idMap.set(c.id, merged.id);
+      }
+      if (freshMerged.length) {
+        const keyMap = new Map(freshMerged.map((m) => [m.id, [lineageKeyOf(m)].filter(Boolean)]));
+        this.applyLineage(target, freshMerged, keyMap);
+      }
+      for (const na of loser.nullAttacks)
+        target.nullAttacks.push({
+          ...na,
+          claimIds: na.claimIds
+            .map((id) => idMap.get(id))
+            .filter((id): id is number => id !== undefined),
+        });
+      log(
+        '⇄ merged ' +
+          freshMerged.length +
+          ' claims (+' +
+          loser.nullAttacks.length +
+          ' nullAttacks) from ' +
+          loser.name +
+          ' into ' +
+          target.name +
+          ' (' +
+          dupes +
+          ' dupes dropped)',
+      );
+    }
+    for (const c of target.claims)
+      if (!c.retracted)
+        c.status = claimStatus(c, target.claims, target.nullAttacks, {
+          SETTLED_MIN_CLUSTERS: CONFIG.SETTLED_MIN_CLUSTERS,
+        });
   }
 
   // Finalize (end-only). An opus INITIATOR names the load-bearing facts + the report focus → REFINEMENT: one sonnet REFINE pass per fact,
@@ -573,17 +1259,19 @@ export class ResearchReport {
     const { facts, synthFocus, artifact: initiatorMd } = await runInitiator(bs, topOpen);
     this.files[padIdx(bs.wave + 4) + '-initiator.md'] = initiatorMd;
 
-    // ── REFINEMENT — one REFINE agent per fact (parallel): adversarially fact-checks, returns the corrected solid claim ──
-    // a local writer keeps the refinement file (always the same key — re-refine overwrites) owned by the engine.
-    const writeRefinement = (r: {
-      cleanReports: CleanReport[];
-      artifact: string;
-    }): CleanReport[] => {
-      this.files[padIdx(bs.wave + 5) + '-refinement.md'] = r.artifact;
-      return r.cleanReports;
-    };
+    // ── REFINEMENT — one REFINE agent per fact (parallel): adversarially fact-checks, returns the corrected
+    // solid claim; refineAndLedger also folds each fact's counter-search outcome into the ledger (v3 batch 4)
+    // via applyRefineAttacks — the ONE call site every refine dispatch on this path goes through.
+    const refinementFileKey = padIdx(bs.wave + 5) + '-refinement.md';
     log('· finalize · refinement · ' + facts.length + ' fact(s) → refine · ' + refiner.tier);
-    let cleanReports = writeRefinement(await runRefine(bs, facts, '', ''));
+    let cleanReports = await this.refineAndLedger(
+      bs,
+      facts,
+      '',
+      '',
+      refinementFileKey,
+      CONFIG.PHASE.finalize,
+    );
     log('· finalize · refinement DONE · ' + cleanReports.length + ' hardened fact(s)');
 
     // ── JUDGE loop — terminal skeptic judges, then a bounded remediation loop fixes the single biggest problem and re-judges ──
@@ -601,6 +1289,7 @@ export class ResearchReport {
     const computeDirectives: string[] = [];
     let judgement = foldComputeLimitation(await runJudge(bs, cleanReports, synthFocus, 0));
     if (judgement) judgeLog.push(judgement);
+    await this.applyJudgeRetractions(bs, judgement, CONFIG.PHASE.finalize);
     let pass = 0;
     while (
       judgement &&
@@ -614,12 +1303,19 @@ export class ResearchReport {
         // brain FINALIZE-COMPUTE — the brain (code-capable) derives the answer on the hardened facts, per the judge directive
         log('· finalize · judge pass ' + pass + ' → brain finalize-compute · ' + brainer.tier);
         const out = await runBrainerCompute(bs, cleanReports, directive, reason, pass);
-        if (out && out.resultSoFar) bs.resultSoFar = out.resultSoFar;
+        if (out && out.resultSoFar) this.adoptResultSoFar(bs, out.resultSoFar);
         computeDirectives.push(directive || '(derive the answer the goal needs)');
       } else if (!judgement.verificationSound) {
         // RE-REFINE — the judge flagged a mis-hardened / rubber-stamped fact; re-run refine with its directive
         log('· finalize · judge pass ' + pass + ' → re-refine the flagged fact(s)');
-        cleanReports = writeRefinement(await runRefine(bs, facts, directive, 'r' + pass + '-'));
+        cleanReports = await this.refineAndLedger(
+          bs,
+          facts,
+          directive,
+          'r' + pass + '-',
+          refinementFileKey,
+          CONFIG.PHASE.finalize,
+        );
       } else if (
         !judgement.goalMet &&
         judgement.reopenRabbitHoles &&
@@ -628,7 +1324,14 @@ export class ResearchReport {
         // CRAWL REOPEN (rare) — a real evidence/coverage gap; reopen the crawl on the judge's leads, then re-harden
         log('· finalize · judge pass ' + pass + ' → reopen the crawl on a real gap');
         await this.reopenCrawl(bs, judgement.reopenRabbitHoles, directive);
-        cleanReports = writeRefinement(await runRefine(bs, facts, directive, 'r' + pass + '-'));
+        cleanReports = await this.refineAndLedger(
+          bs,
+          facts,
+          directive,
+          'r' + pass + '-',
+          refinementFileKey,
+          CONFIG.PHASE.finalize,
+        );
       } else {
         log(
           '· finalize · judge pass ' +
@@ -639,6 +1342,7 @@ export class ResearchReport {
       }
       judgement = foldComputeLimitation(await runJudge(bs, cleanReports, synthFocus, pass));
       if (judgement) judgeLog.push(judgement);
+      await this.applyJudgeRetractions(bs, judgement, CONFIG.PHASE.finalize);
     }
 
     // JUDGE file — every pass: the four-flag verdict + reasoning + directive + any reopen
@@ -685,34 +1389,23 @@ export class ResearchReport {
         ((bs.resultSoFar && bs.resultSoFar.working) || '_none_') +
         '\n';
 
-    // ── SYNTHESISER — writes the END report (always) from the judged answer + the hardened facts ──
+    // ── SYNTHESISER — writes the END report (always) from the judged answer + the hardened facts; the
+    // citation-lint + confidence-floor finish (v3 batch 4) is shared with the multi-brainer winner path.
     const agg = await runSynthesiser(bs, cleanReports, synthFocus, topOpen);
-    const reportOk = !!(agg && agg.report);
-    if (reportOk) {
-      this.files['result.md'] = runArgsMd() + agg!.report; // surface the launch args at the top of the deliverable
-      log(
-        '· finalize DONE · confidence=' +
-          agg!.confidence +
-          ' · plan=' +
-          (agg!.plan || []).length +
-          ' step(s) · openQ=' +
-          (agg!.openQuestions || []).length,
-      );
-    } else {
-      log('✗ finalize FAILED — no report returned');
-    }
-    bs.synthesiserOut = agg;
-    bs.reportOk = reportOk;
+    this.applyReportFinish(bs, agg, 'finalize');
   }
 
   // metrics + _rabbitHoles.json + the crawl-tree render, then the final return shape.
   buildResult(bs: BrainerState): RunResult {
-    const { synthesiserOut, reportOk, rabbitHolesOut, coord, wave } = bs;
+    const { synthesiserOut, reportOk, rabbitHolesOut, coord } = bs;
+    // D — the real last wave, not `wave - 1` (which under-reported in multi-brainer mode: a child's `wave`
+    // field tracks the GLOBAL wave counter, not its own wave count).
+    const wavesRun = bs.waveLog.length ? bs.waveLog[bs.waveLog.length - 1].wave : 0;
 
     const metrics: Metrics = {
       mode: CONFIG.mode,
       dir: CONFIG.DIR,
-      wavesRun: wave - 1,
+      wavesRun,
       stopReason: bs.stopReason,
       scoutRabbitHoles: this.scoutRabbitHoles.length,
       prospectorVenues: this.highValueSources.length,
@@ -723,8 +1416,20 @@ export class ResearchReport {
       done: coord!.stop.done,
       reportWritten: reportOk,
       confidence: reportOk ? synthesiserOut!.confidence : null,
+      claimsTotal: bs.claims.length,
+      nullAttacksTotal: bs.nullAttacks.length,
+      chao: bs.chao,
+      citationsBogus: bs.citationsBogus,
     };
     log('■ RR DONE · ' + JSON.stringify(metrics));
+
+    // CLAIM LEDGER artifacts — the full machine-readable ledger, and a human-readable grouped view.
+    this.files['_claims.json'] = JSON.stringify(
+      { claims: bs.claims, nullAttacks: bs.nullAttacks, vocabulary: bs.vocabulary, chao: bs.chao },
+      null,
+      2,
+    );
+    this.files['_claims.md'] = claimsMd(bs);
 
     this.files['_rabbitHoles.json'] = JSON.stringify(
       {
@@ -872,7 +1577,8 @@ export class ResearchReport {
     }
     bs.coord = coord;
     applyDeltas(bs, coord, gw);
-    if (coord.resultSoFar) bs.resultSoFar = coord.resultSoFar;
+    this.applyDerivation(bs, coord);
+    if (coord.resultSoFar) this.adoptResultSoFar(bs, coord.resultSoFar);
     bs.resultLog.push({ wave: gw, resultSoFar: bs.resultSoFar });
     bs.lookupNext = resolveLookupNext(bs, coord, gw, laneCount);
     bs.topScores.push(
@@ -910,9 +1616,47 @@ export class ResearchReport {
     pursue(bs, toPursue);
     const tag = (bs.isRoot ? '' : bs.name + '-') + 'w' + gw;
     const schedule = await this.scheduleSources(bs, toPursue, tag, phaseName);
-    const raw = await runResearchers(bs, toPursue, schedule, tag, phaseName);
+    // the scribe checkpoint runs CONCURRENTLY with the lane readers (zero extra wall-clock cost); its
+    // content is the PREVIOUS wave's end state (bs is not yet mutated by this wave) — correct by construction.
+    const [raw] = await Promise.all([
+      runResearchers(bs, toPursue, schedule, tag, phaseName),
+      CONFIG.checkpoint
+        ? runScribe(
+            JSON.stringify({
+              wave: gw,
+              claims: bs.claims,
+              rabbitHoles: bs.rabbitHoles,
+              pursuedList: bs.pursuedList,
+              resultSoFar: bs.resultSoFar,
+              nullAttacks: bs.nullAttacks,
+            }),
+            CONFIG.DIR,
+            tag,
+            phaseName,
+          )
+        : Promise.resolve(false),
+    ]);
+    await this.ingestWave(bs, toPursue, raw, gw, phaseName); // v3: claim-ledger ingest (mutates raw's text fields + bs)
+    await this.maybeRerunDerivation(bs, gw, phaseName); // v3 STEERING: rerun the stored derivation iff dirty or an input claim changed
     const waveStarved = [...schedule.values()].every((s) => !s || !s.length);
     bs.starvedWaves = waveStarved ? bs.starvedWaves + 1 : 0;
+    // B6 — mirror runCrawl's early break: a scheduler-starved wave stops BEFORE findings/validator/brainer
+    // ever see it (there is nothing for them to read). Checked right here, not after the brainer dispatch below,
+    // so a starved wave never burns a brainer call it cannot do anything useful with.
+    if (bs.starvedWaves >= CONFIG.MAX_STARVED_WAVES) {
+      bs.status = 'drained';
+      bs.stopReason = 'scheduler-starved';
+      log(
+        '  · ' +
+          bs.name +
+          ' w' +
+          gw +
+          ' · scheduler-starved (' +
+          bs.starvedWaves +
+          ' consecutive empty waves) → drained',
+      );
+      return;
+    }
     const findings: Finding[] = raw.map((r, i) => ({
       rabbitHole: toPursue[i].keyword,
       trail: trailOf(toPursue[i].path, toPursue[i].keyword),
@@ -928,11 +1672,18 @@ export class ResearchReport {
           rabbitHoles: r ? (r.rabbitHoles || []).map((l) => l.keyword) : [],
         }),
       );
+    const beforeAdd = bs.rabbitHoles.length; // D — honest newRabbitHoles count (was hardcoded 0)
     raw.forEach((r, i) => {
       if (!r) return;
       const par = [...(toPursue[i].path || []), toPursue[i].keyword];
       for (const l of r.rabbitHoles || [])
-        addRabbitHole(bs, { keyword: l.keyword, why: l.why, path: par, wave: gw });
+        addRabbitHole(bs, {
+          keyword: l.keyword,
+          why: l.why,
+          path: par,
+          wave: gw,
+          kind: l.kind ?? 'gap',
+        });
       for (const s of r.nextSources || [])
         addRabbitHole(bs, {
           keyword: s.why,
@@ -940,8 +1691,10 @@ export class ResearchReport {
           path: par,
           wave: gw,
           ref: s.ref,
+          kind: 'citation',
         });
     });
+    const newCount = bs.rabbitHoles.length - beforeAdd;
     const anyNull = raw.some((r) => !r);
     const anyThin = findings.some((f) => !f.summary || f.summary.length < CONFIG.VALIDATOR_THIN);
     if (anyNull || anyThin) {
@@ -990,7 +1743,8 @@ export class ResearchReport {
     }
     bs.coord = coord;
     applyDeltas(bs, coord, gw);
-    if (coord.resultSoFar) bs.resultSoFar = coord.resultSoFar;
+    this.applyDerivation(bs, coord);
+    if (coord.resultSoFar) this.adoptResultSoFar(bs, coord.resultSoFar);
     bs.resultLog.push({ wave: gw, resultSoFar: bs.resultSoFar });
     bs.lookupNext = isLastWave ? [] : resolveLookupNext(bs, coord, gw, laneCount);
     bs.topScores.push(
@@ -999,7 +1753,7 @@ export class ResearchReport {
     bs.waveLog.push({
       wave: gw,
       pursued: toPursue.map((p) => p.keyword),
-      newRabbitHoles: 0,
+      newRabbitHoles: newCount,
       rabbitHoles: bs.rabbitHoles.length,
       topScore: bs.topScores[bs.topScores.length - 1],
       done: coord.stop.done,
@@ -1009,6 +1763,11 @@ export class ResearchReport {
       'brainer-' + (bs.isRoot ? '' : bs.name + '-') + 'w' + gw,
       waveMd(gw, coord, bs.lookupNext, findings, bs.rabbitHoles),
     );
+    // D — bestOpen kept honest every wave (was never set in this path) so metrics never report bestOpenScore:0
+    // while scored leads sit open — mirrors runCrawl's end-of-crawl computation, just refreshed per wave here.
+    bs.bestOpen = bs.rabbitHoles.length
+      ? Math.max(...bs.rabbitHoles.map((r) => lastScore(r) ?? 0))
+      : 0;
     log(
       '  · ' +
         bs.name +
@@ -1024,24 +1783,39 @@ export class ResearchReport {
         coord.stop.done +
         (coord.stop.lost ? ' · LOST' : ''),
     );
+    // note: the scheduler-starved case is handled by the early return above (right after waveStarved is
+    // computed) — by the time this classification runs, bs.starvedWaves can no longer be over the cap.
     if (coord.stop.lost && !bs.isRoot) bs.status = 'lost';
     else if (isLastWave)
       bs.status = 'drained'; // the last wave: collect, do not re-gate
     else if (coord.stop.done) bs.status = 'done';
-    else if (bs.starvedWaves >= CONFIG.MAX_STARVED_WAVES) {
-      bs.status = 'drained';
-      bs.stopReason = 'scheduler-starved';
-    } else if (!bs.lookupNext.length) {
+    else if (!bs.lookupNext.length) {
       bs.status = 'drained';
       bs.stopReason = 'rabbithole-dry';
     } else if (CONFIG.mode === 'collect') {
-      const cs = bs.topScores.slice(1);
+      // a spawned child's plateau window starts at ITS OWN spawn point (topScoresBase), not the parent's
+      // history it inherited a clone of — root has topScoresBase=0 so this is slice(1), unchanged.
+      const cs = bs.topScores.slice(bs.topScoresBase + 1);
       if (cs.length >= CONFIG.PLATEAU_MIN_WAVES) {
         const peak = Math.max(...cs);
         const win = cs.slice(-CONFIG.PLATEAU_WINDOW);
         if (peak > 0 && win.every((s) => s <= peak * CONFIG.QUERY_PLATEAU)) {
-          bs.status = 'drained';
-          bs.stopReason = 'collect-dry-plateau';
+          // CHAO STOP ASSIST — see runCrawl's mirrored gate: a plateau alone does not drain the brainer when
+          // the coverage estimate says a lot remains unseen (no chao yet ⇒ the old plateau-only behavior).
+          if (bs.chao == null || bs.chao.coverage >= CONFIG.CHAO_COVERAGE_STOP) {
+            bs.status = 'drained';
+            bs.stopReason = 'collect-dry-plateau';
+          } else {
+            log(
+              '  · ' +
+                bs.name +
+                ' plateau but coverage ' +
+                bs.chao.coverage.toFixed(2) +
+                ' < ' +
+                CONFIG.CHAO_COVERAGE_STOP +
+                ' — continuing',
+            );
+          }
         }
       }
     }
@@ -1078,7 +1852,15 @@ export class ResearchReport {
     const child = spawnBrainer(parent, { name, mandate: sp.mandate, trail });
     this.liveBrainers.push(child); // reserve the live slot synchronously (before the pickFirst await)
     if (branch) parent.rabbitHoles = parent.rabbitHoles.filter((r) => r.id !== branch!.id); // delegate-and-release
-    log('  ✚ ' + parent.name + ' spawned ' + name + ' — ‹' + clip(sp.mandate, 60) + '›');
+    log(
+      '  ✚ ' +
+        parent.name +
+        ' spawned ' +
+        name +
+        ' — ‹' +
+        clip(sp.mandate, CONFIG.MANDATE_CLIP) +
+        '›',
+    );
     await this.pickFirst(child, [], gw, phaseName); // the child's initial pick, aimed by its mandate
   }
 
@@ -1100,9 +1882,16 @@ export class ResearchReport {
     const topOpen = rabbitHolesOut.slice(0, CONFIG.FINALIZE_TOP_OPEN).map((f) => f.keyword);
     const { facts, synthFocus, artifact: initiatorMd } = await runInitiator(bs, topOpen);
     this.files[bs.name + '/initiator.md'] = initiatorMd;
-    const { cleanReports, artifact: refineMd } = await runRefine(bs, facts, '', '');
-    this.files[bs.name + '/refinement.md'] = refineMd;
+    const cleanReports = await this.refineAndLedger(
+      bs,
+      facts,
+      '',
+      '',
+      bs.name + '/refinement.md',
+      CONFIG.PHASE.finalize,
+    );
     const verdict = await runJudge(bs, cleanReports, synthFocus, 0);
+    await this.applyJudgeRetractions(bs, verdict, CONFIG.PHASE.finalize);
     bs.gateCache = { facts, synthFocus, cleanReports, topOpen };
     if (verdict)
       this.files[bs.name + '/judge.md'] =
@@ -1131,12 +1920,7 @@ export class ResearchReport {
       return;
     }
     const agg = await runSynthesiser(bs, gc.cleanReports, gc.synthFocus, gc.topOpen);
-    bs.synthesiserOut = agg;
-    bs.reportOk = !!(agg && agg.report);
-    if (bs.reportOk) {
-      this.files['result.md'] = runArgsMd() + agg!.report;
-      log('· winner ' + bs.name + ' finalized · confidence=' + agg!.confidence);
-    } else log('✗ winner ' + bs.name + ' finalize FAILED — no report');
+    this.applyReportFinish(bs, agg, 'winner ' + bs.name);
   }
 
   // a non-winning brainer's wrapped-up state — preserved for later review (its living memory + gate verdict if any).
@@ -1174,7 +1958,7 @@ export class ResearchReport {
           }
         : null,
       confidence: b.resultSoFar ? b.resultSoFar.confidence : null,
-      answer: b.resultSoFar ? clip(b.resultSoFar.answer || '', 400) : null,
+      answer: b.resultSoFar ? clip(b.resultSoFar.answer || '', CONFIG.TREE_ANSWER_CLIP) : null,
     }));
     this.files['_brainers.json'] = JSON.stringify(
       { winner: this.winner ? this.winner.name : null, brainers: recs },
@@ -1197,7 +1981,7 @@ export class ResearchReport {
             (last ? '└─ ' : '├─ ') +
             c.name +
             mark +
-            (c.mandate ? '  ‹' + clip(c.mandate, 60) + '›' : ''),
+            (c.mandate ? '  ‹' + clip(c.mandate, CONFIG.MANDATE_CLIP) + '›' : ''),
         );
         walk(c.name, pre + (last ? '   ' : '│  '));
       });
@@ -1216,8 +2000,26 @@ export class ResearchReport {
   // fires its gate without pausing the others; the first upheld gate wins → one last wave → drain.
   async runCrawlMulti(root: BrainerState, scoutRabbitHoles: SeedLead[]): Promise<void> {
     this.writeScoutFile();
+    await this.ingestScoutClaims(root, this.scout!); // v3: seed the root's claim ledger from the scout's own claims/newTerms
     scoutRabbitHoles.forEach((l) =>
-      addRabbitHole(root, { keyword: l.keyword, why: l.why, path: l.path || [], wave: 0 }),
+      addRabbitHole(root, {
+        keyword: l.keyword,
+        why: l.why,
+        path: l.path || [],
+        wave: 0,
+        kind: l.kind,
+      }),
+    );
+    // v3: the scout's own followed-citation leads seed the store the same way a crawl wave's nextSources do.
+    (this.scout!.nextSources || []).forEach((s) =>
+      addRabbitHole(root, {
+        keyword: s.why,
+        why: 'followed citation',
+        ref: s.ref,
+        kind: 'citation',
+        path: [],
+        wave: 0,
+      }),
     );
     const seedFindings: Finding[] = this.scout!.pages.map((p) => ({
       rabbitHole: p.url,
@@ -1294,6 +2096,7 @@ export class ResearchReport {
                     keyword: l.keyword,
                     why: l.why,
                     score: CONFIG.INJECT_SCORE,
+                    kind: 'inject' as const,
                   })),
                 },
                 bs.wave,
@@ -1349,6 +2152,13 @@ export class ResearchReport {
       // ── multi-brainer brainer tree (opt-in via maxParallelBrainers > 1) ──
       await this.runCrawlMulti(root, scoutRabbitHoles);
       const winner = this.winner;
+      const target = winner || root;
+      // CHILD→PARENT CLAIM MERGE — fold every OTHER brainer's evidence into the target's ledger BEFORE it
+      // finalizes, so a losing branch's findings still reach the report instead of vanishing with it.
+      this.mergeChildClaims(
+        target,
+        this.liveBrainers.filter((b) => b !== target),
+      );
       if (winner) await this.finalizeWinner(winner);
       else await this.runFinalize(root); // no gate ever passed → full finalize on the root
       for (const bs of this.liveBrainers) if (bs !== (winner || root)) this.writeLoserResult(bs);

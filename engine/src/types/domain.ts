@@ -1,9 +1,10 @@
 // Domain types — the crawl's data model, shared across the engine, store, utils, and agents.
+import type { YieldCalib } from './claims.js';
 
 // Run-level enums.
 export type Mode = 'goal' | 'collect';
 export type Tier = 'haiku' | 'sonnet' | 'opus';
-export type Effort = 'medium' | 'high' | 'xhigh';
+export type Effort = 'low' | 'medium' | 'high' | 'xhigh';
 export type Confidence = 'high' | 'medium' | 'low';
 
 // ── resultSoFar — the brainer's living memory, carried wave to wave ──
@@ -21,7 +22,8 @@ export interface Assumption {
 export interface ResultSoFar {
   answer: string;
   confidence: string;
-  evidence: Evidence[];
+  evidence?: Evidence[]; // DEPRECATED — the ledger (bs.claims) is now the source of truth; optional so a finalize agent still rendering it does not break
+  keyClaimIds: number[]; // the ledger claim ids the answer currently rests on (load-bearing) — the brainer's evidence pointer, REQUIRED now that the ledger is the source of truth
   assumptions?: Assumption[];
   resolved: string[];
   openGaps: string[];
@@ -34,6 +36,8 @@ export interface ScoreEntry {
   wave: number;
   score: number;
 }
+// a lead's origin channel — which footer/engine channel surfaced it (keys the yieldCalib table).
+export type LeadKind = 'seed' | 'gap' | 'citation' | 'attack' | 'entity' | 'origin' | 'inject';
 // an OPEN rabbit-hole in the id-keyed store.
 export interface RabbitHole {
   id: number;
@@ -45,17 +49,21 @@ export interface RabbitHole {
   sources?: string[];
   note?: string; // the brainer's research directive for this lane (what to find + ranked fallbacks); rides to the scheduler + reader as noteFromBrainer
   ref?: string; // a concrete fetch target (URL/DOI) this lane should fetch directly instead of WebSearching
+  kind?: LeadKind; // the lead's origin channel — keys the yieldCalib table
   failCount?: number; // how many times the validator has reopened this lane after a failed/thin return (capped)
 }
 // a footer-surfaced lead (scout / researcher) before it enters the store.
 export interface RabbitHoleSeed {
   keyword: string;
   why: string;
+  kind?: LeadKind; // the lead's origin channel — gap (source's own vocabulary), attack (counter-evidence), entity (a recurring author/venue/dataset)
 }
 // a follow-the-citation target the page-reader surfaces: a concrete URL/DOI the page points to, worth fetching directly.
 export interface NextSource {
   ref: string;
   why: string;
+  expect?: 'support' | 'attack' | 'neutral'; // whether following it is expected to bear on `target`, or is neutral
+  target?: number; // id of the existing claim this source is expected to support or attack
 }
 // a scout/fresh lead carrying its inherited trail, ready to seed the store.
 export interface SeedLead {
@@ -63,14 +71,16 @@ export interface SeedLead {
   why: string;
   path: string[];
   ref?: string; // when set, the lane fetches this URL/DOI directly (a followed citation)
+  kind?: LeadKind; // the lead's origin channel — gap/attack/entity (reader-surfaced), citation (followed link), seed (scout)
 }
 // a brainer-originated lead to PARK in the store (`add`).
 export interface ScoredLead {
   keyword: string;
   why: string;
   score: number;
+  kind?: LeadKind; // the lead's origin channel — gap/attack/entity/origin, when the brainer sets one
 }
-// arguments to addRabbitHole — a seed plus optional score/path/ref and the wave it is added on.
+// arguments to addRabbitHole — a seed plus optional score/path/ref/kind and the wave it is added on.
 export interface AddRabbitHoleArgs {
   keyword: string;
   why?: string;
@@ -78,6 +88,7 @@ export interface AddRabbitHoleArgs {
   score?: number;
   wave: number;
   ref?: string; // a concrete fetch target (URL/DOI) for the lane to fetch directly
+  kind?: LeadKind; // the lead's origin channel, stored on the new entry
 }
 
 // ── scout / prospector / researcher findings ──
@@ -138,6 +149,7 @@ export interface LookupItem {
   sources?: string[];
   note?: string; // the research directive for this lane — what to find + ranked fallbacks; steers BOTH the scheduler (source pick) and the reader (extraction); distinct from `why`
   ref?: string; // a concrete fetch target (URL/DOI) the lane fetches directly instead of WebSearching
+  kind?: LeadKind; // the lead's origin channel when ORIGINATING a lane — passed through to the store
 }
 export interface Stop {
   done: boolean;
@@ -158,6 +170,7 @@ export interface Spawn {
 export interface FactToHarden {
   fact: string;
   why: string;
+  claimId?: number; // the ledger claim this fact corresponds to, when the initiator names one — threads into the refiner (its pinned quote/source) and the engine's post-refine ledger mutation
 }
 // a hardened fact handed to the brain finalize-compute + judge + synthesiser.
 export interface CleanReport {
@@ -203,4 +216,5 @@ export interface StoreState {
   pursuedRefs: Set<string>; // norm(ref) of every pursued URL/DOI — so a followed citation is never fetched twice
   pursuedList: string[];
   pursuedArchive: RabbitHole[];
+  yieldCalib?: YieldCalib; // per-kind predicted-vs-realized lead-yield EMAs — resolveLookupNext's selection-only multiplier; absent ⇒ neutral (calibFactor defaults to 1)
 }

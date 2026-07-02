@@ -1,8 +1,12 @@
 import type {
+  ChaoStats,
+  Claim,
   CleanReport,
   Coord,
+  Derivation,
   FactToHarden,
   JudgeOut,
+  NullAttack,
   RabbitHole,
   RabbitHoleOut,
   ReportOut,
@@ -11,9 +15,11 @@ import type {
   ScoutOut,
   SeedLead,
   StopReason,
+  Term,
   ValidatorLogEntry,
   Venue,
   WaveLogEntry,
+  YieldCalib,
 } from './types/index.js';
 
 // the speculative GATE's reusable outputs — runGate hardens these once; finalizeWinner reuses them for the report.
@@ -87,9 +93,25 @@ export class BrainerState {
   pursuedList: string[];
   pursuedArchive: RabbitHole[];
 
+  // ── claim ledger (own — the v3 belief substrate) ──
+  claims: Claim[]; // append-only quote-pinned facts; JS assigns ids + computes cluster/status
+  nextClaimId: number; // the ledger's own auto-counter (mirrors nextId on the rabbit-hole store)
+  nullAttacks: NullAttack[]; // counter-searches that found nothing (challenged-and-survived state)
+  vocabulary: Term[]; // community terms of art collected from the pages
+  derivation: Derivation | null; // the stored seeded Python artifact + its latest rerun (null until authored)
+  derivationDirty: boolean; // a fresh derivation delta landed this wave — the next ingest forces a rerun regardless of which claims changed
+  derivationStale: boolean; // the last rerun attempt failed — lastRun is kept but the brainer is told it is stale; cleared on the next successful rerun
+  lastChangedClaimIds: Set<number>; // claim ids added/status-changed THIS wave (ingestWave) — drives the "did a derivation input change" rerun test
+  yieldCalib: YieldCalib; // per-kind predicted-vs-realized lead-yield EMAs
+  clusterOf: Record<string, number>; // lineage KEY → cluster id — the persistent union-find; its OWN keys ARE the "known keys" the lineageClerk is told about (one canonical structure, no second list)
+  nextClusterId: number; // next fresh cluster id to mint; 0 is reserved for the shared "unknown lineage" cluster
+  chao: ChaoStats | null; // collect-mode coverage estimate over the claim ledger; null until the first collect wave computes it
+  venueStats: Record<string, { assigned: number; yielded: number }>; // per-venue-source lane assignment/yield tally — flags a 0-yield venue to the brainer
+
   // ── crawl accumulators (own) ──
   resultSoFar: ResultSoFar | null; // this brainer's living memory
   topScores: number[]; // its own decay signal (plateau detection)
+  topScoresBase: number; // where THIS brainer's own waves start in topScores (a child slices its plateau window from its spawn point)
   waveLog: WaveLogEntry[];
   resultLog: ResultLogEntry[];
   validatorLog: ValidatorLogEntry[];
@@ -106,6 +128,7 @@ export class BrainerState {
   rabbitHolesOut: RabbitHoleOut[];
   synthesiserOut: ReportOut | null;
   reportOk: boolean;
+  citationsBogus: number; // synthesiser citation lint: [cN] markers stripped because the id was unknown/retracted
 
   constructor(g: RunGlobals, id: BrainerIdentity) {
     this.name = id.name;
@@ -127,9 +150,24 @@ export class BrainerState {
     this.pursuedRefs = new Set();
     this.pursuedList = [];
     this.pursuedArchive = [];
+    // own claim ledger
+    this.claims = [];
+    this.nextClaimId = 1;
+    this.nullAttacks = [];
+    this.vocabulary = [];
+    this.derivation = null;
+    this.derivationDirty = false;
+    this.derivationStale = false;
+    this.lastChangedClaimIds = new Set();
+    this.yieldCalib = {};
+    this.clusterOf = {};
+    this.nextClusterId = 1;
+    this.chao = null;
+    this.venueStats = {};
     // own accumulators
     this.resultSoFar = null;
     this.topScores = [];
+    this.topScoresBase = 0;
     this.waveLog = [];
     this.resultLog = [];
     this.validatorLog = [];
@@ -145,6 +183,7 @@ export class BrainerState {
     this.rabbitHolesOut = [];
     this.synthesiserOut = null;
     this.reportOk = false;
+    this.citationsBogus = 0;
   }
 
   get isRoot(): boolean {
@@ -176,6 +215,24 @@ export function spawnBrainer(
   child.pursuedRefs = new Set(parent.pursuedRefs);
   child.pursuedList = parent.pursuedList.slice();
   child.topScores = parent.topScores.slice();
+  // the claim ledger branches with the brainer — JSON-clone the plain-data stores; yieldCalib entries are
+  // never mutated in place (updateCalib is pure), so a shallow copy into a fresh object suffices. clusterOf
+  // is plain data too (string → number), so a shallow copy is rebuild-safe — no shared reference back to
+  // the parent's union-find.
+  child.claims = JSON.parse(JSON.stringify(parent.claims));
+  child.nextClaimId = parent.nextClaimId;
+  child.nullAttacks = JSON.parse(JSON.stringify(parent.nullAttacks));
+  child.vocabulary = JSON.parse(JSON.stringify(parent.vocabulary));
+  child.derivation = parent.derivation ? JSON.parse(JSON.stringify(parent.derivation)) : null;
+  child.derivationDirty = parent.derivationDirty;
+  child.derivationStale = parent.derivationStale;
+  child.lastChangedClaimIds = new Set(parent.lastChangedClaimIds);
+  child.yieldCalib = { ...parent.yieldCalib };
+  child.clusterOf = { ...parent.clusterOf };
+  child.nextClusterId = parent.nextClusterId;
+  child.chao = parent.chao ? { ...parent.chao } : null;
+  child.venueStats = JSON.parse(JSON.stringify(parent.venueStats));
+  child.topScoresBase = parent.topScores.length; // the child's plateau window starts at ITS spawn point
   // the parent AUTHORS the child's resultSoFar — a deep clone of its own living memory, the seed the mandate aims.
   child.resultSoFar = parent.resultSoFar ? JSON.parse(JSON.stringify(parent.resultSoFar)) : null;
   child.wave = parent.wave;

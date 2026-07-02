@@ -122,6 +122,83 @@ describe('Configs canonicalization', () => {
     expect(() => new Configs({ query: 'q', compute: 'maybe' })).toThrow(/boolean/);
     expect(() => new Configs({ query: 'q', compute: 2 })).toThrow(/boolean/);
   });
+  it('coerces the checkpoint arg STRICTLY, defaulting true (mirrors compute)', () => {
+    expect(new Configs({ query: 'q' }).checkpoint).toBe(true); // unset → default true
+    expect(new Configs({ query: 'q', checkpoint: false }).checkpoint).toBe(false);
+    expect(new Configs({ query: 'q', checkpoint: 'no' }).checkpoint).toBe(false);
+    expect(new Configs({ query: 'q', checkpoint: 1 }).checkpoint).toBe(true);
+    expect(() => new Configs({ query: 'q', checkpoint: 'maybe' })).toThrow(/boolean/);
+  });
+  it('holds the claim-ledger knobs (v3)', () => {
+    const c = new Configs({ query: 'q' });
+    expect(c.QUOTE_MAX_CHARS).toBe(300);
+    expect(c.CLAIM_DIGEST_CAP).toBe(30);
+    expect(c.CLAIM_DIGEST_CLIP).toBe(90);
+    expect(c.CALIB_DEFAULT_SCORE).toBe(50);
+    expect(c.AUDIT_BATCH).toBe(50);
+    expect(c.LINEAGE_BATCH).toBe(80);
+    expect(c.SETTLED_MIN_CLUSTERS).toBe(2);
+    expect(c.VOI_SENS_THRESHOLD).toBe(0.15);
+    expect(c.CALIB_CLAMP_LO).toBe(0.5);
+    expect(c.CALIB_CLAMP_HI).toBe(1.5);
+    expect(c.CALIB_NORM).toBe(4);
+    expect(c.CALIB_ALPHA).toBe(0.3);
+    expect(c.CALIB_LEAD_WEIGHT).toBe(0.3);
+    expect(c.CALIB_REALIZED_MAX).toBe(2);
+    expect(c.CHAO_COVERAGE_STOP).toBe(0.9);
+  });
+  it('holds the v3 STEERING knobs (batch 3)', () => {
+    const c = new Configs({ query: 'q' });
+    expect(c.BRAINER_LEDGER_CAP).toBe(120);
+    expect(c.CLAIM_LINE_CLIP).toBe(120);
+    expect(c.SENSITIVITY_CLIP).toBe(60);
+    expect(c.TREE_ANSWER_CLIP).toBe(400);
+    expect(c.MANDATE_CLIP).toBe(60);
+    expect(c.SCHED_VOCAB_CAP).toBe(20);
+  });
+  it('holds the v3 FINALIZE knob (batch 4)', () => {
+    const c = new Configs({ query: 'q' });
+    expect(c.VENUE_WARN_MIN).toBe(2);
+  });
+  it('tiers the v3 ledger clerks (claimAuditor/lineageClerk/rerunner/scribe)', () => {
+    const c = new Configs({ query: 'q' });
+    expect(c.TIER.claimAuditor).toBe('haiku');
+    // lineageClerk alone is promoted to sonnet (finding J) — fuzzy entity resolution against a growing
+    // canon (same-as spellings, merges) is judgment, not grep.
+    expect(c.TIER.lineageClerk).toBe('sonnet');
+    expect(c.TIER.rerunner).toBe('haiku');
+    expect(c.TIER.scribe).toBe('haiku');
+    expect(c.EFFORT.claimAuditor).toBe('medium');
+    expect(c.EFFORT.lineageClerk).toBe('medium');
+    expect(c.EFFORT.rerunner).toBe('low');
+    expect(c.EFFORT.scribe).toBe('low');
+  });
+  it('holds the scout SWARM knobs + tiers scoutPlanner/scoutMerger (v3 batch 2s)', () => {
+    const c = new Configs({ query: 'q' });
+    expect(c.SCOUT_PROBES).toBe(5);
+    expect(c.SCOUT_PROBE_SOURCES).toBe(3);
+    expect(c.SCOUT_PAGES_CAP).toBe(10);
+    expect(c.TIER.scout).toBe('haiku'); // the probe — unchanged from v2
+    expect(c.TIER.scoutPlanner).toBe('sonnet');
+    expect(c.TIER.scoutMerger).toBe('sonnet');
+    expect(c.EFFORT.scout).toBe('medium');
+    expect(c.EFFORT.scoutPlanner).toBe('high');
+    expect(c.EFFORT.scoutMerger).toBe('high');
+  });
+  it('builds the 6-channel FOOTER (gaps + attacks, stance-tagged sources, quote-pinned claims, terms, surprise)', () => {
+    const c = new Configs({ query: 'q' });
+    expect(c.FOOTER).toContain('"Rabbit holes"');
+    expect(c.FOOTER).toContain("SOURCE'S OWN TERMINOLOGY");
+    expect(c.FOOTER).toContain('counter-evidence search');
+    expect(c.FOOTER).toContain('kind:"entity"'); // entity leads — a recurring author/venue/dataset worth following
+    expect(c.FOOTER).toContain('"Next sources"');
+    expect(c.FOOTER).toContain('SUPPORT or ATTACK');
+    expect(c.FOOTER).toContain('"Claims"');
+    expect(c.FOOTER).toContain('VERBATIM quote of at most ' + c.QUOTE_MAX_CHARS + ' characters');
+    expect(c.FOOTER).toContain('"New terms"');
+    expect(c.FOOTER).toContain('"Surprise" note ONLY when the page contradicts');
+    expect(c.FOOTER).toMatch(/do not pad/);
+  });
   it('normalizes mode case-insensitively + trims, unrecognized → goal (B8)', () => {
     expect(new Configs({ query: 'q', mode: 'COLLECT' }).mode).toBe('collect');
     expect(new Configs({ query: 'q', mode: '  Collect ' }).mode).toBe('collect');

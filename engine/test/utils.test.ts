@@ -10,8 +10,39 @@ import {
   waveMd,
   render,
   packReaders,
+  scrubArtifacts,
+  topSensitivityInput,
+  venuesWithYieldWarn,
 } from '../src/utils/index.js';
-import type { ResultSoFar, SchedulerSource } from '../src/types/index.js';
+import type { ResultSoFar, SchedulerSource, Venue } from '../src/types/index.js';
+
+describe('scrubArtifacts — strips structured-output/tool-call leakage (real bug from run forensics)', () => {
+  it('strips a complete closing tag', () => {
+    expect(scrubArtifacts('before </parameter> after')).toBe('before  after');
+  });
+  it('strips a complete opening tag with attributes', () => {
+    expect(scrubArtifacts('x <StructuredOutput status="done"> y')).toBe('x  y');
+  });
+  it('strips an <invoke> tag', () => {
+    expect(scrubArtifacts('call <invoke name="foo"/> done')).toBe('call  done');
+  });
+  it('leaves clean prose completely untouched', () => {
+    const clean = 'pgvector recall is 0.98 on the LAION benchmark, per the vendor whitepaper.';
+    expect(scrubArtifacts(clean)).toBe(clean);
+  });
+  it('strips a truncated trailing fragment (the harness cut the emission off mid-tag)', () => {
+    expect(scrubArtifacts('the answer continues</param')).toBe('the answer continues');
+    expect(scrubArtifacts('the answer continues</inv')).toBe('the answer continues');
+    expect(scrubArtifacts('the answer continues<function_r')).toBe('the answer continues');
+  });
+  it('never mistakes ordinary text containing "<" for leakage', () => {
+    expect(scrubArtifacts('5 < 10')).toBe('5 < 10');
+    expect(scrubArtifacts('x<y')).toBe('x<y');
+  });
+  it('empty string passes through unchanged', () => {
+    expect(scrubArtifacts('')).toBe('');
+  });
+});
 
 describe('plain', () => {
   it('renders a string as-is', () => expect(plain('hello')).toBe('hello'));
@@ -95,6 +126,58 @@ describe('openLine', () => {
       '#8 [new] sharding — scale',
     );
   });
+  it('appends the kind, ⚔-prefixed for attack (v3 STEERING)', () => {
+    expect(
+      openLine({
+        id: 9,
+        keyword: 'counter-trial',
+        why: 'refute',
+        scoreHistory: [],
+        kind: 'attack',
+      }),
+    ).toBe('#9 [new] counter-trial — refute ⚔attack');
+    expect(
+      openLine({ id: 10, keyword: 'author X', why: 'recurs', scoreHistory: [], kind: 'entity' }),
+    ).toBe('#10 [new] author X — recurs ·entity');
+  });
+  it('renders no kind suffix (byte-identical) when kind is absent', () => {
+    const withoutKind = openLine({ id: 11, keyword: 'a', why: 'b', scoreHistory: [] });
+    expect(withoutKind).not.toContain('·');
+    expect(withoutKind).not.toContain('⚔');
+  });
+});
+
+describe('topSensitivityInput', () => {
+  it('picks the input name with the largest variance share', () => {
+    expect(topSensitivityInput({ a: 0.1, b: 0.6, c: 0.3 })).toBe('b');
+  });
+  it('returns "" for an empty or missing sensitivity map', () => {
+    expect(topSensitivityInput({})).toBe('');
+    expect(topSensitivityInput(undefined)).toBe('');
+  });
+});
+
+describe('venuesWithYieldWarn', () => {
+  const venues: Venue[] = [
+    { source: 'arXiv', goodFor: 'preprints' },
+    { source: 'PubMed', goodFor: 'clinical' },
+  ];
+  it('suffixes a venue assigned to ≥2 lanes with 0 yield', () => {
+    const out = venuesWithYieldWarn(venues, { arXiv: { assigned: 3, yielded: 0 } });
+    expect(out.find((v) => v.source === 'arXiv')!.goodFor).toBe('preprints — ⚠ 0 yield in 3 lanes');
+    expect(out.find((v) => v.source === 'PubMed')!.goodFor).toBe('clinical'); // untouched — no stats entry
+  });
+  it('leaves a venue untouched when assigned < 2 or it has yielded something', () => {
+    const oneLane = venuesWithYieldWarn(venues, { arXiv: { assigned: 1, yielded: 0 } });
+    expect(oneLane.find((v) => v.source === 'arXiv')!.goodFor).toBe('preprints');
+    const yielded = venuesWithYieldWarn(venues, { arXiv: { assigned: 3, yielded: 1 } });
+    expect(yielded.find((v) => v.source === 'arXiv')!.goodFor).toBe('preprints');
+  });
+  it('is pure — never mutates the input venues array or its objects', () => {
+    const before = JSON.stringify(venues);
+    venuesWithYieldWarn(venues, { arXiv: { assigned: 5, yielded: 0 } });
+    expect(JSON.stringify(venues)).toBe(before);
+  });
 });
 
 describe('resultSoFarMd', () => {
@@ -107,7 +190,7 @@ describe('resultSoFarMd', () => {
       answer: 'A',
       confidence: 'high',
       working: 'cost = x',
-      evidence: [{ status: 'settled', fact: 'f', value: 'v', source: 's' }],
+      keyClaimIds: [1, 2],
       resolved: ['r'],
       openGaps: ['g'],
       tensions: ['t'],
@@ -115,7 +198,6 @@ describe('resultSoFarMd', () => {
     expect(md).toContain('**Answer:** A');
     expect(md).toContain('**Confidence:** high');
     expect(md).toContain('**Working:**\n\ncost = x');
-    expect(md).toContain('- [settled] **f:** v — s');
     expect(md).toContain('**Resolved:**\n- r');
   });
   it('renders an Assumptions block when present', () => {
@@ -123,7 +205,7 @@ describe('resultSoFarMd', () => {
       answer: 'A',
       confidence: 'high',
       working: '',
-      evidence: [],
+      keyClaimIds: [],
       assumptions: [{ claim: 'demand holds', basis: 'one analyst note — unconfirmed' }],
       resolved: [],
       openGaps: [],
@@ -131,18 +213,18 @@ describe('resultSoFarMd', () => {
     });
     expect(md).toContain('**Assumptions:**\n- **demand holds** — one analyst note — unconfirmed');
   });
-  it('omits the working block when empty and shows _none_ for empty lists', () => {
+  it('omits the working block when empty and shows _none_ for empty lists (K2: no dead Evidence section)', () => {
     const md = resultSoFarMd({
       answer: 'A',
       confidence: 'low',
       working: '',
-      evidence: [],
+      keyClaimIds: [],
       resolved: [],
       openGaps: [],
       tensions: [],
     });
     expect(md).not.toContain('**Working:**');
-    expect(md).toContain('**Evidence:**\n_none_');
+    expect(md).not.toContain('**Evidence:**'); // the ledger owns evidence now — the dead section is gone
     expect(md).toContain('**Resolved:**\n_none_');
   });
 });
@@ -155,7 +237,7 @@ describe('waveMd', () => {
         answer: 'A',
         confidence: 'med',
         working: '',
-        evidence: [],
+        keyClaimIds: [],
         resolved: [],
         openGaps: [],
         tensions: [],
