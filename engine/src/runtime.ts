@@ -33,6 +33,13 @@ export const retryAgent = async <T>(prompt: string, opts: AgentOpts): Promise<T 
   for (let attempt = 0; attempt <= CONFIG.AGENT_RETRIES; attempt++) {
     try {
       const out = (await _agent(prompt, opts)) as T;
+      // The harness resolves to null WITHOUT throwing when the sub-agent dies on a
+      // terminal API error (e.g. a safety-classifier block) or is skipped mid-run.
+      // Route null through the same retry ladder as a thrown error — otherwise the
+      // ladder never engages on exactly the failure class it exists for. A borderline
+      // classifier block is often probabilistic; a fresh spawn frequently passes.
+      if (out == null)
+        throw new Error('agent returned null (terminal API error / skip / safety block)');
       if (CONFIG.debug)
         IO_LOG.push({
           label: (opts && opts.label) || '?',

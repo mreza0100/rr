@@ -68,7 +68,8 @@ export type StopReason =
   | 'collect-dry-plateau'
   | 'wave-cap'
   | 'rabbithole-dry'
-  | 'rabbithole-empty';
+  | 'rabbithole-empty'
+  | 'brainer-dead'; // the wave-0 brainer died (all retries exhausted) — the crawl never ran; finalize proceeds on scout material only, loudly labelled
 
 // the run's diagnostic metrics (logged + fed to the debug analyst + written to _rabbitHoles-adjacent files).
 export interface Metrics {

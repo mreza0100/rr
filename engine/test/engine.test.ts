@@ -443,24 +443,52 @@ describe('ResearchReport.run — brainer dies mid-crawl', () => {
   });
 });
 
-// ── (f) fatal: scout / wave-0 brainer death throw ───────────────────────────
-describe('ResearchReport.run — fatal deaths throw', () => {
+// ── (f) scout death throws (nothing to salvage); wave-0 brainer death degrades ──
+describe('ResearchReport.run — worst-case agent deaths', () => {
   it('throws when the scout dies (every probe in the swarm returns null — planner/merger dying alone is not fatal)', async () => {
     const RR = await loadEngine({ query: 'q', mode: 'goal' }, (p: string, o: AgentOpts) =>
       o.label.startsWith('scout-probe:') ? null : {},
     );
     await expect(new RR().run()).rejects.toThrow(/scout died/);
   });
-  it('throws when the wave-0 brainer dies', async () => {
+  it('degrades (never throws) when the wave-0 brainer dies — scout-only finalize, loud banner, honest stopReason', async () => {
     const agent = (p: string, o: AgentOpts) => {
       if (o.label === 'scout-probe:direct') return SCOUT_OUT;
       if (o.label === 'scout-merger') return null; // fallback-B mechanical merge (pure passthrough of the lone survivor)
       if (o.label === 'prospector') return PROSPECT_OUT;
-      if (o.label === 'brainer-w0') return null;
+      if (o.label === 'brainer-w0') return null; // dies on every retry (e.g. a deterministic safety-classifier block)
+      if (o.label === 'initiator')
+        return {
+          refinement: { facts: [{ fact: 'f', why: 'w' }] },
+          synthesiser: { focus: 'x' },
+        };
+      if (o.label.startsWith('refine-'))
+        return { report: 'refined (verified)', queriesTried: ['q1'], counterFound: false };
+      if (o.label.startsWith('judge-'))
+        return {
+          goalMet: true,
+          verificationSound: true,
+          needsCompute: false,
+          computeSound: true,
+          reasoning: 'scout material verified',
+          directive: '',
+        };
+      if (o.label === 'synthesiser')
+        return {
+          report: '# Report\n\nscout-only body',
+          verdict: 'v',
+          confidence: 'low',
+          plan: [],
+          openQuestions: [],
+        };
       return {};
     };
     const RR = await loadEngine({ query: 'q', mode: 'goal' }, agent);
-    await expect(new RR().run()).rejects.toThrow(/brainer died at wave 0/);
+    const result = await new RR().run();
+    expect(result.stopReason).toBe('brainer-dead');
+    expect(result.done).toBe(false);
+    expect(result.files['result.md']).toContain('DEGRADED RUN');
+    expect(result.files['result.md']).toContain('scout-only body');
   });
 });
 

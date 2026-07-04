@@ -3610,6 +3610,13 @@ const retryAgent = async    (prompt        , opts           )                   
   for (let attempt = 0; attempt <= CONFIG.AGENT_RETRIES; attempt++) {
     try {
       const out = (await _agent(prompt, opts))     ;
+      // The harness resolves to null WITHOUT throwing when the sub-agent dies on a
+      // terminal API error (e.g. a safety-classifier block) or is skipped mid-run.
+      // Route null through the same retry ladder as a thrown error — otherwise the
+      // ladder never engages on exactly the failure class it exists for. A borderline
+      // classifier block is often probabilistic; a fresh spawn frequently passes.
+      if (out == null)
+        throw new Error('agent returned null (terminal API error / skip / safety block)');
       if (CONFIG.debug)
         IO_LOG.push({
           label: (opts && opts.label) || '?',
@@ -5283,8 +5290,15 @@ class ResearchReport {
     );
     let coord = await runBrainer(bs, 0, seedFindings, CONFIG.PHASE.scout);
     if (!coord) {
-      log('✗ brainer-w0 DIED');
-      throw new Error('brainer died at wave 0');
+      // Wave-0 brainer dead after all retries (terminal API error / safety-classifier
+      // block). Do NOT throw — the scout + prospector material and the seeded claim
+      // ledger still carry real verified value. Drain the crawl, stamp the honest
+      // stopReason, and let finalize produce a loudly-labelled degraded report
+      // (see the DEGRADED banner in runFinalize) instead of destroying the run.
+      log('✗ brainer-w0 DIED — crawl aborted; finalizing on scout material only');
+      bs.status = 'drained';
+      bs.stopReason = 'brainer-dead';
+      return;
     }
     applyDeltas(bs, coord, 0);
     this.applyDerivation(bs, coord);
@@ -5907,7 +5921,14 @@ class ResearchReport {
         ' — computed from evidence topology (clusters × attack-survival).';
     agg .report = report;
     agg .confidence = final;
-    this.files['result.md'] = runArgsMd() + report;
+    // DEGRADED banner — the crawl never coordinated (wave-0 brainer dead): the report
+    // below is built from scout + refine material only, with no steered crawl behind it.
+    // Say so at the very top; a silently-normal-looking report would overstate coverage.
+    const degradedBanner =
+      bs.stopReason === 'brainer-dead'
+        ? '> ⚠️ **DEGRADED RUN — the wave-0 brainer died (terminal agent failure after all retries); no steered crawl ran.** This report is synthesized from the scout sweep + refine verification only. Treat coverage as shallow: re-run RR to get the full crawl.\n\n'
+        : '';
+    this.files['result.md'] = runArgsMd() + degradedBanner + report;
     log(
       '· ' +
         label +
@@ -6164,7 +6185,9 @@ class ResearchReport {
       rabbitHolesFinal: bs.rabbitHoles.length,
       bestOpenScore: bs.bestOpen,
       topScores: bs.topScores,
-      done: coord .stop.done,
+      // coord is legitimately null when the wave-0 brainer died (stopReason 'brainer-dead')
+      // — a degraded run must still deliver its files, never crash here at the finish line.
+      done: coord ? coord.stop.done : false,
       reportWritten: reportOk,
       confidence: reportOk ? synthesiserOut .confidence : null,
       claimsTotal: bs.claims.length,
@@ -6253,7 +6276,7 @@ class ResearchReport {
       mode: CONFIG.mode,
       dir: CONFIG.DIR,
       stopReason: bs.stopReason,
-      done: coord .stop.done,
+      done: coord ? coord.stop.done : false, // null on a brainer-dead degraded run
       tree: [goalLine, ...treeLines],
       verdict: reportOk ? synthesiserOut .verdict : null,
       confidence: reportOk ? synthesiserOut .confidence : null,
@@ -6323,6 +6346,10 @@ class ResearchReport {
     });
     if (!coord) {
       bs.status = 'drained';
+      // Honest stop classification: this lane never coordinated a single wave.
+      // For the ROOT this is the whole crawl dying at wave 0 — buildResult and the
+      // DEGRADED banner in runFinalize key off stopReason + the missing coord.
+      bs.stopReason = 'brainer-dead';
       log('  ✗ ' + bs.name + ' pick-first brainer died → drained');
       return;
     }
