@@ -385,7 +385,9 @@ describe('ResearchReport.run — degraded agents (null guards)', () => {
     expect(result.metrics.reportWritten).toBe(false); // synthesiser failed
     expect(result.verdict).toBe(null);
     expect(result.confidence).toBe(null);
-    expect(result.files['result.md']).toBeUndefined();
+    // synthesiser-dead salvage: a degraded result.md carries the running answer, loudly labelled
+    expect(result.files['result.md']).toContain('DEGRADED REPORT');
+    expect(result.files['result.md']).toContain('## Running answer');
     const refineFile = keys(result).find((k) => k.endsWith('-refinement.md'));
     expect(result.files[refineFile!]).toContain('_(refine failed)_');
   });

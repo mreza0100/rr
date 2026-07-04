@@ -5897,6 +5897,20 @@ class ResearchReport {
     bs.citationsBogus = 0;
     if (!bs.reportOk) {
       log('✗ ' + label + ' FAILED — no report returned');
+      // Salvage: the run's evidence still has value — deliver a degraded result.md from
+      // the running answer instead of finishing with no deliverable at all. Same
+      // philosophy as the brainer-dead banner: degrade loudly, never destroy value.
+      const rsf = bs.resultSoFar;
+      const salvage           = [
+        '> ⚠️ **DEGRADED REPORT — the synthesiser died (terminal agent failure after all retries).** Below is the raw running answer, not a synthesized report; the full evidence lives in `_claims.md` and the per-wave files.\n',
+      ];
+      if (rsf && rsf.answer) salvage.push('## Running answer\n\n' + rsf.answer + '\n');
+      if (rsf && rsf.working) salvage.push('## Working notes\n\n' + rsf.working + '\n');
+      if (rsf && rsf.openGaps && rsf.openGaps.length)
+        salvage.push('## Open gaps\n\n' + rsf.openGaps.map((q) => '- ' + q).join('\n') + '\n');
+      if (rsf && rsf.tensions && rsf.tensions.length)
+        salvage.push('## Tensions\n\n' + rsf.tensions.map((q) => '- ' + q).join('\n') + '\n');
+      this.files['result.md'] = runArgsMd() + salvage.join('\n');
       return;
     }
     const { report: linted, bogus } = lintCitations(agg .report, bs.claims);

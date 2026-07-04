@@ -1,6 +1,6 @@
 ---
 name: rr
-version: "3.0.0"
+version: "3.0.1"
 repo: "https://github.com/mreza0100/rr"
 description: Launches Research and Report (RR) — a deterministic background Workflow that runs an unbounded, best-first, brainer-steered web crawl, DERIVES an answer over a quote-pinned, independence-clustered claim ledger with computed confidence (computing it when the answer must be built), and writes a cited multi-section report with a verdict and plan. Use when the user wants a researched answer or a topic landscape ("research X", "look into X", "RR X", "rr fast X") and a single web search is not enough. Modes: goal (answer one question) and collect (inventory a topic); "rr fast X" answers inline now via one quick sub-agent instead of the background Workflow. Runs in the background, returns a completion notification, and persists to RR/{slug}/.
 ---
@@ -52,11 +52,57 @@ Workflow({
 - `parallelSourcesPerLaneResearchAgent` — `'auto'` (default, brainer-assigned, hidden cap of 5) or an integer clamped to `[1,5]`. How many sources one lane's reader thread reads.
 - `compute` — `true` (default) or `false`. The master switch for derivation: `false` runs no compute agents (no stored/rerun derivation mid-wave, no finalize brain-derive) for a faster, gather-and-reason-only run.
 - `computeNote` (optional) — extra run-specific guidance for the compute-aware agents (a method to use, a constraint to respect). Appends to the always-present note that the compute environment ships a scientific Python stack (scipy, sympy, uncertainties, pandas, statsmodels, scikit-learn, networkx, pint, rdkit).
-- `thinkerNote` (optional) — operator run-steering for the Opus reasoning tier: priorities, framing, constraints, audience. Shapes HOW the run is approached and what the report emphasizes — not additional questions to research. Reaches the reasoning agents only, never the cheap workers.
+- `thinkerNote` (optional) — operator run-steering for the reasoning tier: priorities, framing, constraints, audience. Shapes HOW the run is approached and what the report emphasizes — not additional questions to research. Reaches the prospector, brainer, initiator, judge, and synthesiser — never the cheap workers.
 - `researcherNote` (optional) — a terse one-line note (≈6-7 words) to the web-research agents — scout, prospector, brainer, researchScheduler, and researcher. Steers HOW they search and fetch (which sources to favour, what to skip). Passthrough, injected verbatim.
 - `checkpoint` — `true` (default) or `false`. Per-wave crash-safety: logs a `⏺CKPT` recovery line (the open leads, running answer, live claims, and derivation state) into the workflow's own output each wave — zero-cost, no agent. `false` turns the line off.
 - `tag` (optional) — suffixes the output dir so parallel variants of one query write to distinct dirs.
 - `debug` (optional, default `true`) — writes `_debug.md` (run log + metrics + raw agent I/O); ON by default, pass `debug: false` to turn it off. Pair with `debugPrompt` (string) to focus it on a question.
+
+## Writing the args — what to put in each, per audience
+
+Each free-text arg reaches a DIFFERENT set of agents (see `design.md` § note plumbing). Write for that audience; the wrong content in the wrong arg is silently wasted or, worse, actively mis-steers.
+
+### `query` — the contract (every agent sees it)
+
+The only string the whole crawl shares; the judge holds the final answer against it, so anything not in the query is not enforced. Full authoring rules in **Writing the query** below. Rule of thumb: constraints, scale, time horizon, and the DELIVERABLE all live here — never in a note.
+
+### `thinkerNote` — brief the analysts (prospector, brainer, initiator, judge, synthesiser)
+
+The reasoning tier reads this as an operator's steering memo. It shapes prioritization, judgment, and the report's emphasis — the same evidence, approached differently.
+
+Belongs here: who the answer is FOR and what they'll do with it; priority order among the query's sub-questions; honesty demands ("be explicit about what the evidence can NOT support"); framing constraints ("engineering audience — mechanisms over narrative"); report emphasis ("the deliverable shapes a build decision — lead with the decision").
+Does NOT belong: extra research questions (query), source/venue steering (researcherNote), derivation method (computeNote).
+
+- Good: `Audience: the design team of a clinical tool — never diagnosing. Prioritize (1) fidelity to real clinical practice over pop-science, (2) what is detectable from text alone vs what requires video — be honest about the limits, (3) what practitioners actually read vs ignore.`
+- Bad: `Also find out what EFT therapists track.` (a second research question — widen the query instead)
+- Bad: `Prefer .gov and peer-reviewed sources.` (venue steering — that's researcherNote)
+
+### `researcherNote` — steer the hunters (scout, prospector, brainer, researchScheduler, researcher)
+
+A terse ONE-LINE note injected verbatim into every search-and-fetch agent, including the haiku readers — every extra word taxes the cheapest, most-called workers. Steer WHERE to look and WHAT to skip, never what to conclude.
+
+- Good: `Favor Gottman Institute, peer-reviewed process research, therapist training material`
+- Good: `Primary sources + official docs; skip SEO listicles and vendor blogs`
+- Good: `German-language coverage is richer — search de sources too`
+- Bad: `Make sure the report emphasizes cost tradeoffs` (report shaping — thinkerNote)
+- Bad: anything ≥2 sentences — it dilutes the haiku readers' actual reading instructions.
+
+### `computeNote` — brief the mathematician (brainer, judge — the derivation authors/validators)
+
+Read when a derivation is authored, re-run, and judged. Name the METHOD, the error model, and any hard constraint; the stack note (scipy/sympy/uncertainties/pandas/statsmodels/scikit-learn/networkx/pint/rdkit) is always present, so name what to do with it.
+
+- Good: `Propagate uncertainties end-to-end (uncertainties pkg); report 90% CI, not point estimates`
+- Good: `Monte Carlo over the population priors (n≥10k draws); state which prior dominates variance`
+- Bad: `Double-check the math.` (the judge already does — says nothing)
+
+### Knob heuristics
+
+- `maxParallelBrainers`: raise above 1 only when the goal has ≥2 genuinely separable deep branches (e.g. "what works today AND the 5-year migration path"); a single-question goal on 2+ brainers buys coordination cost, not coverage.
+- `maxWave`: force below `'auto'` only for a deadline; force high only when a collect run must saturate a long tail.
+- `chaoCoverageStop`: drop toward `0.65` when a collect answer is needed soon and a representative inventory beats an exhaustive one.
+- `compute: false`: pick when the answer is qualitative synthesis — skipping derivation agents saves a finalize round-trip.
+- `tag`: always set when launching variants of one query in parallel — same slug would collide.
+- `debugPrompt`: pose ONE diagnostic question ("why did lane X starve?") — the analyst answers it against the raw I/O log.
 
 ## Modes
 
