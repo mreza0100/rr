@@ -1,5 +1,5 @@
 import { CONFIG } from '../../config.js';
-import { brainer, BRAIN_COMPUTE, buildBrainerCompute } from './index.js';
+import { brainer, buildCoord, BRAIN_COMPUTE, buildBrainerCompute } from './index.js';
 import { retryAgent } from '../../runtime.js';
 import { ledgerLines, openLine, venuesWithYieldWarn } from '../../utils/index.js';
 import type { BrainerState } from '../../brainerState.js';
@@ -65,7 +65,8 @@ export async function runBrainer(
       phase: phaseName,
       model: brainer.tier,
       effort: brainer.effort,
-      schema: brainer.schema,
+      // pruned per call — optional clauses inflate the schema past the spawn classifier's size limit
+      schema: buildCoord({ compute: CONFIG.compute, canSpawn: !!(ctx && ctx.canSpawn) }),
       agentType: CONFIG.compute ? CONFIG.GENERAL_PURPOSE : undefined,
     },
   );

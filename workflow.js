@@ -505,8 +505,7 @@ const LOOKUP         = {
   properties: {
     id: {
       type: 'number',
-      description:
-        'id of an existing open rabbit-hole to research now — use this OR the keyword fields, not both',
+      description: 'id of an existing open rabbit-hole — use this OR the keyword fields, not both',
     },
     keyword: { type: 'string' },
     why: { type: 'string' },
@@ -515,17 +514,17 @@ const LOOKUP         = {
       type: 'array',
       items: { type: 'string' },
       description:
-        'subset of the prospector venue identifiers (their exact `source` strings) best suited to THIS rabbit-hole — its researcher will prefer these. Empty if none fit.',
+        'subset of prospector venue identifiers (exact `source` strings) best suited to THIS rabbit-hole; empty if none fit',
     },
     note: {
       type: 'string',
       description:
-        'the research directive for THIS lane — WHAT to find plus ranked fallbacks ("if not X, focus on Y; give both if available"). Steers BOTH the scheduler (which sources to pick) and the reader (what to extract). Distinct from `why` (your store/scoring rationale).',
+        'research directive for THIS lane — WHAT to find plus ranked fallbacks; steers the scheduler (source picking) and the reader (extraction). Distinct from `why` (scoring rationale).',
     },
     ref: {
       type: 'string',
       description:
-        'a concrete URL or DOI for this lane to fetch DIRECTLY (a followed citation) instead of WebSearching — set it when you are chasing a specific source',
+        'a concrete URL/DOI to fetch DIRECTLY (a followed citation) instead of WebSearching',
     },
     kind: {
       type: 'string',
@@ -541,21 +540,6 @@ const RESULT_SO_FAR         = {
     answer: {
       type: 'string',
       description: 'the best current answer to the goal, as it stands this wave',
-    },
-    evidence: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          fact: { type: 'string' },
-          value: { type: 'string' },
-          source: { type: 'string' },
-          status: { type: 'string', enum: ['settled', 'tentative', 'contested'] },
-        },
-        required: ['fact', 'value', 'source', 'status'],
-      },
-      description:
-        'DEPRECATED — the claim ledger is now the evidence store; do not re-emit facts here (kept only so a finalize agent still rendering it does not break)',
     },
     keyClaimIds: {
       type: 'array',
@@ -1906,9 +1890,62 @@ const buildBrainerCompute = ({
 
 // COORD = the brainer's per-wave output: the updated resultSoFar + DELTAS against the engine's id-keyed open store. The engine carries
 // each rabbit-hole's id + scoreHistory natively — the brainer never re-emits the whole set, it only sends what changed.
-const COORD         = {
+//
+// Built per call by buildCoord, NOT shipped as one static shape: the platform classifier that screens
+// agent spawns rejects oversized output schemas ("output schema too large to classify safely" — observed
+// killing wave-0 brainers live, across models). So the optional clauses ship ONLY when the call can use
+// them — `derivation` only when compute is on, `spawn` only on a wave that may spawn — and every
+// description is kept terse (steering prose lives in the prompt, which already carries it). COORD (the
+// full shape) stays exported as the canonical contract for types, tests, and the sandbox check.
+const SPAWN         = {
   type: 'object',
   properties: {
+    id: {
+      type: 'number',
+      description: 'an OPEN rabbit-hole id for the child (or omit and give keyword+why)',
+    },
+    keyword: { type: 'string' },
+    why: { type: 'string' },
+    mandate: {
+      type: 'string',
+      description: 'the directive that aims the child brainer — what this one branch must chase',
+    },
+  },
+  required: ['mandate'],
+  description:
+    'OPTIONAL, at most ONE per wave: spawn a focused child brainer onto a branch worth a dedicated brain — spawns are expensive. Omit when not spawning.',
+};
+const DERIVATION         = {
+  type: 'object',
+  properties: {
+    code: {
+      type: 'string',
+      description:
+        'pure seeded python3: reads ONE json arg {inputName: value}, prints ONE json {quantiles:{p10,p50,p90}, sensitivity:{inputName: varianceShare 0-1}}',
+    },
+    inputs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          dist: {
+            type: 'string',
+            description: 'the value/distribution to feed, e.g. "lognormal(mu=…, sigma=…)" or a point value',
+          },
+          claimIds: { type: 'array', items: { type: 'number' } },
+          prior: { type: 'boolean', description: 'true = wide-prior placeholder, not evidence-backed' },
+        },
+        required: ['name', 'dist', 'claimIds', 'prior'],
+      },
+    },
+  },
+  required: ['code', 'inputs'],
+  description:
+    "OPTIONAL: author (or re-author) the run's stored derivation — the engine reruns it cheaply every wave. Re-emit only to change the code or the inputs.",
+};
+function buildCoord(opts                                         )         {
+  const properties                         = {
     resultSoFar: RESULT_SO_FAR,
     rescore: {
       type: 'array',
@@ -1918,19 +1955,18 @@ const COORD         = {
         required: ['id', 'score'],
       },
       description:
-        'only the open rabbit-holes whose score changes this wave (the engine pushes {wave,score} to each id\'s history); unlisted ones keep their last score. Score every "new" (unscored) one at least once.',
+        'only the open rabbit-holes whose score changes this wave; unlisted ones keep their last score. Score every "new" (unscored) one at least once.',
     },
     add: {
       type: 'array',
       items: SCORED,
-      description:
-        'new rabbit-holes to park in the store for a later wave — the engine assigns each a fresh id, scoreHistory seeded with this score',
+      description: 'new rabbit-holes to park in the store for a later wave (the engine assigns ids)',
     },
     lookupNext: {
       type: 'array',
       items: LOOKUP,
       description:
-        'the rabbit-holes to research now — each either {id} (a stored one) or {keyword,why,score,sources?} (originate-and-pursue-now). None may be already pursued; assign each its relevant `sources` venue subset.',
+        'the rabbit-holes to research now — each either {id} (stored) or {keyword,why,score,…} (originate-and-pursue-now). None may be already pursued; assign each its `sources` venue subset.',
     },
     rename: {
       type: 'array',
@@ -1951,75 +1987,29 @@ const COORD         = {
       description:
         'ids of dead/duplicate rabbit-holes to eliminate (a MERGE = drop the duplicate, rescore the survivor)',
     },
-    spawn: {
-      type: 'object',
-      properties: {
-        id: {
-          type: 'number',
-          description:
-            'an OPEN rabbit-hole id to hand to the child (or omit and give keyword+why to originate the branch)',
-        },
-        keyword: { type: 'string' },
-        why: { type: 'string' },
-        mandate: {
-          type: 'string',
-          description:
-            'the directive that aims the child brainer — what this one branch must chase',
-        },
+  };
+  if (opts.canSpawn) properties.spawn = SPAWN;
+  if (opts.compute) properties.derivation = DERIVATION;
+  properties.stop = {
+    type: 'object',
+    properties: {
+      done: { type: 'boolean' },
+      reason: { type: 'string', description: 'one line: why done, or what is still missing' },
+      lost: {
+        type: 'boolean',
+        description:
+          'CHILD brainers only: this branch is a dead end — abandon it (no answer expected). The root brainer must never set this.',
       },
-      required: ['mandate'],
-      description:
-        'OPTIONAL, at most ONE per wave: spawn a focused child brainer onto a branch that deserves a dedicated brain. Only when you are SURE the branch is worth it — spawns are expensive. Omit when not spawning.',
     },
-    derivation: {
-      type: 'object',
-      properties: {
-        code: {
-          type: 'string',
-          description:
-            'pure python3 script: reads ONE json arg {inputName: value}, prints ONE json {quantiles:{p10,p50,p90}, sensitivity:{inputName: varianceShare 0-1}}; seeded (fixed seed) — same inputs, same output',
-        },
-        inputs: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              name: { type: 'string' },
-              dist: {
-                type: 'string',
-                description:
-                  'the value/distribution to feed, e.g. "lognormal(mu=…, sigma=…)" or a point value',
-              },
-              claimIds: { type: 'array', items: { type: 'number' } },
-              prior: {
-                type: 'boolean',
-                description: 'true = wide-prior placeholder, not evidence-backed',
-              },
-            },
-            required: ['name', 'dist', 'claimIds', 'prior'],
-          },
-        },
-      },
-      required: ['code', 'inputs'],
-      description:
-        "OPTIONAL: author (or re-author) the run's stored derivation once — a pure, seeded artifact the engine reruns cheaply every wave. Re-emit only to change the code or the inputs.",
-    },
-    stop: {
-      type: 'object',
-      properties: {
-        done: { type: 'boolean' },
-        reason: { type: 'string', description: 'one line: why done, or what is still missing' },
-        lost: {
-          type: 'boolean',
-          description:
-            'CHILD brainers only: this branch is a dead end — abandon it (no answer expected). The root brainer must never set this.',
-        },
-      },
-      required: ['done', 'reason'],
-    },
-  },
-  required: ['resultSoFar', 'rescore', 'add', 'lookupNext', 'stop'],
-};
+    required: ['done', 'reason'],
+  };
+  return {
+    type: 'object',
+    properties,
+    required: ['resultSoFar', 'rescore', 'add', 'lookupNext', 'stop'],
+  };
+}
+const COORD         = buildCoord({ compute: true, canSpawn: true });
 
 const brainer                     = {
   tier: CONFIG.TIER.brainer,
@@ -4009,7 +3999,8 @@ async function runBrainer(
       phase: phaseName,
       model: brainer.tier,
       effort: brainer.effort,
-      schema: brainer.schema,
+      // pruned per call — optional clauses inflate the schema past the spawn classifier's size limit
+      schema: buildCoord({ compute: CONFIG.compute, canSpawn: !!(ctx && ctx.canSpawn) }),
       agentType: CONFIG.compute ? CONFIG.GENERAL_PURPOSE : undefined,
     },
   );

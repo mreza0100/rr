@@ -131,8 +131,7 @@ export const LOOKUP: Schema = {
   properties: {
     id: {
       type: 'number',
-      description:
-        'id of an existing open rabbit-hole to research now — use this OR the keyword fields, not both',
+      description: 'id of an existing open rabbit-hole — use this OR the keyword fields, not both',
     },
     keyword: { type: 'string' },
     why: { type: 'string' },
@@ -141,17 +140,17 @@ export const LOOKUP: Schema = {
       type: 'array',
       items: { type: 'string' },
       description:
-        'subset of the prospector venue identifiers (their exact `source` strings) best suited to THIS rabbit-hole — its researcher will prefer these. Empty if none fit.',
+        'subset of prospector venue identifiers (exact `source` strings) best suited to THIS rabbit-hole; empty if none fit',
     },
     note: {
       type: 'string',
       description:
-        'the research directive for THIS lane — WHAT to find plus ranked fallbacks ("if not X, focus on Y; give both if available"). Steers BOTH the scheduler (which sources to pick) and the reader (what to extract). Distinct from `why` (your store/scoring rationale).',
+        'research directive for THIS lane — WHAT to find plus ranked fallbacks; steers the scheduler (source picking) and the reader (extraction). Distinct from `why` (scoring rationale).',
     },
     ref: {
       type: 'string',
       description:
-        'a concrete URL or DOI for this lane to fetch DIRECTLY (a followed citation) instead of WebSearching — set it when you are chasing a specific source',
+        'a concrete URL/DOI to fetch DIRECTLY (a followed citation) instead of WebSearching',
     },
     kind: {
       type: 'string',
@@ -167,21 +166,6 @@ export const RESULT_SO_FAR: Schema = {
     answer: {
       type: 'string',
       description: 'the best current answer to the goal, as it stands this wave',
-    },
-    evidence: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          fact: { type: 'string' },
-          value: { type: 'string' },
-          source: { type: 'string' },
-          status: { type: 'string', enum: ['settled', 'tentative', 'contested'] },
-        },
-        required: ['fact', 'value', 'source', 'status'],
-      },
-      description:
-        'DEPRECATED — the claim ledger is now the evidence store; do not re-emit facts here (kept only so a finalize agent still rendering it does not break)',
     },
     keyClaimIds: {
       type: 'array',

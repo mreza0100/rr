@@ -13,7 +13,7 @@ import {
 import type { Schema } from '../src/types/index.js';
 import { SCOUT, SCOUT_ANGLE, SCOUT_PLANNER } from '../src/agents/scout/index.js';
 import { SOURCES } from '../src/agents/prospector/index.js';
-import { COORD, BRAIN_COMPUTE } from '../src/agents/brainer/index.js';
+import { COORD, buildCoord, BRAIN_COMPUTE } from '../src/agents/brainer/index.js';
 import { VALIDATE } from '../src/agents/validator/index.js';
 import { SCHEDULE } from '../src/agents/researchScheduler/index.js';
 import { RESEARCH } from '../src/agents/researcher/index.js';
@@ -158,6 +158,16 @@ describe('schemas — nesting', () => {
     expect(input.properties!.claimIds.items!.type).toBe('number');
     expect(input.properties!.prior.type).toBe('boolean');
   });
+  it('buildCoord prunes optional clauses per call — the spawn-classifier schema-size guard', () => {
+    const slim = buildCoord({ compute: false, canSpawn: false });
+    expect(slim.properties!.derivation).toBeUndefined();
+    expect(slim.properties!.spawn).toBeUndefined();
+    expect(slim.required).toEqual(['resultSoFar', 'rescore', 'add', 'lookupNext', 'stop']);
+    expect(slim.properties!.resultSoFar).toBe(RESULT_SO_FAR); // shared bricks keep one identity
+    const full = buildCoord({ compute: true, canSpawn: true });
+    expect(full.properties!.derivation).toBeDefined();
+    expect(full.properties!.spawn).toBeDefined();
+  });
   it('RESULT_SO_FAR requires the full memory contract (v3: keyClaimIds replaces evidence as required)', () => {
     expect(RESULT_SO_FAR.required).toEqual([
       'answer',
@@ -168,13 +178,10 @@ describe('schemas — nesting', () => {
       'working',
       'confidence',
     ]);
-    expect(RESULT_SO_FAR.required).not.toContain('evidence'); // the ledger is now the evidence store; the field stays but is no longer required
+    // the ledger is the evidence store; the deprecated evidence brick is REMOVED from the schema
+    // entirely (dead weight against the spawn classifier's schema-size limit — no code read it)
+    expect(RESULT_SO_FAR.properties!.evidence).toBeUndefined();
     expect(RESULT_SO_FAR.properties!.keyClaimIds.items!.type).toBe('number');
-    expect(RESULT_SO_FAR.properties!.evidence.items!.properties!.status.enum).toEqual([
-      'settled',
-      'tentative',
-      'contested',
-    ]);
     // assumptions carry {claim, basis} and are optional (not part of the required memory contract)
     expect(RESULT_SO_FAR.properties!.assumptions.items!.required).toEqual(['claim', 'basis']);
     expect(RESULT_SO_FAR.required).not.toContain('assumptions');
