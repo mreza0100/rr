@@ -1,6 +1,6 @@
 ---
 name: rr
-version: "3.2.0"
+version: "3.2.1"
 repo: "https://github.com/mreza0100/rr"
 description: Launches Research and Report (RR) — a deterministic background Workflow that runs an unbounded, best-first, brainer-steered web crawl, DERIVES an answer over a quote-pinned, independence-clustered claim ledger with computed confidence (computing it when the answer must be built), and writes a cited multi-section report with a verdict and plan. Use when the user wants a researched answer or a topic landscape ("research X", "look into X", "RR X", "rr fast X") and a single web search is not enough. Modes: goal (answer one question) and collect (inventory a topic); "rr fast X" answers inline now via one quick sub-agent instead of the background Workflow. Runs in the background, returns a completion notification, and persists to RR/{slug}/.
 ---
@@ -157,6 +157,14 @@ When a run crashes, wedges, or gets killed mid-crawl, find the checkpoint: each 
 
 - **Same session:** true resume — `Workflow({scriptPath, resumeFromRunId: "<the run id>"})`; completed agent calls replay from the harness cache, only unfinished work re-runs.
 - **Cross-session:** read the last `⏺CKPT` line (and, for deeper forensics, the workflow transcript dir's `journal.jsonl` — one line per completed agent with its full return). Answer directly from resultSoFar + the ledger if it's already solid; otherwise relaunch a FRESH run with resultSoFar/openGaps woven into `query` + `thinkerNote` so it starts warm, not cold.
+
+## Mid-run inspection
+
+```
+node <skill-base-dir>/midrun.js [status|findings] [run-dir]
+```
+
+The task output file stays empty until the run completes — mid-run, the only truth is the workflow transcript dir (`journal.jsonl` + per-agent files). `status` (default) reports progress, pipeline shape, and derived health flags — a dead agent is inferred from a dispatch with no completion plus a stale transcript, never from error text (there isn't any). `findings` reports what the run has learned so far — the latest brainer coord's memory, or (on a degraded run with no coord) a reconstruction from the finalize agents. Path omitted auto-discovers the newest live run. Reports land in `tmp/rr-midrun/`.
 
 ## Writing the query
 

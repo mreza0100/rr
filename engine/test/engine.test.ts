@@ -3215,3 +3215,517 @@ describe('ResearchReport.mergeChildClaims — CHILD→PARENT CLAIM MERGE (batch 
     expect(target.claims.length).toBe(1);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// v3.2.0 REGRESSION PINS — one focused test per production failure class the v3.2.0 campaign fixed.
+// Standing directive: every failure class discovered in production gets a pinned test so it can
+// never recur silently.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+// ── (1) CORRUPT cache quarantine (ingestWave step 1b) — run forensics: a poisoned cache file was
+//     re-served to the very remediation lane opened to fix it. ──
+describe('ResearchReport.ingestWave — CORRUPT deadEnd quarantines the cache path (v3.2.0)', () => {
+  it('moves a CORRUPT-flagged path into bs.corruptCachePaths and evicts it from bs.knownCachePaths', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => null); // no claims land → claim-audit/lineage never dispatch
+    const rr = new RR();
+    const bs = new BrainerState(
+      { scout: null, scoutRabbitHoles: [], highValueSources: [], languageGuidance: '' },
+      { name: 'root', parentName: null, mandate: '', trail: '', depth: 0 },
+    );
+    bs.knownCachePaths.add('/x/harvester/.fetch/html/spam.md'); // scheduled THIS run — would otherwise stay trusted
+    const toPursue = [{ id: 1, keyword: 'k', why: 'w', score: 50, scoreHistory: [], path: [] }] as any;
+    const raw = [
+      {
+        summary: 'thin',
+        claims: [],
+        deadEnds: ['CORRUPT: /x/harvester/.fetch/html/spam.md — thai gambling spam'],
+      },
+    ] as any;
+    await rr.ingestWave(bs, toPursue, raw, 1, 'Research');
+    expect(bs.corruptCachePaths.has('/x/harvester/.fetch/html/spam.md')).toBe(true);
+    expect(bs.knownCachePaths.has('/x/harvester/.fetch/html/spam.md')).toBe(false);
+  });
+});
+
+// ── (2) Validator-trigger widening (runCrawl/runOneWave) — the ORIGINAL gate only looked at
+//     anyNull/anyThin; a dead-ended-but-zero-claims lane, or a CORRUPT deadEnd alone, must ALSO
+//     trip it even when every reader is non-null and every summary is thick. Driven end-to-end via
+//     .run() (mirrors the (m) "validator gate skips" test above) — the predicate itself lives
+//     inline in the wave loop with no extractable seam, so this exercises it through its real caller
+//     rather than duplicating the expression. ──
+function deadEndsNoClaimsAgent(prompt: string, opts: AgentOpts) {
+  const L = opts.label;
+  if (L === 'scout-probe:direct') return SCOUT_OUT;
+  if (L === 'scout-merger') return null;
+  if (L === 'prospector') return PROSPECT_OUT;
+  if (L === 'brainer-w0')
+    return {
+      resultSoFar: RSF,
+      rescore: [{ id: 1, score: 80 }],
+      add: [],
+      lookupNext: [{ id: 1 }],
+      rename: [],
+      drop: [],
+      stop: { done: false, reason: 'go' },
+    };
+  if (L === 'brainer-w1')
+    return {
+      resultSoFar: RSF,
+      rescore: [],
+      add: [],
+      lookupNext: [],
+      rename: [],
+      drop: [],
+      stop: { done: true, reason: 'answered' },
+    };
+  if (L.startsWith('scheduler-')) return schedulerStub(prompt);
+  if (L.startsWith('lane-w1:hnsw-tuning'))
+    return {
+      runningAnswer: THICK,
+      rabbitHoles: [],
+      claims: [],
+      deadEnds: ['walled off, no content extracted'], // non-CORRUPT dead end, but zero claims landed
+    };
+  if (L.startsWith('validator-')) return VALIDATE_OUT;
+  if (L === 'initiator') return { refinement: { facts: [] }, synthesiser: { focus: '' } };
+  if (L.startsWith('judge-'))
+    return {
+      goalMet: true,
+      verificationSound: true,
+      needsCompute: false,
+      computeSound: true,
+      reasoning: 'ok',
+      directive: '',
+    };
+  if (L === 'synthesiser')
+    return { report: '# R', verdict: 'v', confidence: 'high', plan: [], openQuestions: [] };
+  throw new Error('deadEndsNoClaimsAgent: unexpected label ' + L);
+}
+
+describe('ResearchReport.run — validator gate widens to a dead-ends-but-zero-claims lane (v3.2.0)', () => {
+  it('fires the validator even though every reader is non-null and thick, because a lane reported deadEnds with no claims', async () => {
+    const RR = await loadEngine({ query: 'q', mode: 'goal' }, deadEndsNoClaimsAgent);
+    const result = await new RR().run();
+    expect(result.stopReason).toBe('brainer-done');
+    expect(keys(result).some((k) => k.endsWith('-validator.md'))).toBe(true);
+  });
+});
+
+function corruptAloneAgent(prompt: string, opts: AgentOpts) {
+  const L = opts.label;
+  if (L === 'scout-probe:direct') return SCOUT_OUT;
+  if (L === 'scout-merger') return null;
+  if (L === 'prospector') return PROSPECT_OUT;
+  if (L === 'brainer-w0')
+    return {
+      resultSoFar: RSF,
+      rescore: [{ id: 1, score: 80 }],
+      add: [],
+      lookupNext: [{ id: 1 }],
+      rename: [],
+      drop: [],
+      stop: { done: false, reason: 'go' },
+    };
+  if (L === 'brainer-w1')
+    return {
+      resultSoFar: RSF,
+      rescore: [],
+      add: [],
+      lookupNext: [],
+      rename: [],
+      drop: [],
+      stop: { done: true, reason: 'answered' },
+    };
+  if (L.startsWith('scheduler-')) return schedulerStub(prompt);
+  if (L.startsWith('lane-w1:hnsw-tuning'))
+    return {
+      runningAnswer: THICK,
+      rabbitHoles: [],
+      claims: [{ claim: 'a landed claim', quote: 'a quote long enough to carry the fact', source: 's' }],
+      deadEnds: ['CORRUPT: /x/harvester/.fetch/html/spam.md — thai gambling spam'], // claims landed too — isolates anyCorrupt
+    };
+  if (L.startsWith('claim-audit-')) return null; // dead auditor — irrelevant to this check
+  if (L.startsWith('lineage-')) return null; // dead lineage clerk — irrelevant to this check
+  if (L.startsWith('validator-')) return VALIDATE_OUT;
+  if (L === 'initiator') return { refinement: { facts: [] }, synthesiser: { focus: '' } };
+  if (L.startsWith('judge-'))
+    return {
+      goalMet: true,
+      verificationSound: true,
+      needsCompute: false,
+      computeSound: true,
+      reasoning: 'ok',
+      directive: '',
+    };
+  if (L === 'synthesiser')
+    return { report: '# R', verdict: 'v', confidence: 'high', plan: [], openQuestions: [] };
+  throw new Error('corruptAloneAgent: unexpected label ' + L);
+}
+
+describe('ResearchReport.run — validator gate widens to a CORRUPT deadEnd alone (v3.2.0)', () => {
+  it('fires the validator on a CORRUPT deadEnd even when the lane also landed claims under a thick summary', async () => {
+    const RR = await loadEngine({ query: 'q', mode: 'goal' }, corruptAloneAgent);
+    const result = await new RR().run();
+    expect(result.stopReason).toBe('brainer-done');
+    expect(keys(result).some((k) => k.endsWith('-validator.md'))).toBe(true);
+  });
+});
+
+// ── (3) Identical-payload detector (scheduleSources) — run forensics: byte-identical Thai-spam
+//     payloads for two distinct drzur.com URLs flowed into 3 lanes undetected. ──
+describe('ResearchReport.scheduleSources — identical-payload detector (v3.2.0)', () => {
+  const mkBs = () =>
+    new BrainerState(
+      { scout: null, scoutRabbitHoles: [], highValueSources: [], languageGuidance: '' },
+      { name: 'root', parentName: null, mandate: '', trail: '', depth: 0 },
+    );
+
+  it('flags two distinct source urls sharing the exact same size+chars as a cache-poisoning signature', async () => {
+    const agent = (_p: string, o: AgentOpts) => {
+      if (o.label.startsWith('scheduler-'))
+        return {
+          lanes: [
+            {
+              id: 1,
+              sources: [{ source: 'https://drzur.com/a', path: '/cache/a.txt', size: 5000, chars: 12000 }],
+            },
+            {
+              id: 2,
+              // byte-identical payload (same size+chars), served under a DIFFERENT url — the poisoning signature
+              sources: [{ source: 'https://drzur.com/b', path: '/cache/b.txt', size: 5000, chars: 12000 }],
+            },
+          ],
+        };
+      return {};
+    };
+    const RR = await loadEngine({ query: 'q' }, agent);
+    const rr = new RR();
+    const bs = mkBs();
+    const picks = [
+      { id: 1, keyword: 'k1', why: 'w', score: 50, scoreHistory: [], path: [] },
+      { id: 2, keyword: 'k2', why: 'w', score: 50, scoreHistory: [], path: [] },
+    ] as any;
+    await rr.scheduleSources(bs, picks, 'w1', 'Research');
+    expect(bs.lastUnsourced).toContain('⚠ identical payloads');
+    expect(bs.lastUnsourced).toContain('https://drzur.com/a');
+    expect(bs.lastUnsourced).toContain('https://drzur.com/b');
+  });
+
+  it('does NOT flag two same-size+chars sources sharing the SAME url (a legitimate re-cite, not poisoning)', async () => {
+    const agent = (_p: string, o: AgentOpts) => {
+      if (o.label.startsWith('scheduler-'))
+        return {
+          lanes: [
+            {
+              id: 1,
+              sources: [
+                { source: 'https://a.com', path: '/cache/a.txt', size: 5000, chars: 12000 },
+                { source: 'https://a.com', path: '/cache/a2.txt', size: 5000, chars: 12000 },
+              ],
+            },
+          ],
+        };
+      return {};
+    };
+    const RR = await loadEngine({ query: 'q' }, agent);
+    const rr = new RR();
+    const bs = mkBs();
+    const picks = [{ id: 1, keyword: 'k1', why: 'w', score: 50, scoreHistory: [], path: [] }] as any;
+    await rr.scheduleSources(bs, picks, 'w1', 'Research');
+    expect(bs.lastUnsourced).toBe('');
+  });
+});
+
+// ── (4) scheduleSources honesty folding — run forensics: a reddit-priority lane was silently
+//     substituted with vendor blogs, no flag anywhere. ──
+describe('ResearchReport.scheduleSources — honesty folding (v3.2.0)', () => {
+  const mkBs = () =>
+    new BrainerState(
+      { scout: null, scoutRabbitHoles: [], highValueSources: [], languageGuidance: '' },
+      { name: 'root', parentName: null, mandate: '', trail: '', depth: 0 },
+    );
+
+  it('sets bs.lastUnsourced from the scheduler report, clears it on a clean following wave, folds served paths into knownCachePaths, and tallies venueStats.served only for served venues', async () => {
+    const agent = (_p: string, o: AgentOpts) => {
+      if (o.label === 'scheduler-w1')
+        return {
+          lanes: [
+            {
+              id: 1,
+              sources: [
+                { source: 'https://reddit.com/x', path: '/cache/reddit-x.txt', size: 10, chars: 20 },
+              ],
+              venuesServed: ['reddit'], // 'vendorblog' was ALSO assigned but never actually served
+              unsourced: [{ ref: 'vendor blog deep-dive', reason: 'walled' }],
+            },
+          ],
+        };
+      if (o.label === 'scheduler-w2')
+        return {
+          lanes: [
+            {
+              id: 1,
+              sources: [
+                { source: 'https://reddit.com/y', path: '/cache/reddit-y.txt', size: 10, chars: 20 },
+              ],
+              venuesServed: ['reddit'],
+              // no unsourced this wave — a clean run
+            },
+          ],
+        };
+      return {};
+    };
+    const RR = await loadEngine({ query: 'q' }, agent);
+    const rr = new RR();
+    const bs = mkBs();
+    const picks = [
+      {
+        id: 1,
+        keyword: 'k',
+        why: 'w',
+        score: 50,
+        scoreHistory: [],
+        path: [],
+        sources: ['reddit', 'vendorblog'],
+      },
+    ] as any;
+
+    await rr.scheduleSources(bs, picks, 'w1', 'Research');
+    expect(bs.lastUnsourced).toBe('lane #1 k: vendor blog deep-dive — walled');
+    expect(bs.knownCachePaths.has('/cache/reddit-x.txt')).toBe(true);
+    expect(bs.venueStats['reddit'].served).toBe(1);
+    expect(bs.venueStats['vendorblog'].served).toBe(0); // assigned but never served — never silently counted as served
+
+    await rr.scheduleSources(bs, picks, 'w2', 'Research');
+    expect(bs.lastUnsourced).toBe(''); // the clean wave clears the prior wave's report
+    expect(bs.knownCachePaths.has('/cache/reddit-y.txt')).toBe(true);
+    expect(bs.venueStats['reddit'].served).toBe(2); // served again this wave
+  });
+});
+
+// ── (5) applyRefineAttacks mechanical counter-propagation — run forensics: a refine pass falsified
+//     the headline claim and the synthesis rubber-stamped the pre-correction answer; only the judge
+//     caught it, one pass late. ──
+describe('ResearchReport.applyRefineAttacks — mechanical counter-propagation (v3.2.0)', () => {
+  const mkBs = () =>
+    new BrainerState(
+      { scout: null, scoutRabbitHoles: [], highValueSources: [], languageGuidance: '' },
+      { name: 'root', parentName: null, mandate: '', trail: '', depth: 0 },
+    );
+
+  it('folds a counterFound refine into the claim + answer + tensions, and never duplicates on a repeat call', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => null);
+    const rr = new RR();
+    const bs = mkBs();
+    bs.wave = 2;
+    bs.claims.push({
+      id: 1,
+      claim: 'the headline claim',
+      quote: 'q',
+      source: 's',
+      cluster: 0,
+      audit: 'pass',
+      status: 'tentative',
+      attacksSurvived: 0,
+      retracted: false,
+      wave: 1,
+      lane: 'l',
+    } as Claim);
+    bs.resultSoFar = {
+      answer: 'pgvector wins on cost',
+      confidence: 'high',
+      keyClaimIds: [1],
+      resolved: [],
+      openGaps: [],
+      tensions: [],
+      working: '',
+    };
+    const facts = [{ fact: 'the headline claim', why: 'headline', claimId: 1 }];
+    const refined = [
+      {
+        report: 'r',
+        queriesTried: ['q1'],
+        counterFound: true,
+        counterNote: 'actually pgvector loses on cost',
+      },
+    ];
+
+    rr.applyRefineAttacks(bs, facts, refined, 'Finalize');
+    expect(bs.claims[0].counter).toBe('actually pgvector loses on cost');
+    expect(bs.resultSoFar!.answer).toContain('Corrections from the refine pass (machine-appended)');
+    expect(bs.resultSoFar!.answer).toContain('the headline claim → actually pgvector loses on cost');
+    expect(bs.resultSoFar!.tensions).toEqual(['the headline claim → actually pgvector loses on cost']);
+
+    // calling it AGAIN with the same correction must not duplicate — the judge should never see it twice
+    rr.applyRefineAttacks(bs, facts, refined, 'Finalize');
+    const occurrences = (
+      bs.resultSoFar!.answer.match(/the headline claim → actually pgvector loses on cost/g) || []
+    ).length;
+    expect(occurrences).toBe(1);
+    expect(bs.resultSoFar!.tensions).toEqual(['the headline claim → actually pgvector loses on cost']);
+  });
+
+  it('records a null attack + attacksSurvived when no counter-evidence was found, and never touches resultSoFar', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => null);
+    const rr = new RR();
+    const bs = mkBs();
+    bs.wave = 3;
+    bs.claims.push({
+      id: 5,
+      claim: 'a survived claim',
+      quote: 'q',
+      source: 's',
+      cluster: 0,
+      audit: 'pass',
+      status: 'tentative',
+      attacksSurvived: 0,
+      retracted: false,
+      wave: 1,
+      lane: 'l',
+    } as Claim);
+    bs.resultSoFar = {
+      answer: 'the original answer',
+      confidence: 'high',
+      keyClaimIds: [5],
+      resolved: [],
+      openGaps: [],
+      tensions: [],
+      working: '',
+    };
+    const facts = [{ fact: 'a survived claim', why: 'why', claimId: 5 }];
+    const refined = [{ report: 'r', queriesTried: ['q1', 'q2'], counterFound: false }];
+    rr.applyRefineAttacks(bs, facts, refined, 'Finalize');
+    expect(bs.claims[0].attacksSurvived).toBe(1);
+    expect(bs.nullAttacks).toEqual([
+      { topic: 'a survived claim', claimIds: [5], queries: ['q1', 'q2'], wave: 3, phase: 'Finalize' },
+    ]);
+    expect(bs.resultSoFar!.answer).toBe('the original answer'); // untouched — no correction to fold
+    expect(bs.resultSoFar!.tensions).toEqual([]);
+  });
+});
+
+// ── (6) buildResult honest metrics + _sources.json provenance — run forensics: citationsBogus:0
+//     masked a 46% audit-fail rate across three runs; an ad-hoc archiver copied 136 foreign files. ──
+describe('ResearchReport.buildResult — honest metrics + _sources.json provenance (v3.2.0)', () => {
+  it('computes real audit tallies (including a retracted claim), venuesUnrouted, judge/goal passthrough, and a dedup+retraction-filtered _sources.json', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => null);
+    const rr = new RR();
+    rr.highValueSources = [
+      { source: 'arxiv', goodFor: 'ANN' },
+      { source: 'reddit', goodFor: 'anecdote' },
+      { source: 'never-routed-venue', goodFor: 'x' }, // never assigned this run — no venueStats entry at all
+    ];
+    const bs = new BrainerState(
+      { scout: null, scoutRabbitHoles: [], highValueSources: rr.highValueSources, languageGuidance: '' },
+      { name: 'root', parentName: null, mandate: '', trail: '', depth: 0 },
+    );
+    bs.venueStats = {
+      arxiv: { assigned: 2, yielded: 1, served: 2 },
+      reddit: { assigned: 1, yielded: 0, served: 1 },
+    };
+    bs.claims = [
+      {
+        id: 1,
+        claim: 'a',
+        quote: 'q1',
+        source: 's1',
+        cachePath: '/x/harvester/.fetch/html/a.md',
+        cluster: 0,
+        audit: 'pass',
+        status: 'tentative',
+        attacksSurvived: 0,
+        retracted: false,
+        wave: 1,
+        lane: 'l',
+      },
+      {
+        id: 2,
+        claim: 'b',
+        quote: 'q2',
+        source: 's2',
+        cluster: 0,
+        audit: 'fail',
+        status: 'tentative',
+        attacksSurvived: 0,
+        retracted: false,
+        wave: 1,
+        lane: 'l',
+      },
+      {
+        id: 3,
+        claim: 'c',
+        quote: 'q3',
+        source: 's3',
+        cluster: 0,
+        audit: 'unpinned',
+        status: 'tentative',
+        attacksSurvived: 0,
+        retracted: false,
+        wave: 1,
+        lane: 'l',
+      },
+      {
+        id: 4,
+        claim: 'd',
+        quote: 'q4',
+        source: 's4',
+        cluster: 0,
+        audit: 'pending',
+        status: 'tentative',
+        attacksSurvived: 0,
+        retracted: false,
+        wave: 1,
+        lane: 'l',
+      },
+      {
+        id: 5,
+        claim: 'e',
+        quote: 'q5',
+        source: 's5',
+        cachePath: '/x/harvester/.fetch/html/retracted.md', // retracted — must be EXCLUDED from _sources.json
+        cluster: 0,
+        audit: 'pass',
+        status: 'tentative',
+        attacksSurvived: 0,
+        retracted: true,
+        wave: 1,
+        lane: 'l',
+      },
+      {
+        id: 6,
+        claim: 'f',
+        quote: 'q6',
+        source: 's6',
+        cachePath: '/x/harvester/.fetch/html/a.md', // SAME cachePath as claim 1 — must dedupe to one entry
+        cluster: 0,
+        audit: 'pass',
+        status: 'tentative',
+        attacksSurvived: 0,
+        retracted: false,
+        wave: 1,
+        lane: 'l',
+      },
+    ] as Claim[];
+    bs.quotesRepinned = 1;
+    bs.cachePathsRejected = 2;
+    bs.goalMet = true;
+    bs.judgePasses = 2;
+    bs.reopenedLaneCount = 3;
+    bs.stopReason = 'brainer-done';
+    bs.reportOk = false; // no synthesiser output needed for this check
+
+    const result = rr.buildResult(bs);
+
+    expect(result.metrics.auditCounts).toEqual({ pass: 3, fail: 1, repinned: 1, unpinned: 1, pending: 1 });
+    expect(result.metrics.claimsTotal).toBe(6); // includes the retracted claim — never silently dropped from the count
+    expect(result.metrics.venuesUnrouted).toBe(1); // never-routed-venue never got a venueStats entry
+    expect(result.metrics.goalMet).toBe(true);
+    expect(result.metrics.judgePasses).toBe(2);
+    expect(result.metrics.reopenedLanes).toBe(3);
+    expect(result.metrics.cachePathsRejected).toBe(2);
+    expect(result.metrics.quotesRepinned).toBe(1);
+
+    const sources = JSON.parse(result.files['_sources.json'] as string).sources;
+    expect(sources).toEqual([{ cachePath: '/x/harvester/.fetch/html/a.md', source: 's1' }]);
+  });
+});

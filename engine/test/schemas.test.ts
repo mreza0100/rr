@@ -168,6 +168,12 @@ describe('schemas — nesting', () => {
     const full = buildCoord({ compute: true, canSpawn: true });
     expect(full.properties!.derivation).toBeDefined();
     expect(full.properties!.spawn).toBeDefined();
+    // Last known classifier-safe serialized sizes (design.md §COORD). A failure here means a
+    // schema edit re-armed the spawn-classifier size kill that murdered a production run's
+    // wave-0 brainer (v3.2.0 maiden flight, +144 chars crossed 4,096). Growing a COORD brick
+    // requires shrinking elsewhere first.
+    expect(JSON.stringify(buildCoord({ compute: false, canSpawn: false })).length).toBeLessThanOrEqual(3966);
+    expect(JSON.stringify(buildCoord({ compute: true, canSpawn: true })).length).toBeLessThanOrEqual(5311);
   });
   it('RESULT_SO_FAR requires the full memory contract (v3: keyClaimIds replaces evidence as required)', () => {
     expect(RESULT_SO_FAR.required).toEqual([

@@ -146,7 +146,7 @@ export const LOOKUP: Schema = {
     note: {
       type: 'string',
       description:
-        'research directive for THIS lane — WHAT to find plus ranked fallbacks; steers the scheduler (source picking) and the reader (extraction). Distinct from `why` (scoring rationale).',
+        'WHAT to find + ranked fallbacks — steers the scheduler and the reader; distinct from `why`',
     },
     ref: {
       type: 'string',
@@ -160,8 +160,7 @@ export const LOOKUP: Schema = {
     },
     refetch: {
       type: 'boolean',
-      description:
-        'force a FRESH fetch for this lane — its cached copy is corrupted; the scheduler bypasses the cache',
+      description: 'cached copy corrupted — fetch fresh',
     },
   },
 };
