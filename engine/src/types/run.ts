@@ -31,6 +31,7 @@ export interface RawArgs {
   debug?: unknown;
   debugPrompt?: unknown;
   tag?: unknown;
+  agents?: unknown;
 }
 
 // the canonical phase-name map CONFIG.PHASE carries.

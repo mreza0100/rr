@@ -207,3 +207,63 @@ describe('runResearchers — threads claimDigest (from bs.claims) + laneKind (fr
 // runScout coverage (the wave-0 scout SWARM: planner → probes → merger) lives in scout.test.ts —
 // its dynamic-reload harness needs 3 distinct stub labels ('scout-planner', 'scout-probe:*', 'scout-merger'),
 // unlike the single-call pattern the rest of this file's run-fn tests share.
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `agents` arg (per-seat model/effort override) — every agents/<name>/index.ts reads CONFIG.TIER.<seat> /
+// CONFIG.EFFORT.<seat> at MODULE-EVAL time, so exercising an override needs a fresh CONFIG: set
+// globalThis.args, vi.resetModules(), then a fresh dynamic import of the agents barrel (mirrors
+// loadResearcherRun/loadClaimAuditor above). The pure top-of-file AGENTS policy table above is built from
+// the STATIC import (test/setup.ts's default args, no override) and stays the pinned default expectation.
+async function loadAgents(args: unknown, log: (m?: unknown) => void = () => {}) {
+  globalThis.args = args;
+  globalThis.log = log;
+  globalThis.agent = async () => ({});
+  globalThis.parallel = DEFAULT_PARALLEL;
+  globalThis.phase = () => {};
+  vi.resetModules();
+  return import('../src/agents/index.js');
+}
+
+describe('agents — `agents` arg overrides propagate through CONFIG into the Agent objects', () => {
+  it('defaults are unchanged with no override (pins the existing policy table)', async () => {
+    const mod = await loadAgents({ query: 'q' });
+    expect(mod.scout.tier).toBe('haiku');
+    expect(mod.researcher.tier).toBe('haiku');
+    expect(mod.brainer.tier).toBe('opus');
+    expect(mod.brainer.effort).toBe('xhigh');
+    expect(mod.judge.tier).toBe('opus');
+    expect(mod.judge.effort).toBe('xhigh');
+  });
+
+  it('an override retunes exactly the named seat/field, leaving the rest at their defaults', async () => {
+    const mod = await loadAgents({
+      query: 'q',
+      agents: { researcher: { model: 'sonnet' }, judge: { effort: 'high' } },
+    });
+    expect(mod.researcher.tier).toBe('sonnet');
+    expect(mod.judge.effort).toBe('high');
+    expect(mod.scout.tier).toBe('haiku'); // untouched seat
+    expect(mod.judge.tier).toBe('opus'); // untouched field of the same overridden seat
+  });
+
+  it('rejects (module evaluation throws) on an unknown seat / bad model / bad effort', async () => {
+    await expect(loadAgents({ query: 'q', agents: { bogus: { model: 'opus' } } })).rejects.toThrow(
+      /unknown agent seat "bogus"/,
+    );
+    await expect(
+      loadAgents({ query: 'q', agents: { researcher: { model: 'gpt4' } } }),
+    ).rejects.toThrow(/model must be one of/);
+    await expect(
+      loadAgents({ query: 'q', agents: { researcher: { effort: 'ultra' } } }),
+    ).rejects.toThrow(/effort must be one of/);
+  });
+
+  it('warns loudly when brainer.model is downgraded below opus, and still applies the override', async () => {
+    const warnings: unknown[] = [];
+    const mod = await loadAgents({ query: 'q', agents: { brainer: { model: 'haiku' } } }, (m) =>
+      warnings.push(m),
+    );
+    expect(mod.brainer.tier).toBe('haiku');
+    expect(warnings.some((w) => typeof w === 'string' && /erratically/.test(w))).toBe(true);
+  });
+});

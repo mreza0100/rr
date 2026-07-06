@@ -233,3 +233,97 @@ describe('Configs mode-dependent prompt fragments', () => {
     expect(c.STOP).toMatch(/novelty trajectory/);
   });
 });
+
+describe('Configs — per-seat `agents` override (model/effort)', () => {
+  it('applies no overrides when agents is absent, null, or undefined', () => {
+    expect(new Configs({ query: 'q' }).TIER.researcher).toBe('haiku');
+    expect(new Configs({ query: 'q', agents: null }).TIER.researcher).toBe('haiku');
+    expect(new Configs({ query: 'q', agents: undefined }).TIER.researcher).toBe('haiku');
+  });
+  it('overrides exactly the named seat/field, leaving every other seat at its default', () => {
+    const c = new Configs({
+      query: 'q',
+      agents: { researcher: { model: 'sonnet' }, judge: { effort: 'high' } },
+    });
+    expect(c.TIER.researcher).toBe('sonnet');
+    expect(c.EFFORT.judge).toBe('high');
+    // untouched fields/seats keep their defaults
+    expect(c.EFFORT.researcher).toBe('medium');
+    expect(c.TIER.judge).toBe('opus');
+    expect(c.TIER.scout).toBe('haiku');
+    expect(c.EFFORT.scout).toBe('medium');
+  });
+  it('a seat override may set model and effort together', () => {
+    const c = new Configs({ query: 'q', agents: { scout: { model: 'opus', effort: 'high' } } });
+    expect(c.TIER.scout).toBe('opus');
+    expect(c.EFFORT.scout).toBe('high');
+  });
+  it('throws on an unknown seat name, listing the valid seats', () => {
+    expect(() => new Configs({ query: 'q', agents: { bogus: { model: 'opus' } } })).toThrow(
+      /unknown agent seat "bogus"/,
+    );
+    expect(() => new Configs({ query: 'q', agents: { bogus: { model: 'opus' } } })).toThrow(
+      /researcher/, // the thrown message names the valid seats
+    );
+  });
+  it('throws on an invalid model value', () => {
+    expect(() => new Configs({ query: 'q', agents: { researcher: { model: 'gpt4' } } })).toThrow(
+      /model must be one of/,
+    );
+  });
+  it('throws on an invalid effort value', () => {
+    expect(() => new Configs({ query: 'q', agents: { researcher: { effort: 'ultra' } } })).toThrow(
+      /effort must be one of/,
+    );
+  });
+  it('throws when agents is not a plain object (string/array)', () => {
+    expect(() => new Configs({ query: 'q', agents: 'nope' })).toThrow(/agents must be an object/);
+    expect(() => new Configs({ query: 'q', agents: [] })).toThrow(/agents must be an object/);
+  });
+  it('throws when a seat override is not a plain object', () => {
+    expect(() => new Configs({ query: 'q', agents: { researcher: 'sonnet' } })).toThrow(
+      /agents\.researcher must be an object/,
+    );
+    expect(() => new Configs({ query: 'q', agents: { researcher: null } })).toThrow(
+      /agents\.researcher must be an object/,
+    );
+  });
+  it('warns loudly (never throws) when brainer.model is downgraded below opus', () => {
+    const warnings: unknown[] = [];
+    (globalThis as unknown as { log: (m?: unknown) => void }).log = (m) => warnings.push(m);
+    try {
+      const c = new Configs({ query: 'q', agents: { brainer: { model: 'sonnet' } } });
+      expect(c.TIER.brainer).toBe('sonnet');
+      expect(warnings.some((w) => typeof w === 'string' && /erratically/.test(w))).toBe(true);
+    } finally {
+      (globalThis as unknown as { log: () => void }).log = () => {};
+    }
+  });
+  it('never warns when brainer keeps opus (default or explicit)', () => {
+    const warnings: unknown[] = [];
+    (globalThis as unknown as { log: (m?: unknown) => void }).log = (m) => warnings.push(m);
+    try {
+      new Configs({ query: 'q' });
+      new Configs({ query: 'q', agents: { brainer: { model: 'opus' } } });
+      expect(warnings.length).toBe(0);
+    } finally {
+      (globalThis as unknown as { log: () => void }).log = () => {};
+    }
+  });
+});
+
+describe('Configs — parallelSourcesPerLaneResearchAgent governs MAX_SOURCES_PER_LANE (B7)', () => {
+  it('defaults MAX_SOURCES_PER_LANE to 12 when the knob is auto', () => {
+    expect(new Configs({ query: 'q' }).MAX_SOURCES_PER_LANE).toBe(12);
+  });
+  it('a positive override governs MAX_SOURCES_PER_LANE directly', () => {
+    const c = new Configs({ query: 'q', parallelSourcesPerLaneResearchAgent: 3 });
+    expect(c.parallelSourcesPerLaneResearchAgent).toBe(3);
+    expect(c.MAX_SOURCES_PER_LANE).toBe(3);
+  });
+  it('an out-of-range override clamps to [1,AUTO_CAP] before governing MAX_SOURCES_PER_LANE', () => {
+    const c = new Configs({ query: 'q', parallelSourcesPerLaneResearchAgent: 99 });
+    expect(c.parallelSourcesPerLaneResearchAgent).toBe(c.AUTO_CAP);
+    expect(c.MAX_SOURCES_PER_LANE).toBe(c.AUTO_CAP);
+  });
+});

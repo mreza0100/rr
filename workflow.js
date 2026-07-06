@@ -114,7 +114,7 @@ class Configs {
   STOP        ;
 
   constructor(rawArgs         ) {
-    // args: { query, mode?, compute?, maxWave?, chaoCoverageStop?, parallelLaneResearchAgentsPerWave?, parallelSourcesPerLaneResearchAgent?, debug?, debugPrompt? }
+    // args: { query, mode?, compute?, maxWave?, chaoCoverageStop?, parallelLaneResearchAgentsPerWave?, parallelSourcesPerLaneResearchAgent?, debug?, debugPrompt?, agents? }
     let parsed         ;
     try {
       parsed = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs;
@@ -180,7 +180,8 @@ class Configs {
     // researcher tier's window below (a reader-unit can never be asked to ingest more than the model can hold).
     this.CONTEXT = { haiku: 200000, sonnet: 200000, opus: 200000 };
     this.MAX_SLICES_PER_READER = 8; // B7: max whole sources combined into ONE reader-unit (a lane of 40 tiny files never packs 40 into one turn)
-    this.MAX_SOURCES_PER_LANE = 12; // B7: max sources packed per lane per wave (caps a runaway scheduler lane before bin-packing)
+    // MAX_SOURCES_PER_LANE (B7 governor) — set below, once parallelSourcesPerLaneResearchAgent is validated: 12
+    // by default ('auto'), or the caller's clamped override when a positive integer is passed.
     this.HANDOFF_CHARS = 16000; // B7: cap the running-answer handoff carried between sequential readers (keeps read + handoff inside context)
     this.MAX_STARVED_WAVES = 2; // B6: consecutive all-null / empty-schedule waves before the crawl breaks with stopReason scheduler-starved
     this.MAX_BRAINER_DEPTH = 3; // safety cap on the spawn-chain depth (root=0); spawning past this depth is refused
@@ -264,6 +265,69 @@ class Configs {
       lineageClerk: 'medium',
       rerunner: 'low',
     };
+    // PER-SEAT OVERRIDE (`agents` arg) — the caller may retune ANY seat's model/effort without touching source.
+    // Applied AFTER the defaults above (overlays them) and BEFORE the reader-budget anchor below (so an
+    // overridden researcher tier is anchored against ITS actual context window). Unknown seat / bad model / bad
+    // effort all throw loudly — no silent coercion, matching every other validation in this constructor.
+    const VALID_TIERS         = ['haiku', 'sonnet', 'opus'];
+    const VALID_EFFORTS           = ['low', 'medium', 'high', 'xhigh'];
+    const seats = Object.keys(this.TIER); // the canonical 16 seat names — read off the default map itself, never a second hand-kept list
+    if (arg.agents !== undefined && arg.agents !== null) {
+      if (typeof arg.agents !== 'object' || Array.isArray(arg.agents))
+        throw new Error(
+          'RR: agents must be an object keyed by seat name, e.g. { researcher: { model: "sonnet" } }',
+        );
+      const overrides = arg.agents                           ;
+      for (const seat of Object.keys(overrides)) {
+        if (!seats.includes(seat))
+          throw new Error(
+            'RR: unknown agent seat "' + seat + '" in `agents` — valid seats: ' + seats.join(', '),
+          );
+        const o = overrides[seat];
+        if (typeof o !== 'object' || o === null || Array.isArray(o))
+          throw new Error('RR: agents.' + seat + ' must be an object { model?, effort? }');
+        const { model, effort } = o                                         ;
+        if (model !== undefined) {
+          if (!VALID_TIERS.includes(model        ))
+            throw new Error(
+              'RR: agents.' +
+                seat +
+                '.model must be one of ' +
+                VALID_TIERS.join(', ') +
+                ', got ' +
+                JSON.stringify(model),
+            );
+          this.TIER[seat] = model        ;
+          // brainer = ALWAYS opus by default (the global brain/reducer) — a caller MAY downgrade it, but never
+          // silently: loud warning at construction, guarded like the mode warning above (log may be unavailable
+          // in unit tests).
+          if (seat === 'brainer' && model !== 'opus') {
+            try {
+              if (typeof log === 'function')
+                log(
+                  '⚠ RR: agents.brainer.model overridden to "' +
+                    model +
+                    '" (below opus) — measured: a Haiku brainer scored erratically + drifted off-goal',
+                );
+            } catch (e) {
+              /* log not available at construction (unit test) → skip the warning */
+            }
+          }
+        }
+        if (effort !== undefined) {
+          if (!VALID_EFFORTS.includes(effort          ))
+            throw new Error(
+              'RR: agents.' +
+                seat +
+                '.effort must be one of ' +
+                VALID_EFFORTS.join(', ') +
+                ', got ' +
+                JSON.stringify(effort),
+            );
+          this.EFFORT[seat] = effort          ;
+        }
+      }
+    }
     // ANCHOR the reader budget (B10) — now that TIER is set: a reader-unit must FIT the researcher tier's context
     // window, and (in chars) EXCEED the overlap re-read so every split makes forward progress. Fail loudly otherwise.
     if (this.RESEARCHER_TOKEN_BUDGET > this.CONTEXT[this.TIER.researcher])
@@ -309,6 +373,12 @@ class Configs {
       this.AUTO_CAP,
       'auto',
     ); // sources/lane: 'auto' (brainer-assigned, hidden cap AUTO_CAP) or clamped [1,AUTO_CAP]
+    // MAX_SOURCES_PER_LANE (B7 governor, consumed by researcher/run.ts) — 'auto' keeps today's fixed cap of 12;
+    // a positive override governs it directly (already clamped to [1,AUTO_CAP] above).
+    this.MAX_SOURCES_PER_LANE =
+      this.parallelSourcesPerLaneResearchAgent === 'auto'
+        ? 12
+        : this.parallelSourcesPerLaneResearchAgent;
     this.PHASE = { scout: 'Scout', crawl: 'Research', finalize: 'Finalize', debug: 'Debug' };
     this.MAX_JUDGE_PASSES = 2; // finalize: max remediation passes the judge may drive (brain-compute / re-refine / crawl-reopen) before the report is written — the judge runs at most MAX+1 times
     this.MAX_LANE_REFAILS = 2; // crawl: max times the per-wave validator re-opens one lane after a null/thin return; after that it surfaces as a known gap (no infinite loop)

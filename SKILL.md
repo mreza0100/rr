@@ -1,6 +1,6 @@
 ---
 name: rr
-version: "3.0.2"
+version: "3.1.0"
 repo: "https://github.com/mreza0100/rr"
 description: Launches Research and Report (RR) — a deterministic background Workflow that runs an unbounded, best-first, brainer-steered web crawl, DERIVES an answer over a quote-pinned, independence-clustered claim ledger with computed confidence (computing it when the answer must be built), and writes a cited multi-section report with a verdict and plan. Use when the user wants a researched answer or a topic landscape ("research X", "look into X", "RR X", "rr fast X") and a single web search is not enough. Modes: goal (answer one question) and collect (inventory a topic); "rr fast X" answers inline now via one quick sub-agent instead of the background Workflow. Runs in the background, returns a completion notification, and persists to RR/{slug}/.
 ---
@@ -37,7 +37,7 @@ Call the **Workflow tool**. It runs in the background; a completion notification
 ```
 Workflow({
   scriptPath: "<skill-base-dir>/workflow.js",
-  args: { query, mode, maxParallelBrainers, compute, computeNote, thinkerNote, researcherNote, tag, debug, debugPrompt }
+  args: { query, mode, maxParallelBrainers, compute, computeNote, thinkerNote, researcherNote, tag, debug, debugPrompt, agents }
 })
 ```
 
@@ -49,7 +49,8 @@ Workflow({
 - `chaoCoverageStop` — collect-mode exhaustiveness dial, a number in `(0,1]` (default `0.9`). The dry-stop fires when the frontier plateaus AND estimated Chao1 coverage ≥ this; lower it (e.g. `0.65`) to stop a collect run well before full saturation.
 - `maxParallelBrainers` — `1` (default) … `5`. The brainer-tree width. `1` is the single global brainer. With `2`–`5`, a brainer may SPAWN a focused child onto a rich branch; the children run in parallel, the first whose answer the judge upholds wins (its report becomes `result.md`), a child may abandon a dead-end branch, and every other brainer's evidence still merges into the winner's ledger. More brainers ≈ proportionally more cost — raise it only for a goal with several deep, separable branches.
 - `parallelLaneResearchAgentsPerWave` — `'auto'` (default, brainer-assigned, hidden cap of 5) or an integer clamped to `[1,5]`. How many lanes (rabbit-holes) a wave pursues at once.
-- `parallelSourcesPerLaneResearchAgent` — `'auto'` (default, brainer-assigned, hidden cap of 5) or an integer clamped to `[1,5]`. How many sources one lane's reader thread reads.
+- `parallelSourcesPerLaneResearchAgent` — `'auto'` (default) or an integer clamped to `[1,5]`. Governs `MAX_SOURCES_PER_LANE`, the cap on sources bin-packed into one lane's reader thread per wave: `'auto'` keeps the fixed cap of 12; an integer override REPLACES it with that (clamped) value — lower it to bound a lane's reading cost, e.g. on a wide, shallow crawl.
+- `agents` (optional) — per-seat model/effort override, keyed by seat name: `{ <seat>: { model?: 'haiku'|'sonnet'|'opus', effort?: 'low'|'medium'|'high'|'xhigh' } }`. Valid seats: `scout`, `scoutPlanner`, `scoutMerger`, `prospector`, `brainer`, `validator`, `researcher`, `researchScheduler`, `initiator`, `refiner`, `judge`, `synthesiser`, `debugAnalyst`, `claimAuditor`, `lineageClerk`, `rerunner`. Unknown seat / bad model / bad effort all throw. Retunes ONLY the named seat/field — everything else keeps its documented default. Downgrading `brainer.model` below `'opus'` is allowed but logs a loud warning (measured: a Haiku brainer scored erratically and drifted off-goal) — reach for this only to deliberately trade quality for cost/speed on a specific seat. Example: `agents: { researcher: { model: 'sonnet' }, judge: { effort: 'high' } }`.
 - `compute` — `true` (default) or `false`. The master switch for derivation: `false` runs no compute agents (no stored/rerun derivation mid-wave, no finalize brain-derive) for a faster, gather-and-reason-only run.
 - `computeNote` (optional) — extra run-specific guidance for the compute-aware agents (a method to use, a constraint to respect). Appends to the always-present note that the compute environment ships a scientific Python stack (scipy, sympy, uncertainties, pandas, statsmodels, scikit-learn, networkx, pint, rdkit).
 - `thinkerNote` (optional) — operator run-steering for the reasoning tier: priorities, framing, constraints, audience. Shapes HOW the run is approached and what the report emphasizes — not additional questions to research. Reaches the prospector, brainer, initiator, judge, and synthesiser — never the cheap workers.
@@ -103,6 +104,7 @@ Read when a derivation is authored, re-run, and judged. Name the METHOD, the err
 - `compute: false`: pick when the answer is qualitative synthesis — skipping derivation agents saves a finalize round-trip.
 - `tag`: always set when launching variants of one query in parallel — same slug would collide.
 - `debugPrompt`: pose ONE diagnostic question ("why did lane X starve?") — the analyst answers it against the raw I/O log.
+- `agents`: reach for it to trade quality for cost/speed on ONE seat (e.g. `researcher: { model: 'haiku', effort: 'low' }` on a run where reading is already cheap) or to harden ONE seat further (e.g. `judge: { effort: 'xhigh' }` — it already defaults there, so this is a no-op; raise a seat that defaults lower instead). Leave every seat alone unless you have a specific reason — the defaults are the measured-good policy.
 
 ## Modes
 
