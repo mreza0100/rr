@@ -1397,295 +1397,6 @@ function claimsMd(bs
     '\n'
   );
 }
-// ╔══ module: src/agents/scout/prompts.ts ═════════════════════════════════
-// SCOUT SWARM prompts — three templates + their assembly functions: scoutPlanner (senses the landscape,
-// decomposes the query, proposes search angles) → scout (one PROBE per angle) → scoutMerger (folds every
-// probe into the final ScoutOut). Template strings are module-level consts; each build* fn only
-// assembles/substitutes — it holds no template text itself.
-
-
-                                                                                         
-
-// ── stage 1: scoutPlanner — ground the angle vocabulary in real search results before proposing anything;
-// decompose the query into its distinct axes; propose the probe swarm's search angles ──
-const SCOUT_PLANNER_TPL = `{{! scoutPlanner — grounds the angle vocabulary in real search results, decomposes the query, proposes the probe swarm's angles }}
-Query: "{{query}}" (mode: {{mode}}). {{net}}
-Step 1 — run 1-2 quick WebSearches to sense the landscape's lay. The angle vocabulary below MUST come from what these searches actually surface — never from imagination.
-Step 2 — return decomposition: the query's distinct axes, one line each — everything that must ALL be understood to answer it.
-Step 3 — return angles: 3 to ${CONFIG.SCOUT_PROBES} distinct search angles for a swarm of scout probes, each {name, searchQuery, why, lens}. searchQuery is a concrete, distinct query for THIS angle — never a reworded restatement of another angle's. No two angles may overlap: each must be built to surface pages the others will not.
-MANDATORY whenever it applies to this query:
-(a) a DIRECT angle — the query as asked, straight up.
-(b) a SKEPTIC angle — counter-evidence: criticism, limitations, failed replications, debunking phrasing.
-(c) a RECENT angle — the last ~12 months of developments.
-Fill any remaining slots with whichever of these fit THIS query best: datasets/benchmarks, practitioner communities, regulatory/official sources, industry analyses, adjacent-field framings.{{researcherClause}}
-`;
-
-const buildScoutPlanner = ({ query, mode, net, researcherNote }                  ) => {
-  const researcherClause = researcherNote ? '\n' + researcherNote : '';
-  return render(SCOUT_PLANNER_TPL, { query, mode, net, researcherClause });
-};
-
-// ── stage 2: scout — one PROBE of the swarm, scoped to a single angle. Unchanged reading substrate from
-// v2's single scout (one WebSearch → fetch ≤N sources → the same footer discipline); only the SCOPE
-// narrows from "the whole topic" to "this one angle". ──
-const SCOUT_TPL = `{{! scout — one probe of the swarm, scoped to a single angle: sweeps it and seeds its rabbit-holes }}
-You are scout probe {{index}} of {{total}}, on the angle «{{angleName}}» — {{angleWhy}}. Lens: {{angleLens}}. {{net}}
-Step 1 — run WebSearch with: "{{searchQuery}}". You may refine it ONCE if the results are off-angle — stay on THIS angle, do not wander onto another probe's.
-Step 2 — pick the up-to-${CONFIG.SCOUT_PROBE_SOURCES} most relevant sources FOR THIS ANGLE and fetch each via mcp__harvester__fetch — built-in WebFetch is denied. For each fetched page, first surface the key facts about "{{query}}" as this angle reveals them, then apply this instruction: <<{{footer}}>> If the fetch result reports a local cache path for the page, you may set that claim's cachePath to it — never invent one when the tool did not report it. Skip the footer's Surprise section — no prior claims exist yet.
-Step 3 — return: landscape (2-3 sentences on what THIS ANGLE revealed — not the whole topic, just what this angle's sources showed); pages[] (each: url, 2-3 sentence summary, rabbitHoles[] copied from the page's "Rabbit holes" section as {keyword, why}); nextSources[] union of the pages' "Next sources" sections, each {ref, why}; claims[] union of the pages' "Claims" sections, each pinned to a verbatim quote — a claim without its verbatim quote is worthless, no quote no claim; newTerms[] union of the pages' "New terms" sections; deadEnds[] for any source that timed out, was parked, or was off-topic — do not invent rabbit-holes for those. If every source is dead/unreachable, still return a valid result: landscape from your search, pages [], the dead sources in deadEnds.{{researcherClause}}
-`;
-
-const buildScout = ({
-  query,
-  net,
-  footer,
-  angleName,
-  angleWhy,
-  angleLens,
-  searchQuery,
-  index,
-  total,
-  researcherNote,
-}           ) => {
-  const researcherClause = researcherNote ? '\n' + researcherNote : '';
-  return render(SCOUT_TPL, {
-    query,
-    net,
-    footer,
-    angleName,
-    angleWhy,
-    angleLens,
-    searchQuery,
-    index,
-    total,
-    researcherClause,
-  });
-};
-
-// ── stage 3: scoutMerger — folds every surviving probe's output into ONE final ScoutOut (same schema).
-// No tools: a plain subagent reducing material the probes already gathered — there is no tool-use rabbit
-// hole to guard against (mirrors lineageClerk: no FINISH clause). ──
-const SCOUT_MERGER_TPL = `{{! scoutMerger — folds every angle probe's output into the final ScoutOut, naming the tensions between angles }}
-Query: "{{query}}".
-Decomposition (the query's distinct axes): {{decomposition}}
-Every surviving probe's output (angle name, what it revealed, its pages/claims/newTerms/deadEnds):
-{{probes}}
-Return the FINAL scout result:
-landscape: ONE rich paragraph weaving every angle together — and NAME THE TENSIONS between them (where, say, the SKEPTIC angle contradicts the DIRECT angle). That tension is the single most valuable seed the next stage can receive — surface it explicitly, never bury it.
-pages: the union of every probe's pages, deduped by url, keeping the strongest up to ${CONFIG.SCOUT_PAGES_CAP} — carry each kept page's summary and rabbitHoles EXACTLY as its probe wrote them; you are SELECTING, not rewriting.
-nextSources: the union of every probe's nextSources, deduped by ref.
-claims: the union of every probe's claims, dropping exact duplicates (the same quote reported by more than one probe).
-newTerms: the union, deduped by term.
-deadEnds: the union.
-Only use what the probes actually returned — never invent a page, claim, or term no probe reported.
-`;
-
-const buildScoutMerger = ({ query, decomposition, probes }                 ) =>
-  render(SCOUT_MERGER_TPL, { query, decomposition, probes: plain(probes) });
-// ╔══ module: src/agents/scout/index.ts ═══════════════════════════════════
-// SCOUT SWARM — the wave-0 seed, now three stages instead of one broad sweep: scoutPlanner (sonnet, high)
-// runs 1-2 quick WebSearches to ground the landscape then decomposes the query + proposes 3..SCOUT_PROBES
-// search angles; a swarm of `scout` probes (haiku, medium — UNCHANGED tier: the page reading stays the
-// fixed haiku reader's job, only its scope narrows to one angle) each sweep one angle; scoutMerger (sonnet,
-// high, no tools) folds every surviving probe into the final ScoutOut, naming the tensions between angles.
-// Every stage degrades to a named JS fallback — see run.ts.
-
-
-
-             
-        
-            
-                  
-                   
-         
-                              
-
-// ── stage 1 schema — the planner's decomposition + proposed angles ──
-const SCOUT_ANGLE         = {
-  type: 'object',
-  properties: {
-    name: {
-      type: 'string',
-      description: 'short angle label, e.g. "direct", "skeptic", "recent"',
-    },
-    searchQuery: {
-      type: 'string',
-      description: 'a concrete, distinct search query for THIS angle — never a reworded sibling',
-    },
-    why: { type: 'string', description: 'why this angle matters for the query' },
-    lens: {
-      type: 'string',
-      description: 'the interpretive lens the probe should read its sources through',
-    },
-  },
-  required: ['name', 'searchQuery', 'why'],
-};
-
-const SCOUT_PLANNER         = {
-  type: 'object',
-  properties: {
-    decomposition: { type: 'string', description: "the query's distinct axes, one line each" },
-    angles: {
-      type: 'array',
-      items: SCOUT_ANGLE,
-      description: `3..${CONFIG.SCOUT_PROBES} distinct, non-overlapping search angles for the probe swarm`,
-    },
-  },
-  required: ['decomposition', 'angles'],
-};
-
-const scoutPlanner                          = {
-  tier: CONFIG.TIER.scoutPlanner,
-  effort: CONFIG.EFFORT.scoutPlanner,
-  schema: SCOUT_PLANNER,
-  buildPrompt: buildScoutPlanner,
-};
-
-// ── stage 2 schema — one probe's return. UNCHANGED shape from v2's single scout: field-compatible so
-// scoutMerger (and both JS fallbacks) can reuse this exact schema for the FINAL ScoutOut too. ──
-const SCOUT         = {
-  type: 'object',
-  properties: {
-    landscape: { type: 'string' },
-    pages: { type: 'array', items: PAGE },
-    deadEnds: { type: 'array', items: { type: 'string' } },
-    claims: {
-      type: 'array',
-      items: CLAIM_ITEM,
-      description:
-        "union of the fetched pages' load-bearing facts, each pinned to a verbatim quote — no digest exists yet, so never carries `stance`",
-    },
-    nextSources: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          ref: {
-            type: 'string',
-            description: 'an exact url or DOI a fetched page points to, worth fetching directly',
-          },
-          why: { type: 'string', description: 'one line on why following it matters' },
-        },
-        required: ['ref', 'why'],
-      },
-      description:
-        "union of the fetched pages' highest-value outbound citations — no ledger exists yet, so never carries expect/target",
-    },
-    newTerms: {
-      type: 'array',
-      items: TERM_SEED,
-      description: "union of the fetched pages' community terms of art that we did not use",
-    },
-  },
-  required: ['landscape', 'pages'],
-};
-
-const scout                   = {
-  tier: CONFIG.TIER.scout,
-  effort: CONFIG.EFFORT.scout,
-  schema: SCOUT,
-  buildPrompt: buildScout,
-};
-
-// ── stage 3 — scoutMerger: folds every probe's SCOUT-shaped output into ONE final SCOUT-shaped output. ──
-const scoutMerger                         = {
-  tier: CONFIG.TIER.scoutMerger,
-  effort: CONFIG.EFFORT.scoutMerger,
-  schema: SCOUT, // same shape as a probe's output — the merger folds N of them into one
-  buildPrompt: buildScoutMerger,
-};
-// ╔══ module: src/agents/prospector/prompts.ts ════════════════════════════
-// PROSPECTOR prompts — the venue-naming template + its assembly function. Template strings are
-// module-level consts; buildProspector only assembles/substitutes.
-
-
-                                                           
-
-const PROSPECTOR_TPL = `{{! prospector — names the high-value authoritative source venues for the topic }}
-Goal: "{{query}}". Scout landscape: {{landscape}}
-Sources the scout already opened:
-{{sources}}
-Name the 6-8 highest-value, authoritative source venues for this goal — where primary, expert, or rigorous information on the topic actually lives. The right set is domain-specific (GPU serving → arXiv/USENIX/MLSys/SemiAnalysis/r/LocalLLaMA; a stock → SEC EDGAR/earnings calls/Bloomberg; weather → NOAA/ECMWF).
-Span what is relevant here: primary research (papers/preprints + where they live for this field), official docs, standards bodies/regulators, authoritative datasets/benchmarks, deep practitioner/industry analysis, high-signal community venues. Exclude generic SEO blogs.
-Assess where this subject is most actively researched. When a non-English literature is genuinely significant for this topic — a disease studied mostly in China/Japan, a field led by Russian or Korean groups — name the high-value native venues for those languages (CNKI/Wanfang → Chinese, J-STAGE/ICHUSHI → Japanese, SciELO/LILACS → Spanish/Portuguese, eLibrary.ru → Russian, KoreaMed → Korean), each with how to query it, and set languageGuidance: one line telling the brainer which languages to cover and why. For an English-dominated topic, return only English venues and languageGuidance "".
-Where the same concept is indexed under other names (older or alternate terms, regional spellings), fold those synonyms into the venues' search guidance so English-indexed work filed under a different name is still found.
-For each venue: source (venue + how to reach/search it, e.g. "arXiv (site:arxiv.org)"), goodFor (the sub-questions it is best for — specific enough for the downstream brainer to match each research lane to the right venue), and lang (its language as an ISO-ish code like zh/ja/es/ru/ko — omit for English).
-Run WebSearch (one or more queries) to discover and verify the actual highest-value venues — confirm each exists and is authoritative (memory alone misses recent venues). Return highValueSources (6-8, lang-tagged when non-English), languageGuidance ("" when the topic is English-dominated), and a brief reasoning naming what you searched.{{thinkerClause}}{{researcherClause}}{{WEB_ONLY}}
-`;
-
-const buildProspector = ({
-  query,
-  landscape,
-  sources,
-  thinkerNote,
-  researcherNote,
-}                ) => {
-  const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
-  const researcherClause = researcherNote ? '\n' + researcherNote : '';
-  return render(PROSPECTOR_TPL, {
-    query,
-    landscape,
-    sources: plain(sources),
-    thinkerClause,
-    researcherClause,
-    WEB_ONLY,
-  });
-};
-// ╔══ module: src/agents/prospector/index.ts ══════════════════════════════
-// PROSPECTOR — runs after the scout, first agent of the Crawl phase. Names the high-value
-// AUTHORITATIVE source venues for THIS topic (domain-specific); output rides with the brainer, which
-// assigns the relevant subset to each lane. Tier: opus (cross-domain venue judgment). Effort: high.
-
-
-                                                                          
-
-// PROSPECTOR schema — names the high-value AUTHORITATIVE source venues for THIS topic (domain-specific); output rides with the brainer.
-const SOURCES         = {
-  type: 'object',
-  properties: {
-    highValueSources: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          source: {
-            type: 'string',
-            description:
-              'the venue + how to reach/search it, e.g. "arXiv (site:arxiv.org)", "SemiAnalysis (semianalysis.com)"',
-          },
-          goodFor: {
-            type: 'string',
-            description:
-              'the kinds of sub-questions/rabbit-holes this venue is BEST for — specific enough for the brainer to match a research lane to it',
-          },
-          lang: {
-            type: 'string',
-            description:
-              "the venue's language as an ISO-ish code (zh, ja, es, pt, ru, ko, …) or language name; OMIT for English venues",
-          },
-        },
-        required: ['source', 'goodFor'],
-      },
-    },
-    languageGuidance: {
-      type: 'string',
-      description:
-        'one line routing the brainer to the non-English literatures that matter for this topic and why; "" when the topic is English-dominated',
-    },
-    reasoning: {
-      type: 'string',
-      description: 'brief: how you chose these venues / what you searched to confirm',
-    },
-  },
-  required: ['highValueSources'],
-};
-
-const prospector                        = {
-  tier: CONFIG.TIER.prospector,
-  effort: CONFIG.EFFORT.prospector,
-  schema: SOURCES,
-  buildPrompt: buildProspector,
-};
 // ╔══ module: src/agents/brainer/prompts.ts ═══════════════════════════════
 // BRAINER prompts — the brain's per-wave template + the clause-assembly function. Template strings
 // are module-level consts; buildBrainer only assembles/substitutes the per-wave clauses.
@@ -2094,46 +1805,215 @@ const BRAIN_COMPUTE         = {
   properties: { resultSoFar: RESULT_SO_FAR },
   required: ['resultSoFar'],
 };
-// ╔══ module: src/agents/validator/prompts.ts ═════════════════════════════
-// VALIDATOR prompts — the per-wave coverage-gate template + its assembly function. Template strings are
-// module-level consts; buildValidator only assembles/substitutes the null-lane clause.
+// ╔══ module: src/runtime.ts ══════════════════════════════════════════════
+
+
+                                                              
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent runtime — the shared sub-agent caller + the debug capture buffers. Lives
+// in its own module (bundled before the per-agent run.ts modules) so every run fn
+// imports retryAgent without a cycle back through engine.ts; the engine no longer
+// owns the agent-call plumbing, only the orchestration that consumes it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// L7 retry indirection — wraps every agent() call; the _agent alias keeps it from rewriting itself.
+const _agent = agent;
+// Debug capture (opt-in via arg.debug): the raw agent I/O + the full run-log stream, consumed by the end Debug & Analysis agent.
+const IO_LOG               = [];
+const LOG_BUFFER           = [];
+const _log = globalThis.log;
+try {
+  globalThis.log = (m          ) => {
+    const s = typeof m === 'string' ? m : String(m);
+    // per-wave checkpoint lines are a live-output/recovery mechanism, not a debug narrative — keep them
+    // OUT of _debug.md's Run log so a long run's checkpoint spam never bloats it.
+    if (CONFIG.debug && !s.startsWith(CONFIG.CHECKPOINT_MARK)) LOG_BUFFER.push(s);
+    return _log(m);
+  };
+} catch (e) {
+  /* log not writable → run-log just won't be buffered */
+}
+
+// run a sub-agent with AGENT_RETRIES retries, narrowing the result to its agent's typed `*Out` shape (T); degrades to null when exhausted.
+const retryAgent = async    (prompt        , opts           )                    => {
+  if (opts && opts.label) PROMPT_LOG[opts.label] = prompt;
+  for (let attempt = 0; attempt <= CONFIG.AGENT_RETRIES; attempt++) {
+    try {
+      const out = (await _agent(prompt, opts))     ;
+      // The harness resolves to null WITHOUT throwing when the sub-agent dies on a
+      // terminal API error (e.g. a safety-classifier block) or is skipped mid-run.
+      // Route null through the same retry ladder as a thrown error — otherwise the
+      // ladder never engages on exactly the failure class it exists for. A borderline
+      // classifier block is often probabilistic; a fresh spawn frequently passes.
+      if (out == null)
+        throw new Error('agent returned null (terminal API error / skip / safety block)');
+      if (CONFIG.debug)
+        IO_LOG.push({
+          label: (opts && opts.label) || '?',
+          model: (opts && opts.model) || '?',
+          phase: (opts && opts.phase) || '?',
+          prompt,
+          output: out,
+        });
+      return out;
+    } catch (e) {
+      log(
+        '  ⚠ agent error (attempt ' +
+          (attempt + 1) +
+          '/' +
+          (CONFIG.AGENT_RETRIES + 1) +
+          '): ' +
+          ((e && e.message) || e),
+      );
+      if (attempt === CONFIG.AGENT_RETRIES) {
+        log('  ⚠ agent retries exhausted → degraded to null');
+        if (CONFIG.debug)
+          IO_LOG.push({
+            label: (opts && opts.label) || '?',
+            model: (opts && opts.model) || '?',
+            phase: (opts && opts.phase) || '?',
+            prompt,
+            output: null,
+            error: (e && e.message) || String(e),
+          });
+        return null;
+      }
+    }
+  }
+  return null;
+};
+// ╔══ module: src/agents/brainer/run.ts ═══════════════════════════════════
+
+
 
 
                                                           
+                                                                                         
 
-const VALIDATE_TPL = `{{! validator — per-wave coverage gate: did this wave's lanes fulfill their requests? }}
-You are the VALIDATOR for one research wave of: "{{query}}". Judge cheaply, from the intros below, whether each lane fulfilled what it was sent to find.
-Requests this wave (\`#id keyword — why\`):
-{{requests}}
-What each lane returned (intro only):
-{{findings}}{{nullClause}}
-For each request return {id, fulfilled, reason}: fulfilled=true when the return actually answers the request; false when it is off-target, empty, or too thin to use (one-line reason). Then set enough — did the wave make real progress overall? — and missing — the specific gaps still open for the next wave to re-pursue.
-Return checks, enough, missing.{{FINISH}}
+// the single Opus BRAINER — the brain / global reducer. Sees the open store + pursued set + running resultSoFar; returns the updated
+// resultSoFar + DELTAS (rescore / add / lookupNext / rename / drop / stop). Can LOOK UP stored leads OR ORIGINATE new directions; code-capable
+// (general-purpose) when compute is on, so it can derive its own steering numbers inline — no separate compute stage.
+async function runBrainer(
+  bs              ,
+  wave        ,
+  findings           ,
+  phaseName         = CONFIG.PHASE.crawl,
+  ctx                                             ,
+)                        {
+  const open = bs.rabbitHoles.map(openLine);
+  // v3 STEERING — the ledger digest + calibration/sensitivity/coverage state, computed here (pure reads off
+  // bs) and handed to buildBrainer, which decides per-clause whether there is anything to say.
+  const ledger = ledgerLines(bs, CONFIG.BRAINER_LEDGER_CAP);
+  const derivation =
+    bs.derivation && bs.derivation.lastRun
+      ? {
+          quantiles: bs.derivation.lastRun.quantiles,
+          sensitivity: bs.derivation.lastRun.sensitivity,
+          inputs: bs.derivation.inputs,
+          stale: !!bs.derivationStale,
+        }
+      : undefined;
+  return retryAgent       (
+    brainer.buildPrompt({
+      wave,
+      query: CONFIG.query,
+      rubric: CONFIG.RUBRIC,
+      landscape: bs.scout .landscape,
+      pursuedList: bs.pursuedList,
+      open,
+      findings,
+      topScores: bs.topScores,
+      resultSoFar: bs.resultSoFar,
+      stop: CONFIG.STOP,
+      mode: CONFIG.mode,
+      venues: venuesWithYieldWarn(bs.highValueSources, bs.venueStats),
+      languageGuidance: bs.languageGuidance,
+      lastValidatorMissing: bs.lastValidatorMissing,
+      compute: CONFIG.compute,
+      computeNote: CONFIG.COMPUTE_NOTE,
+      thinkerNote: CONFIG.THINKER_NOTE,
+      researcherNote: CONFIG.RESEARCHER_NOTE,
+      ledger,
+      calib: bs.yieldCalib,
+      derivation,
+      chao: bs.chao,
+      // brainer-tree context — identity off the brainer, per-wave permissions off ctx (both inert in single-brainer runs)
+      isChild: !bs.isRoot,
+      parentName: bs.parentName || undefined,
+      mandate: bs.mandate || undefined,
+      trail: bs.trail || undefined,
+      canSpawn: ctx ? ctx.canSpawn : false,
+      lastWave: ctx ? ctx.lastWave : false,
+    }),
+    {
+      label: 'brainer-' + (bs.isRoot ? '' : bs.name + '-') + 'w' + wave,
+      phase: phaseName,
+      model: brainer.tier,
+      effort: brainer.effort,
+      // pruned per call — optional clauses inflate the schema past the spawn classifier's size limit
+      schema: buildCoord({ compute: CONFIG.compute, canSpawn: !!(ctx && ctx.canSpawn) }),
+      agentType: CONFIG.compute ? CONFIG.GENERAL_PURPOSE : undefined,
+    },
+  );
+}
+
+// brain FINALIZE-COMPUTE — the brain (code-capable) derives the answer on the hardened facts, per the judge directive.
+// Pure: returns the BrainComputeOut; the engine folds out.resultSoFar back into bs.
+async function runBrainerCompute(
+  bs              ,
+  hardenedFacts               ,
+  directive        ,
+  reason        ,
+  pass        ,
+)                                  {
+  return retryAgent                 (
+    buildBrainerCompute({
+      query: CONFIG.query,
+      resultSoFar: bs.resultSoFar,
+      hardenedFacts,
+      directive,
+      reason,
+      computeNote: CONFIG.COMPUTE_NOTE,
+      thinkerNote: CONFIG.THINKER_NOTE,
+    }),
+    {
+      label: 'brain-compute-' + pass,
+      phase: CONFIG.PHASE.finalize,
+      model: brainer.tier,
+      effort: brainer.effort,
+      agentType: CONFIG.GENERAL_PURPOSE,
+      schema: BRAIN_COMPUTE,
+    },
+  );
+}
+// ╔══ module: src/agents/claimAuditor/prompts.ts ══════════════════════════
+// CLAIM AUDITOR prompts — the batched mechanical quote-audit template + its assembly function. Template
+// strings are module-level consts; buildClaimAuditor only assembles/substitutes the items list.
+
+
+                                                           
+
+const CLAIM_AUDIT_TPL = `{{! claimAuditor — batched mechanical quote audit: does each claim's quote exist verbatim in its cache file, and does it carry the claim on its own? }}
+You are the CLAIM AUDITOR. For each item below, mechanically verify its quote against the cache file on disk — you are grepping for a pin, not judging truth.
+Items (\`#id claim | quote | cachePath\`):
+{{items}}
+For EACH item, use python3 for a robust substring search: read the file at cachePath with errors='replace'; collapse runs of whitespace to a single space in BOTH the file text and the quote; then test whether the normalized quote is a substring of the normalized file text. If the file cannot be read for any reason (missing, permission error, anything) NEVER fabricate a verdict — that item's verdict is 'fail' with note "file unreadable".
+When the quote IS found verbatim, also judge whether the quoted text, on its own, actually carries the claim (not merely nearby context) — verdict 'pass' only when both hold; otherwise 'fail' with a one-line note.
+Return checks: one {id, verdict, note?} per item — verdict is 'pass' or 'fail'.{{FINISH}}
 `;
 
-const buildValidator = ({ query, requests, findings, nullLanes }               ) => {
-  const nullClause =
-    nullLanes && nullLanes.length
-      ? `\nLanes that returned nothing (failed outright): ${plain(nullLanes)}`
-      : '';
-  return render(VALIDATE_TPL, {
-    query,
-    requests: plain(requests),
-    findings: plain(findings),
-    nullClause,
-    FINISH,
-  });
-};
-// ╔══ module: src/agents/validator/index.ts ═══════════════════════════════
-// VALIDATOR — the per-wave coverage gate of the Crawl phase (distinct from the terminal judge). After each
-// research wave it asks, cheaply, whether every lane fulfilled its request; the engine re-opens any lane that
-// returned null or fulfilled:false (bounded by a per-lane failCount) so the next brainer can re-pursue it.
-// Tier: sonnet (a bounded, cheap per-wave check). Effort: medium.
+const buildClaimAuditor = ({ items }                ) =>
+  render(CLAIM_AUDIT_TPL, { items: plain(items), FINISH });
+// ╔══ module: src/agents/claimAuditor/index.ts ════════════════════════════
+// CLAIM AUDITOR — batched per wave: for each new claim with a cachePath, mechanically verify (Bash/python3
+// grep) that its verbatim quote exists in the cache file AND carries the claim on its own. Tier: haiku (a
+// bounded, mechanical per-batch job). Effort: medium. Dies → its claims stay 'pending' (unpinned downstream).
 
 
-                                                                         
+                                                                          
 
-const VALIDATE         = {
+const CLAIM_AUDIT         = {
   type: 'object',
   properties: {
     checks: {
@@ -2141,37 +2021,908 @@ const VALIDATE         = {
       items: {
         type: 'object',
         properties: {
-          id: { type: 'number', description: 'the request id this verdict is for' },
-          fulfilled: {
-            type: 'boolean',
-            description:
-              'true = the lane answered its request; false = off-target, empty, or too thin',
-          },
-          reason: {
+          id: { type: 'number', description: 'the claim id this verdict is for' },
+          verdict: { type: 'string', enum: ['pass', 'fail'] },
+          note: {
             type: 'string',
-            description: 'one line — why it fell short (when fulfilled is false)',
+            description: 'one line, e.g. "file unreadable" or why the audit failed',
           },
         },
-        required: ['id', 'fulfilled'],
+        required: ['id', 'verdict'],
       },
-      description: 'one verdict per request',
-    },
-    enough: { type: 'boolean', description: 'true = the wave made real progress overall' },
-    missing: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'the specific gaps still open, for the next brainer to re-pursue',
+      description: 'one verdict per audited claim',
     },
   },
-  required: ['checks', 'enough'],
+  required: ['checks'],
 };
 
-const validator                       = {
-  tier: CONFIG.TIER.validator,
-  effort: CONFIG.EFFORT.validator,
-  schema: VALIDATE,
-  buildPrompt: buildValidator,
+const claimAuditor                        = {
+  tier: CONFIG.TIER.claimAuditor,
+  effort: CONFIG.EFFORT.claimAuditor,
+  schema: CLAIM_AUDIT,
+  buildPrompt: buildClaimAuditor,
 };
+// ╔══ module: src/agents/claimAuditor/run.ts ══════════════════════════════
+// CLAIM AUDITOR dispatch — batches new claims with a cachePath into ≤AUDIT_BATCH-item chunks, one
+// retryAgent call per chunk, all chunks dispatched CONCURRENTLY via parallel(). A dead (null) chunk
+// contributes nothing — its claims simply stay 'pending' (the caller treats pending as unpinned
+// downstream). Hallucinated ids (not in the chunk's own input set) are dropped. Zero auditable claims →
+// no agent spawned at all.
+
+
+
+
+                                                          
+                                                                 
+
+async function runClaimAuditor(
+  bs              ,
+  claims         ,
+  tag        ,
+  phaseName        ,
+)                                                                    {
+  const out = new Map                                                     ();
+  const auditable = claims.filter((c) => !!c.cachePath); // only claims that can actually be greped
+  if (!auditable.length) return out;
+  const chunks = chunk(auditable, CONFIG.AUDIT_BATCH);
+  // parallel() journals thunk results as JSON (a Set would come back as {}), so the thunk returns
+  // the bare agent result and the id set is rebuilt per chunk on the consumer side (order-aligned).
+  const results = await parallel(
+    chunks.map((ch, i) => () =>
+      retryAgent               (
+        claimAuditor.buildPrompt({
+          items: ch.map((c) => ({
+            id: c.id,
+            claim: c.claim,
+            quote: c.quote,
+            cachePath: c.cachePath ,
+          })),
+        }),
+        {
+          label: 'claim-audit-' + tag + (chunks.length > 1 ? '-b' + i : ''),
+          phase: phaseName,
+          model: claimAuditor.tier,
+          effort: claimAuditor.effort,
+          agentType: CONFIG.GENERAL_PURPOSE,
+          schema: claimAuditor.schema,
+        },
+      ),
+    ),
+  );
+  results.forEach((res, i) => {
+    if (!res) return; // dead chunk — its claims stay 'pending'
+    const ids = new Set(chunks[i].map((c) => c.id));
+    for (const c of res.checks || [])
+      if (c && ids.has(c.id) && (c.verdict === 'pass' || c.verdict === 'fail'))
+        out.set(c.id, { verdict: c.verdict, note: c.note });
+  });
+  return out;
+}
+// ╔══ module: src/agents/debugAnalyst/prompts.ts ══════════════════════════
+// DEBUG ANALYST prompts — the diagnostics template + its assembly function. Template strings are
+// module-level consts; buildDebugAnalyst only assembles/substitutes the focus clause.
+
+
+                                                             
+
+const DEBUG_TPL = `{{! debug — consolidates metrics, run log, and raw agent I/O into one debug report }}
+Consolidate and analyze this RR run's diagnostics for an engineer debugging the pipeline. Goal: "{{query}}".
+Walk it phase by phase — scout → prospector → each research wave → finalize (initiate → refine → judge → synthesise) — reporting what happened at each with the actual numbers, plus anomalies, degraded/failed agents, or wasted effort to fix.
+Prospector→researcher utilization (run this check): the prospector named these venues:
+{{highValueSources}}
+Each lane in laneRecords carries the \`assignedVenues\` the brainer gave it; from that lane's summary + rabbitHoles, judge whether the researcher actually drew on those venues. Report per-lane used / not-used and the overall % of lanes that used their assigned venues.{{focusClause}}
+v3 ledger machinery to sanity-check: claims are quote-pinned + audited by a claimAuditor (dead auditor ⇒ claims stuck pending), clustered by a lineageClerk (bad clustering ⇒ wrong settled/tentative), derivations rerun by a rerunner — all degrade to null. Check metrics.claimsTotal / nullAttacksTotal / citationsBogus / chao for anomalies (e.g. all claims pending, zero nullAttacks on a contested topic, bogus citations stripped).
+Metrics:
+{{metrics}}
+Lane records (wave, keyword, assignedVenues, summary, rabbitHoles):
+{{laneRecords}}
+Per-wave log:
+{{waveLog}}
+Per-wave result-so-far log (the brainer's running memory each wave):
+{{resultLog}}
+Return diagnosis (markdown).{{FINISH}}
+`;
+
+const buildDebugAnalyst = ({
+  query,
+  focus,
+  metrics,
+  waveLog,
+  resultLog,
+  highValueSources,
+  laneRecords,
+}                  ) => {
+  const focusClause = focus
+    ? `
+Then answer this run-specific question directly: ${focus}`
+    : '';
+  return render(DEBUG_TPL, {
+    query,
+    highValueSources: plain(highValueSources),
+    focusClause,
+    metrics: plain(metrics),
+    laneRecords: plain(laneRecords),
+    waveLog: plain(waveLog),
+    resultLog: plain(resultLog),
+    FINISH,
+  });
+};
+// ╔══ module: src/agents/debugAnalyst/index.ts ════════════════════════════
+// DEBUG ANALYST — last phase, opt-in (arg.debug). Consolidates the run's diagnostics corner by corner
+// (incl. prospector→researcher venue utilization + any arg.debugPrompt question) into one _debug.md.
+// Tier: opus (diagnostic synthesis). Effort: high.
+
+
+                                                                            
+
+const DIAG         = {
+  type: 'object',
+  properties: {
+    diagnosis: {
+      type: 'string',
+      description: 'the full corner-by-corner debug consolidation + analysis as markdown',
+    },
+  },
+  required: ['diagnosis'],
+};
+
+const debugAnalyst                          = {
+  tier: CONFIG.TIER.debugAnalyst,
+  effort: CONFIG.EFFORT.debugAnalyst,
+  schema: DIAG,
+  buildPrompt: buildDebugAnalyst,
+};
+// ╔══ module: src/agents/debugAnalyst/run.ts ══════════════════════════════
+
+
+
+
+                                                      
+                                                          
+                                                             
+
+// DEBUG & ANALYSIS (last phase, opt-in via arg.debug): an Opus agent consolidates the run's diagnostics — corner-by-corner,
+// prospector→researcher venue utilization, and any arg.debugPrompt question — then JS appends the verbatim metrics, run log,
+// and raw agent I/O (exact prompt in / exact output out) into one shippable _debug.md. Returns the _debug.md markdown (the engine writes it).
+async function runDebug(
+  rr                ,
+  bs              ,
+  metrics         ,
+)                  {
+  phase(CONFIG.PHASE.debug);
+  log(
+    '· debug & analysis · ' +
+      debugAnalyst.tier +
+      ' · over ' +
+      IO_LOG.length +
+      ' agent calls + ' +
+      LOG_BUFFER.length +
+      ' log lines + ' +
+      rr.laneRecords.length +
+      ' lane records',
+  );
+  const diag = await retryAgent         (
+    debugAnalyst.buildPrompt({
+      query: CONFIG.query,
+      focus: CONFIG.debugPrompt,
+      metrics,
+      waveLog: bs.waveLog,
+      resultLog: bs.resultLog,
+      highValueSources: rr.highValueSources,
+      laneRecords: rr.laneRecords,
+    }),
+    {
+      label: 'debug-analyst',
+      phase: CONFIG.PHASE.debug,
+      model: debugAnalyst.tier,
+      effort: debugAnalyst.effort,
+      schema: debugAnalyst.schema,
+    },
+  );
+  const narrative = (diag && diag.diagnosis) || '_(debug analyst failed — see raw sections below)_';
+  const rawIO = IO_LOG.map(
+    (e, i) =>
+      '### ' +
+      (i + 1) +
+      '. `' +
+      e.label +
+      '` · ' +
+      e.model +
+      ' · ' +
+      e.phase +
+      '\n\n**PROMPT**\n\n' +
+      (e.prompt || '') +
+      '\n\n**OUTPUT**' +
+      (e.error ? ' _(' + e.error + ')_' : '') +
+      '\n\n' +
+      (e.output == null ? '_(null)_' : JSON.stringify(e.output, null, 2)),
+  ).join('\n\n');
+  const artifact =
+    '# RR debug & analysis — ' +
+    clip(CONFIG.query, 80) +
+    (CONFIG.debugPrompt ? '\n\n**Debug prompt:** ' + CONFIG.debugPrompt : '') +
+    '\n\n## Analysis (debug-analyst · ' +
+    debugAnalyst.tier +
+    ')\n\n' +
+    narrative +
+    '\n\n## Metrics\n\n```json\n' +
+    JSON.stringify(metrics, null, 2) +
+    '\n```' +
+    '\n\n## Run log (' +
+    LOG_BUFFER.length +
+    ' lines)\n\n```\n' +
+    LOG_BUFFER.join('\n') +
+    '\n```' +
+    '\n\n## Raw agent I/O — exact prompt in, exact output out (' +
+    IO_LOG.length +
+    ' calls)\n\n' +
+    (rawIO || '_(none captured)_') +
+    '\n';
+  log('· debug DONE · _debug.md assembled');
+  return artifact;
+}
+// ╔══ module: src/agents/initiator/prompts.ts ═════════════════════════════
+// INITIATOR prompts — the finalize-planner template + its assembly function. Template strings are
+// module-level consts; buildInitiator only substitutes the operator-steering clause.
+
+
+                                                          
+
+const INITIATOR_TPL = `{{! initiator — plans the finalize pipeline, shaping the finish to this query }}
+You direct the FINALIZE phase for: "{{query}}". The research is done; below is everything it gathered. Shape the finishing pipeline to fit this query, then return the plan.{{modeClause}}
+The finish runs in two parts, and you set how each starts:
+1. REFINEMENT — one refine agent per item adversarially fact-checks that group of load-bearing facts and returns them corrected and hardened. You decide the grouping. (A judge then evaluates the hardened answer and may trigger a derivation or a re-check; you do not plan that.)
+2. SYNTHESIS — writes the final report from the hardened, judged answer. You give it a focus note.
+The run's accumulated RESULT (the brainer's living memory — answer, the \`working\` derivation, keyClaimIds, gaps, tensions):
+{{resultSoFar}}
+Per-wave log:
+{{waveLog}}
+Scout landscape: {{landscape}}
+Top open rabbit-holes left unpursued:
+{{openRabbitHoles}}{{ledgerClause}}{{sensitivityClause}}
+Return:
+- refinement.facts[] — the load-bearing facts to harden, aggressively grouped: bundle facts that share sources or stand or fall together into ONE item (each {fact, why, claimId?}); prefer a few broad groups over many atomic facts. Cover every fact that would change the answer if wrong; skip soft restatements. Where a fact corresponds to a ledger claim, set its claimId — hardening then updates that claim's record.
+- synthesiser.focus — one note on what the report must emphasize / the shape the answer should take.{{thinkerClause}}{{FINISH}}
+`;
+
+const buildInitiator = ({
+  query,
+  resultSoFar,
+  waveLog,
+  landscape,
+  openRabbitHoles,
+  mode,
+  thinkerNote,
+  ledger,
+  sensitivity,
+}               ) => {
+  const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
+  // collect mode ⇒ harden the BREADTH (coverage of the landscape), not the shape of a single answer.
+  const modeClause =
+    mode === 'collect'
+      ? ' This run was a COLLECT inventory, not a single-answer goal — harden BREADTH: the key claims and the major sub-areas that span the landscape, and set the report focus to completeness of the catalogue rather than the shape of one answer.'
+      : '';
+  // ledgerClause — the ledger-fed initiator (v3 FINALIZE): names of already-pinned claims so facts can bind
+  // to them via claimId instead of restating them.
+  const ledgerClause = ledger
+    ? `
+CLAIM LEDGER — the run's evidence (ids look like c12, clusters like clu2: c12 [status·clu2·audit] claim = value):
+${ledger}`
+    : '';
+  // sensitivityClause — SENSITIVITY RANKING (v3 FINALIZE): once a derivation has a completed rerun, prioritize
+  // hardening the claims behind the inputs that dominate the variance — a lane wasted on a low-variance input
+  // cannot move the answer.
+  const sensitivityClause = sensitivity
+    ? `
+SENSITIVITY RANKING — derivation inputs by variance share (with their backing claims):
+${sensitivity}
+Prioritize hardening the claims behind the top-variance inputs.`
+    : '';
+  return render(INITIATOR_TPL, {
+    query,
+    resultSoFar: plain(resultSoFar),
+    waveLog: plain(waveLog),
+    landscape,
+    openRabbitHoles: plain(openRabbitHoles),
+    modeClause,
+    ledgerClause,
+    sensitivityClause,
+    thinkerClause,
+    FINISH,
+  });
+};
+// ╔══ module: src/agents/initiator/index.ts ═══════════════════════════════
+// INITIATOR — opens the Finalize phase. Reads the final resultSoFar and shapes the finish to the query:
+// names the load-bearing facts to harden and sets the report focus. Tier: opus (synthesis/planning).
+// Effort: xhigh.
+
+
+                                                                         
+
+// FINALIZE schemas. The INITIATOR plans the finish (which facts to harden, the report focus); a Sonnet REFINE pass adversarially
+// fact-checks each load-bearing fact and returns its corrected claim; an Opus JUDGE then judges the hardened answer.
+const INITIATOR         = {
+  type: 'object',
+  properties: {
+    refinement: {
+      type: 'object',
+      properties: {
+        facts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              fact: {
+                type: 'string',
+                description:
+                  'a group of related load-bearing facts the answer rests on (state the whole cluster)',
+              },
+              why: {
+                type: 'string',
+                description: 'why this group is load-bearing — what breaks if it is wrong',
+              },
+              claimId: {
+                type: 'number',
+                description:
+                  'ledger claim id this fact corresponds to, when one exists — hardening then updates that claim record',
+              },
+            },
+            required: ['fact', 'why'],
+          },
+          description:
+            'load-bearing facts to harden, aggressively grouped into a few items — bundle facts that share sources or stand or fall together into one; cover all that would change the answer if wrong, skip soft restatements',
+        },
+      },
+      required: ['facts'],
+    },
+    synthesiser: {
+      type: 'object',
+      properties: {
+        focus: {
+          type: 'string',
+          description:
+            'a note to the report writer on what to emphasize / the shape the answer should take',
+        },
+      },
+      required: ['focus'],
+    },
+  },
+  required: ['refinement', 'synthesiser'],
+};
+
+const initiator                       = {
+  tier: CONFIG.TIER.initiator,
+  effort: CONFIG.EFFORT.initiator,
+  schema: INITIATOR,
+  buildPrompt: buildInitiator,
+};
+// ╔══ module: src/agents/judge/prompts.ts ═════════════════════════════════
+// JUDGE prompts — the finalize-phase terminal-skeptic template + its assembly function. Template
+// strings are module-level consts; buildJudge only assembles/substitutes the compute-aware clauses.
+
+
+                                                      
+
+const JUDGE_TPL = `{{! judge — finalize-phase terminal skeptic: judges the hardened answer before the report is written }}
+You are the JUDGE — the terminal skeptic of the FINALIZE phase for: "{{query}}". The crawl is done and its load-bearing facts were just hardened. Judge whether the answer is actually sound before the report is written.
+The answer + its keyClaimIds + \`working\` derivation (the run's living memory):
+{{resultSoFar}}
+Hardened facts (each adversarially fact-checked + source-corrected by a refine pass):
+{{cleanReports}}
+What the answer must deliver: {{focus}}{{openClause}}{{modeClause}}{{ledgerClause}}{{nullAttacksClause}}{{confidenceClause}}{{stopClause}}
+Before upholding, actively try to disprove the load-bearing claim as hard as you can — \`verificationSound\` holds only when it survives every angle:
+- funding / conflict of interest — is the trial run or funded by the product's own seller?
+- independent replication — does a separate group confirm it, or does the headline rest on a single source?
+- contradicting / null results — search for failed replications and negative trials that cut against it.
+- retraction status — check PubPeer, retraction notices, and expressions of concern.
+- evidence quality — a weak sample size or unaddressed limitations downgrade a claim, however confidently stated.
+A claim that survives this cross-examination is sound; one that does not → \`verificationSound\` false, naming the specific weakness in \`directive\`.
+Judge four things, each a strict boolean:
+- goalMet — the answer fully meets the goal AND delivers the spec above, not merely "close enough".
+- verificationSound — the refine pass genuinely verified the facts (caught real errors, used current correct values) rather than rubber-stamping or mis-hardening one.
+- needsCompute — the answer rests on a quantitative derivation it does not yet hold.{{computeClause}}
+- computeSound — any derivation already present is valid (right inputs, propagated error bars, no arithmetic slip); true when none is needed.
+Uphold a sound finish: when goalMet, verificationSound, and computeSound all hold, return them true with an empty directive. Otherwise name the single most load-bearing problem and the precise fix.
+Return goalMet, verificationSound, needsCompute, computeSound, reasoning (the load-bearing reason for the verdict), directive (the exact fix or derivation to perform; '' when satisfied), reopenRabbitHoles (1-3 {keyword, why} ONLY when a real evidence/coverage gap needs more crawling, else []), retractClaimIds (ledger claim ids whose evidence is discredited — retraction, fabrication, or misattribution surfaced during verification; [] otherwise).{{thinkerClause}}{{FINISH}}
+`;
+
+const buildJudge = ({
+  query,
+  resultSoFar,
+  cleanReports,
+  focus,
+  openRabbitHoles,
+  compute,
+  mode,
+  computeNote,
+  thinkerNote,
+  ledger,
+  survivedAttacks,
+  neverChallenged,
+  computedConfidence,
+  stop,
+}           ) => {
+  const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
+  // collect mode ⇒ goalMet is INVENTORY COMPLETENESS + per-item verification, not whether one answer is reached.
+  const modeClause =
+    mode === 'collect'
+      ? `
+MODE = collect — judge goalMet as INVENTORY COMPLETENESS: every major sub-area of the landscape is catalogued AND each catalogued item is individually verified, not whether a single answer is reached.`
+      : '';
+  const computeClause = compute
+    ? ` A derivation may be written and run (Python scientific stack).${computeNote ? '\n' + computeNote : ''}`
+    : ' Derivation is off for this run — you cannot run any computation. If the answer is complete without one, set needsCompute false and computeSound true; if it genuinely rests on a quantitative derivation this run cannot perform, report that honestly — set needsCompute true and name the missing derivation in `directive` (it is surfaced as a stated limitation, never fabricated). Either way set computeSound true: no derivation is present to be unsound.';
+  const openClause =
+    openRabbitHoles && openRabbitHoles.length
+      ? `
+LEFTOVER OPEN RABBIT-HOLES — leads the crawl surfaced but never pursued (it stopped first). Decide whether any names a REAL gap the answer needs; if one does, set goalMet false and return it in reopenRabbitHoles to reopen the crawl on it — otherwise ignore them:
+${plain(openRabbitHoles)}`
+      : '';
+  // ledgerClause — the CLAIM LEDGER digest + the independence discipline (v3 FINALIZE): corroboration counts
+  // CLUSTERS, not distinct-sounding source names — a claim whose supports share one cluster is single-source
+  // however many names it wears.
+  const ledgerClause = ledger
+    ? `
+CLAIM LEDGER — the run's evidence (ids look like c12, clusters like clu2: c12 [status·clu2·audit] claim = value):
+${ledger}
+Corroboration counts CLUSTERS: a claim whose supports share one cluster is SINGLE-SOURCE however many names it wears — flag any "independent" label the answer asserts that the clusters do not back.`
+    : '';
+  // nullAttacksClause — challenged-and-survived vs never-challenged (v3 FINALIZE): a completed counter-search
+  // that found nothing is first-class state, distinct from a key claim nobody has put to the test yet.
+  const survivedLine =
+    survivedAttacks && survivedAttacks.length
+      ? 'CHALLENGED AND SURVIVED (counter-searched, nothing found): ' + survivedAttacks.join('; ')
+      : '';
+  const neverLine =
+    neverChallenged && neverChallenged.length
+      ? 'NEVER CHALLENGED key claims: ' + neverChallenged.join('; ')
+      : '';
+  const nullAttacksClause =
+    survivedLine || neverLine ? '\n' + [survivedLine, neverLine].filter(Boolean).join('\n') : '';
+  // confidenceClause — the computed-confidence, lower-only discipline (v3 FINALIZE).
+  const confidenceClause = computedConfidence
+    ? `
+Machinery-computed confidence from evidence topology: ${computedConfidence} — weigh it when judging \`verificationSound\`; you do not set confidence yourself (only the synthesiser does, and it may only lower this value).`
+    : '';
+  // stopClause — STOP RECONCILE (v3 FINALIZE, run-forensics fix): the crawl's own final word, so a directive
+  // to keep digging is never silently converted into a shipped caveat.
+  const stopClause = stop
+    ? `
+THE CRAWL'S LAST WORD: stopped with done=${stop.done}, reason="${stop.reason}". If that reason names remaining work, either return reopenRabbitHoles for it or explicitly justify the override in your reasoning — never silently convert remaining work into a caveat.`
+    : '';
+  return render(JUDGE_TPL, {
+    query,
+    resultSoFar: plain(resultSoFar),
+    cleanReports: plain(cleanReports),
+    focus: focus || '(meet the goal as stated)',
+    openClause,
+    modeClause,
+    computeClause,
+    ledgerClause,
+    nullAttacksClause,
+    confidenceClause,
+    stopClause,
+    thinkerClause,
+    FINISH,
+  });
+};
+// ╔══ module: src/agents/judge/index.ts ═══════════════════════════════════
+// JUDGE — the TERMINAL skeptic of the Finalize phase, the inverse of the synthesiser. Runs AFTER refine:
+// sees the hardened facts + the brain's resultSoFar + the goal/deliverable, and judges whether the answer
+// is sound (goal met, verification real, derivation valid). Drives a bounded remediation loop in the engine.
+// Tier: opus (adversarial judgment). Effort: xhigh.
+
+
+
+                                                                     
+
+const JUDGE         = {
+  type: 'object',
+  properties: {
+    goalMet: {
+      type: 'boolean',
+      description:
+        'true = the answer fully meets the goal AND delivers the spec; false = it falls short',
+    },
+    verificationSound: {
+      type: 'boolean',
+      description:
+        'true = the refine pass genuinely verified the facts; false = it rubber-stamped or mis-hardened a load-bearing fact',
+    },
+    needsCompute: {
+      type: 'boolean',
+      description: 'true = the answer rests on a quantitative derivation it does not yet hold',
+    },
+    computeSound: {
+      type: 'boolean',
+      description:
+        'true = any derivation already present is valid (or none is needed); false = an existing derivation is wrong / lacks error bars',
+    },
+    reasoning: {
+      type: 'string',
+      description:
+        'the load-bearing reason for the verdict — why it is sound, or the single biggest problem',
+    },
+    directive: {
+      type: 'string',
+      description: "the precise fix or derivation to perform when not satisfied; '' when satisfied",
+    },
+    reopenRabbitHoles: {
+      type: 'array',
+      items: RABBITHOLE,
+      description:
+        '1-3 concrete gap searches ONLY when a real evidence/coverage gap needs more crawling (NONE already pursued); empty otherwise',
+    },
+    retractClaimIds: {
+      type: 'array',
+      items: { type: 'number' },
+      description:
+        'ledger claim ids whose evidence is discredited (retraction/fabrication/misattribution) — the engine retracts them and recomputes everything downstream',
+    },
+  },
+  required: ['goalMet', 'verificationSound', 'needsCompute', 'computeSound', 'reasoning'],
+};
+
+const judge                   = {
+  tier: CONFIG.TIER.judge,
+  effort: CONFIG.EFFORT.judge,
+  schema: JUDGE,
+  buildPrompt: buildJudge,
+};
+// ╔══ module: src/agents/lineageClerk/prompts.ts ══════════════════════════
+// LINEAGE CLERK prompts — the batched entity-canonicalization template + its assembly function. Template
+// strings are module-level consts; buildLineageClerk only assembles/substitutes the items + known keys.
+// No FINISH here: the clerk carries no tools (a plain subagent) — there is no tool-use rabbit hole to guard against.
+
+                                                             
+
+const LINEAGE_TPL = `{{! lineageClerk — canonicalize provenance entities so JS can union-find independence clusters }}
+You are the LINEAGE CLERK. Canonicalize each new claim's provenance entities into stable keys so independence clusters can be computed mechanically downstream — this IS the whole job: the SAME real-world entity spelled differently must map to the SAME key ("Pfizer Inc." and "Pfizer" both → funder:pfizer).
+New claims (\`#id source | entities\`):
+{{items}}
+Known canonical keys already in use this run (reuse one of these EXACTLY whenever a claim's entity is the same real-world thing, however it is spelled):
+{{knownKeys}}
+For each claim return its canonical keys: lowercase, kebab-ish, prefixed by entity type — author:j-smith, funder:pfizer, dataset:gaia-dr3, venue:apj. Only emit a key for an entity actually present on that claim; skip absent/unknown entities entirely (never invent one to fill a slot).
+Return links: one {id, keys} per claim.
+`;
+
+const buildLineageClerk = ({ items, knownKeys }                  ) =>
+  render(LINEAGE_TPL, { items: plain(items), knownKeys: plain(knownKeys) });
+// ╔══ module: src/agents/lineageClerk/index.ts ════════════════════════════
+// LINEAGE CLERK — batched per wave: canonicalizes new claims' provenance entities against the known
+// canonical-key list so JS can union-find independence clusters. Tier: haiku (bounded, mechanical
+// canonicalization — no tools, a plain subagent). Effort: medium. Dies → deterministic JS fallback
+// (utils.lineageKeyOf clusters by norm(funder || venue || source-domain); unresolvable → cluster 0).
+
+
+                                                                            
+
+const LINEAGE         = {
+  type: 'object',
+  properties: {
+    links: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'the claim id these canonical keys belong to' },
+          keys: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'canonical entity keys present on this claim, e.g. "funder:pfizer"',
+          },
+        },
+        required: ['id', 'keys'],
+      },
+      description: 'one canonical-key set per claim',
+    },
+  },
+  required: ['links'],
+};
+
+const lineageClerk                          = {
+  tier: CONFIG.TIER.lineageClerk,
+  effort: CONFIG.EFFORT.lineageClerk,
+  schema: LINEAGE,
+  buildPrompt: buildLineageClerk,
+};
+// ╔══ module: src/agents/lineageClerk/run.ts ══════════════════════════════
+// LINEAGE CLERK dispatch — batches new claims into ≤LINEAGE_BATCH-item chunks, one retryAgent call per
+// chunk, all chunks dispatched CONCURRENTLY via parallel(). A dead (null) chunk contributes nothing — its
+// claims fall back to the deterministic lineageKeyOf clustering (the caller's job, not this module's).
+// Hallucinated ids (not in the chunk's own input set) are dropped. Empty input → no agent spawned at all.
+
+
+
+
+                                                          
+                                                                   
+
+async function runLineageClerk(
+  bs              ,
+  claims         ,
+  knownKeys          ,
+  tag        ,
+  phaseName        ,
+)                                 {
+  const out = new Map                  ();
+  if (!claims.length) return out;
+  const chunks = chunk(claims, CONFIG.LINEAGE_BATCH);
+  // parallel() journals thunk results as JSON (a Set would come back as {}), so the thunk returns
+  // the bare agent result and the id set is rebuilt per chunk on the consumer side (order-aligned).
+  const results = await parallel(
+    chunks.map((ch, i) => () =>
+      retryAgent                 (
+        lineageClerk.buildPrompt({
+          items: ch.map((c) => ({ id: c.id, source: c.source, entities: c.entities })),
+          knownKeys,
+        }),
+        {
+          label: 'lineage-' + tag + (chunks.length > 1 ? '-b' + i : ''),
+          phase: phaseName,
+          model: lineageClerk.tier,
+          effort: lineageClerk.effort,
+          schema: lineageClerk.schema,
+        },
+      ),
+    ),
+  );
+  results.forEach((res, i) => {
+    if (!res) return; // dead chunk — its claims fall back to lineageKeyOf
+    const ids = new Set(chunks[i].map((c) => c.id));
+    for (const l of res.links || [])
+      if (l && ids.has(l.id) && Array.isArray(l.keys)) out.set(l.id, l.keys);
+  });
+  return out;
+}
+// ╔══ module: src/agents/prospector/prompts.ts ════════════════════════════
+// PROSPECTOR prompts — the venue-naming template + its assembly function. Template strings are
+// module-level consts; buildProspector only assembles/substitutes.
+
+
+                                                           
+
+const PROSPECTOR_TPL = `{{! prospector — names the high-value authoritative source venues for the topic }}
+Goal: "{{query}}". Scout landscape: {{landscape}}
+Sources the scout already opened:
+{{sources}}
+Name the 6-8 highest-value, authoritative source venues for this goal — where primary, expert, or rigorous information on the topic actually lives. The right set is domain-specific (GPU serving → arXiv/USENIX/MLSys/SemiAnalysis/r/LocalLLaMA; a stock → SEC EDGAR/earnings calls/Bloomberg; weather → NOAA/ECMWF).
+Span what is relevant here: primary research (papers/preprints + where they live for this field), official docs, standards bodies/regulators, authoritative datasets/benchmarks, deep practitioner/industry analysis, high-signal community venues. Exclude generic SEO blogs.
+Assess where this subject is most actively researched. When a non-English literature is genuinely significant for this topic — a disease studied mostly in China/Japan, a field led by Russian or Korean groups — name the high-value native venues for those languages (CNKI/Wanfang → Chinese, J-STAGE/ICHUSHI → Japanese, SciELO/LILACS → Spanish/Portuguese, eLibrary.ru → Russian, KoreaMed → Korean), each with how to query it, and set languageGuidance: one line telling the brainer which languages to cover and why. For an English-dominated topic, return only English venues and languageGuidance "".
+Where the same concept is indexed under other names (older or alternate terms, regional spellings), fold those synonyms into the venues' search guidance so English-indexed work filed under a different name is still found.
+For each venue: source (venue + how to reach/search it, e.g. "arXiv (site:arxiv.org)"), goodFor (the sub-questions it is best for — specific enough for the downstream brainer to match each research lane to the right venue), and lang (its language as an ISO-ish code like zh/ja/es/ru/ko — omit for English).
+Run WebSearch (one or more queries) to discover and verify the actual highest-value venues — confirm each exists and is authoritative (memory alone misses recent venues). Return highValueSources (6-8, lang-tagged when non-English), languageGuidance ("" when the topic is English-dominated), and a brief reasoning naming what you searched.{{thinkerClause}}{{researcherClause}}{{WEB_ONLY}}
+`;
+
+const buildProspector = ({
+  query,
+  landscape,
+  sources,
+  thinkerNote,
+  researcherNote,
+}                ) => {
+  const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
+  const researcherClause = researcherNote ? '\n' + researcherNote : '';
+  return render(PROSPECTOR_TPL, {
+    query,
+    landscape,
+    sources: plain(sources),
+    thinkerClause,
+    researcherClause,
+    WEB_ONLY,
+  });
+};
+// ╔══ module: src/agents/prospector/index.ts ══════════════════════════════
+// PROSPECTOR — runs after the scout, first agent of the Crawl phase. Names the high-value
+// AUTHORITATIVE source venues for THIS topic (domain-specific); output rides with the brainer, which
+// assigns the relevant subset to each lane. Tier: opus (cross-domain venue judgment). Effort: high.
+
+
+                                                                          
+
+// PROSPECTOR schema — names the high-value AUTHORITATIVE source venues for THIS topic (domain-specific); output rides with the brainer.
+const SOURCES         = {
+  type: 'object',
+  properties: {
+    highValueSources: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          source: {
+            type: 'string',
+            description:
+              'the venue + how to reach/search it, e.g. "arXiv (site:arxiv.org)", "SemiAnalysis (semianalysis.com)"',
+          },
+          goodFor: {
+            type: 'string',
+            description:
+              'the kinds of sub-questions/rabbit-holes this venue is BEST for — specific enough for the brainer to match a research lane to it',
+          },
+          lang: {
+            type: 'string',
+            description:
+              "the venue's language as an ISO-ish code (zh, ja, es, pt, ru, ko, …) or language name; OMIT for English venues",
+          },
+        },
+        required: ['source', 'goodFor'],
+      },
+    },
+    languageGuidance: {
+      type: 'string',
+      description:
+        'one line routing the brainer to the non-English literatures that matter for this topic and why; "" when the topic is English-dominated',
+    },
+    reasoning: {
+      type: 'string',
+      description: 'brief: how you chose these venues / what you searched to confirm',
+    },
+  },
+  required: ['highValueSources'],
+};
+
+const prospector                        = {
+  tier: CONFIG.TIER.prospector,
+  effort: CONFIG.EFFORT.prospector,
+  schema: SOURCES,
+  buildPrompt: buildProspector,
+};
+// ╔══ module: src/agents/refiner/prompts.ts ═══════════════════════════════
+// REFINER prompts — the fact-hardening template + its assembly function. Template strings are
+// module-level consts; buildRefiner only assembles/substitutes.
+
+
+                                                       
+
+const REFINE_TPL = `{{! refine — adversarially fact-check ONE load-bearing fact and return its corrected, hardened version; attack-recording, not just fact-hardening }}
+Fact-check and harden this load-bearing fact for the goal "{{query}}". {{net}}
+Fact: {{fact}}
+Why it is load-bearing: {{why}}{{pinnedClause}}
+First verify it adversarially: hunt counter-evidence, newer information, and the real numbers — actively look for where it is false, outdated, or imprecise. Record every counter-search query you actually run, verbatim, in queriesTried — the record of the attack matters as much as its outcome. Do not rubber-stamp a well-supported fact; do not manufacture doubt about one you cannot actually break. Then settle every doubt against the sources and return only the clean, corrected claim(s) — the right values, current and verified, dropping anything that does not hold. Cite sources inline.{{directiveClause}}
+Return report (markdown: the hardened claim(s) for this fact), queriesTried (the exact counter-search queries you ran), counterFound (true only when a real counter-example/contradiction turned up — a completed search that found nothing is false, not a lie), counterNote (what the counter-evidence was, when counterFound; '' otherwise).{{WEB_ONLY}}
+`;
+
+const buildRefiner = ({
+  net,
+  query,
+  fact,
+  why,
+  directive,
+  claimQuote,
+  claimSource,
+}            ) => {
+  const directiveClause = directive
+    ? `\nA judge flagged the prior verification — re-check it: ${directive}`
+    : '';
+  const pinnedClause = claimQuote
+    ? `\nTHE CLAIM AS PINNED: "${claimQuote}" — ${claimSource || ''}`
+    : '';
+  return render(REFINE_TPL, { net, query, fact, why, pinnedClause, directiveClause, WEB_ONLY });
+};
+// ╔══ module: src/agents/refiner/index.ts ═════════════════════════════════
+// REFINER — one per load-bearing fact (parallel) in the Finalize phase. Adversarially fact-checks a fact
+// against the web and returns its corrected, hardened claim. Tier: sonnet (adversarial verification on the
+// web — modest middle tier). Effort: high.
+
+
+                                                                      
+
+const REFINE         = {
+  type: 'object',
+  properties: {
+    report: {
+      type: 'string',
+      description:
+        'markdown: the clean / corrected claim(s) for this fact after adversarial fact-checking against the sources',
+    },
+    queriesTried: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'the exact counter-searches you ran',
+    },
+    counterFound: {
+      type: 'boolean',
+      description: 'true only when a real counter-example/contradiction turned up',
+    },
+    counterNote: {
+      type: 'string',
+      description: 'what the counter-evidence was, when counterFound is true',
+    },
+  },
+  required: ['report', 'queriesTried', 'counterFound'],
+};
+
+const refiner                    = {
+  tier: CONFIG.TIER.refiner,
+  effort: CONFIG.EFFORT.refiner,
+  schema: REFINE,
+  buildPrompt: buildRefiner,
+};
+// ╔══ module: src/agents/rerunner/prompts.ts ══════════════════════════════
+// RERUNNER prompts — the derivation re-execution template + its assembly function. Template strings are
+// module-level consts; buildRerunner only assembles/substitutes the code + current inputs.
+
+
+                                                         
+
+const RERUN_TPL = `{{! rerunner — re-executes the stored derivation artifact, verbatim, with the run's current inputs }}
+You are the RERUNNER. A derivation was authored once as a pure, seeded Python script; re-execute it EXACTLY as given with the current inputs — the script is canonical. NEVER repair or rewrite it, even to fix an obvious bug: a broken artifact is the brainer's problem, not yours.
+The script (reads ONE JSON argument, prints ONE JSON object {quantiles, sensitivity}):
+\`\`\`python
+{{code}}
+\`\`\`
+Current inputs — the single JSON argument to pass, verbatim:
+{{inputsJson}}
+Steps: write the script verbatim to a temp file via a Bash heredoc; run \`python3 FILE 'INPUTS'\` (FILE = the temp path, INPUTS = the JSON shown above, unescaped/verbatim); return exactly what it printed.
+If it errors for any reason, return ok:false with the error message in note — do not repair, do not rewrite, do not retry with a fix of your own.
+Return ok, quantiles, sensitivity, note.{{FINISH}}
+`;
+
+const buildRerunner = ({ code, inputsJson }              ) =>
+  render(RERUN_TPL, { code, inputsJson, FINISH });
+// ╔══ module: src/agents/rerunner/index.ts ════════════════════════════════
+// RERUNNER — re-executes the stored derivation artifact (a pure, seeded Python script) with the run's
+// current inputs. Tier: haiku (bounded, mechanical re-execution — never repairs the artifact). Effort: low.
+// Dies or errors → lastRun stays stale; the caller keeps the last good run and tells the brainer it is stale.
+
+
+                                                                        
+
+const RERUN         = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    quantiles: {
+      type: 'object',
+      additionalProperties: { type: 'number' },
+      description: "the script's printed quantiles, verbatim",
+    },
+    sensitivity: {
+      type: 'object',
+      additionalProperties: { type: 'number' },
+      description: "the script's printed variance-share sensitivity, verbatim",
+    },
+    note: { type: 'string', description: 'the error message when ok is false' },
+  },
+  required: ['ok'],
+};
+
+const rerunner                      = {
+  tier: CONFIG.TIER.rerunner,
+  effort: CONFIG.EFFORT.rerunner,
+  schema: RERUN,
+  buildPrompt: buildRerunner,
+};
+// ╔══ module: src/agents/rerunner/run.ts ══════════════════════════════════
+// RERUNNER dispatch — reads bs.derivation (null ⇒ nothing stored yet, no agent) and re-executes its code
+// with the CURRENT inputs (bs.derivation.inputs, passed verbatim — the engine keeps them current across
+// waves). Degrades to null on a dead agent or ok:false; the caller keeps the last lastRun and marks it stale.
+
+
+
+                                                          
+                                                        
+
+async function runRerunner(
+  bs              ,
+  phaseName        ,
+)                                                                                             {
+  if (!bs.derivation) return null;
+  const inputsJson = JSON.stringify(bs.derivation.inputs);
+  const out = await retryAgent             (
+    rerunner.buildPrompt({ code: bs.derivation.code, inputsJson }),
+    {
+      label: 'rerun-w' + bs.wave,
+      phase: phaseName,
+      model: rerunner.tier,
+      effort: rerunner.effort,
+      agentType: CONFIG.GENERAL_PURPOSE,
+      schema: rerunner.schema,
+    },
+  );
+  if (!out || !out.ok) return null;
+  return { quantiles: out.quantiles || {}, sensitivity: out.sensitivity || {} };
+}
 // ╔══ module: src/agents/researchScheduler/prompts.ts ═════════════════════
 // RESEARCH SCHEDULER prompts — the discovery template + its assembly function. Template strings are
 // module-level consts; buildResearchScheduler only assembles/substitutes the per-wave clauses.
@@ -2471,385 +3222,428 @@ const researcher                        = {
   schema: RESEARCH,
   buildPrompt: buildResearcher,
 };
-// ╔══ module: src/agents/initiator/prompts.ts ═════════════════════════════
-// INITIATOR prompts — the finalize-planner template + its assembly function. Template strings are
-// module-level consts; buildInitiator only substitutes the operator-steering clause.
+// ╔══ module: src/agents/scout/prompts.ts ═════════════════════════════════
+// SCOUT SWARM prompts — three templates + their assembly functions: scoutPlanner (senses the landscape,
+// decomposes the query, proposes search angles) → scout (one PROBE per angle) → scoutMerger (folds every
+// probe into the final ScoutOut). Template strings are module-level consts; each build* fn only
+// assembles/substitutes — it holds no template text itself.
 
 
-                                                          
+                                                                                         
 
-const INITIATOR_TPL = `{{! initiator — plans the finalize pipeline, shaping the finish to this query }}
-You direct the FINALIZE phase for: "{{query}}". The research is done; below is everything it gathered. Shape the finishing pipeline to fit this query, then return the plan.{{modeClause}}
-The finish runs in two parts, and you set how each starts:
-1. REFINEMENT — one refine agent per item adversarially fact-checks that group of load-bearing facts and returns them corrected and hardened. You decide the grouping. (A judge then evaluates the hardened answer and may trigger a derivation or a re-check; you do not plan that.)
-2. SYNTHESIS — writes the final report from the hardened, judged answer. You give it a focus note.
-The run's accumulated RESULT (the brainer's living memory — answer, the \`working\` derivation, keyClaimIds, gaps, tensions):
-{{resultSoFar}}
-Per-wave log:
-{{waveLog}}
-Scout landscape: {{landscape}}
-Top open rabbit-holes left unpursued:
-{{openRabbitHoles}}{{ledgerClause}}{{sensitivityClause}}
-Return:
-- refinement.facts[] — the load-bearing facts to harden, aggressively grouped: bundle facts that share sources or stand or fall together into ONE item (each {fact, why, claimId?}); prefer a few broad groups over many atomic facts. Cover every fact that would change the answer if wrong; skip soft restatements. Where a fact corresponds to a ledger claim, set its claimId — hardening then updates that claim's record.
-- synthesiser.focus — one note on what the report must emphasize / the shape the answer should take.{{thinkerClause}}{{FINISH}}
+// ── stage 1: scoutPlanner — ground the angle vocabulary in real search results before proposing anything;
+// decompose the query into its distinct axes; propose the probe swarm's search angles ──
+const SCOUT_PLANNER_TPL = `{{! scoutPlanner — grounds the angle vocabulary in real search results, decomposes the query, proposes the probe swarm's angles }}
+Query: "{{query}}" (mode: {{mode}}). {{net}}
+Step 1 — run 1-2 quick WebSearches to sense the landscape's lay. The angle vocabulary below MUST come from what these searches actually surface — never from imagination.
+Step 2 — return decomposition: the query's distinct axes, one line each — everything that must ALL be understood to answer it.
+Step 3 — return angles: 3 to ${CONFIG.SCOUT_PROBES} distinct search angles for a swarm of scout probes, each {name, searchQuery, why, lens}. searchQuery is a concrete, distinct query for THIS angle — never a reworded restatement of another angle's. No two angles may overlap: each must be built to surface pages the others will not.
+MANDATORY whenever it applies to this query:
+(a) a DIRECT angle — the query as asked, straight up.
+(b) a SKEPTIC angle — counter-evidence: criticism, limitations, failed replications, debunking phrasing.
+(c) a RECENT angle — the last ~12 months of developments.
+Fill any remaining slots with whichever of these fit THIS query best: datasets/benchmarks, practitioner communities, regulatory/official sources, industry analyses, adjacent-field framings.{{researcherClause}}
 `;
 
-const buildInitiator = ({
+const buildScoutPlanner = ({ query, mode, net, researcherNote }                  ) => {
+  const researcherClause = researcherNote ? '\n' + researcherNote : '';
+  return render(SCOUT_PLANNER_TPL, { query, mode, net, researcherClause });
+};
+
+// ── stage 2: scout — one PROBE of the swarm, scoped to a single angle. Unchanged reading substrate from
+// v2's single scout (one WebSearch → fetch ≤N sources → the same footer discipline); only the SCOPE
+// narrows from "the whole topic" to "this one angle". ──
+const SCOUT_TPL = `{{! scout — one probe of the swarm, scoped to a single angle: sweeps it and seeds its rabbit-holes }}
+You are scout probe {{index}} of {{total}}, on the angle «{{angleName}}» — {{angleWhy}}. Lens: {{angleLens}}. {{net}}
+Step 1 — run WebSearch with: "{{searchQuery}}". You may refine it ONCE if the results are off-angle — stay on THIS angle, do not wander onto another probe's.
+Step 2 — pick the up-to-${CONFIG.SCOUT_PROBE_SOURCES} most relevant sources FOR THIS ANGLE and fetch each via mcp__harvester__fetch — built-in WebFetch is denied. For each fetched page, first surface the key facts about "{{query}}" as this angle reveals them, then apply this instruction: <<{{footer}}>> If the fetch result reports a local cache path for the page, you may set that claim's cachePath to it — never invent one when the tool did not report it. Skip the footer's Surprise section — no prior claims exist yet.
+Step 3 — return: landscape (2-3 sentences on what THIS ANGLE revealed — not the whole topic, just what this angle's sources showed); pages[] (each: url, 2-3 sentence summary, rabbitHoles[] copied from the page's "Rabbit holes" section as {keyword, why}); nextSources[] union of the pages' "Next sources" sections, each {ref, why}; claims[] union of the pages' "Claims" sections, each pinned to a verbatim quote — a claim without its verbatim quote is worthless, no quote no claim; newTerms[] union of the pages' "New terms" sections; deadEnds[] for any source that timed out, was parked, or was off-topic — do not invent rabbit-holes for those. If every source is dead/unreachable, still return a valid result: landscape from your search, pages [], the dead sources in deadEnds.{{researcherClause}}
+`;
+
+const buildScout = ({
   query,
-  resultSoFar,
-  waveLog,
-  landscape,
-  openRabbitHoles,
-  mode,
-  thinkerNote,
-  ledger,
-  sensitivity,
-}               ) => {
-  const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
-  // collect mode ⇒ harden the BREADTH (coverage of the landscape), not the shape of a single answer.
-  const modeClause =
-    mode === 'collect'
-      ? ' This run was a COLLECT inventory, not a single-answer goal — harden BREADTH: the key claims and the major sub-areas that span the landscape, and set the report focus to completeness of the catalogue rather than the shape of one answer.'
-      : '';
-  // ledgerClause — the ledger-fed initiator (v3 FINALIZE): names of already-pinned claims so facts can bind
-  // to them via claimId instead of restating them.
-  const ledgerClause = ledger
-    ? `
-CLAIM LEDGER — the run's evidence (ids look like c12, clusters like clu2: c12 [status·clu2·audit] claim = value):
-${ledger}`
-    : '';
-  // sensitivityClause — SENSITIVITY RANKING (v3 FINALIZE): once a derivation has a completed rerun, prioritize
-  // hardening the claims behind the inputs that dominate the variance — a lane wasted on a low-variance input
-  // cannot move the answer.
-  const sensitivityClause = sensitivity
-    ? `
-SENSITIVITY RANKING — derivation inputs by variance share (with their backing claims):
-${sensitivity}
-Prioritize hardening the claims behind the top-variance inputs.`
-    : '';
-  return render(INITIATOR_TPL, {
+  net,
+  footer,
+  angleName,
+  angleWhy,
+  angleLens,
+  searchQuery,
+  index,
+  total,
+  researcherNote,
+}           ) => {
+  const researcherClause = researcherNote ? '\n' + researcherNote : '';
+  return render(SCOUT_TPL, {
     query,
-    resultSoFar: plain(resultSoFar),
-    waveLog: plain(waveLog),
-    landscape,
-    openRabbitHoles: plain(openRabbitHoles),
-    modeClause,
-    ledgerClause,
-    sensitivityClause,
-    thinkerClause,
-    FINISH,
+    net,
+    footer,
+    angleName,
+    angleWhy,
+    angleLens,
+    searchQuery,
+    index,
+    total,
+    researcherClause,
   });
 };
-// ╔══ module: src/agents/initiator/index.ts ═══════════════════════════════
-// INITIATOR — opens the Finalize phase. Reads the final resultSoFar and shapes the finish to the query:
-// names the load-bearing facts to harden and sets the report focus. Tier: opus (synthesis/planning).
-// Effort: xhigh.
 
-
-                                                                         
-
-// FINALIZE schemas. The INITIATOR plans the finish (which facts to harden, the report focus); a Sonnet REFINE pass adversarially
-// fact-checks each load-bearing fact and returns its corrected claim; an Opus JUDGE then judges the hardened answer.
-const INITIATOR         = {
-  type: 'object',
-  properties: {
-    refinement: {
-      type: 'object',
-      properties: {
-        facts: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              fact: {
-                type: 'string',
-                description:
-                  'a group of related load-bearing facts the answer rests on (state the whole cluster)',
-              },
-              why: {
-                type: 'string',
-                description: 'why this group is load-bearing — what breaks if it is wrong',
-              },
-              claimId: {
-                type: 'number',
-                description:
-                  'ledger claim id this fact corresponds to, when one exists — hardening then updates that claim record',
-              },
-            },
-            required: ['fact', 'why'],
-          },
-          description:
-            'load-bearing facts to harden, aggressively grouped into a few items — bundle facts that share sources or stand or fall together into one; cover all that would change the answer if wrong, skip soft restatements',
-        },
-      },
-      required: ['facts'],
-    },
-    synthesiser: {
-      type: 'object',
-      properties: {
-        focus: {
-          type: 'string',
-          description:
-            'a note to the report writer on what to emphasize / the shape the answer should take',
-        },
-      },
-      required: ['focus'],
-    },
-  },
-  required: ['refinement', 'synthesiser'],
-};
-
-const initiator                       = {
-  tier: CONFIG.TIER.initiator,
-  effort: CONFIG.EFFORT.initiator,
-  schema: INITIATOR,
-  buildPrompt: buildInitiator,
-};
-// ╔══ module: src/agents/refiner/prompts.ts ═══════════════════════════════
-// REFINER prompts — the fact-hardening template + its assembly function. Template strings are
-// module-level consts; buildRefiner only assembles/substitutes.
-
-
-                                                       
-
-const REFINE_TPL = `{{! refine — adversarially fact-check ONE load-bearing fact and return its corrected, hardened version; attack-recording, not just fact-hardening }}
-Fact-check and harden this load-bearing fact for the goal "{{query}}". {{net}}
-Fact: {{fact}}
-Why it is load-bearing: {{why}}{{pinnedClause}}
-First verify it adversarially: hunt counter-evidence, newer information, and the real numbers — actively look for where it is false, outdated, or imprecise. Record every counter-search query you actually run, verbatim, in queriesTried — the record of the attack matters as much as its outcome. Do not rubber-stamp a well-supported fact; do not manufacture doubt about one you cannot actually break. Then settle every doubt against the sources and return only the clean, corrected claim(s) — the right values, current and verified, dropping anything that does not hold. Cite sources inline.{{directiveClause}}
-Return report (markdown: the hardened claim(s) for this fact), queriesTried (the exact counter-search queries you ran), counterFound (true only when a real counter-example/contradiction turned up — a completed search that found nothing is false, not a lie), counterNote (what the counter-evidence was, when counterFound; '' otherwise).{{WEB_ONLY}}
+// ── stage 3: scoutMerger — folds every surviving probe's output into ONE final ScoutOut (same schema).
+// No tools: a plain subagent reducing material the probes already gathered — there is no tool-use rabbit
+// hole to guard against (mirrors lineageClerk: no FINISH clause). ──
+const SCOUT_MERGER_TPL = `{{! scoutMerger — folds every angle probe's output into the final ScoutOut, naming the tensions between angles }}
+Query: "{{query}}".
+Decomposition (the query's distinct axes): {{decomposition}}
+Every surviving probe's output (angle name, what it revealed, its pages/claims/newTerms/deadEnds):
+{{probes}}
+Return the FINAL scout result:
+landscape: ONE rich paragraph weaving every angle together — and NAME THE TENSIONS between them (where, say, the SKEPTIC angle contradicts the DIRECT angle). That tension is the single most valuable seed the next stage can receive — surface it explicitly, never bury it.
+pages: the union of every probe's pages, deduped by url, keeping the strongest up to ${CONFIG.SCOUT_PAGES_CAP} — carry each kept page's summary and rabbitHoles EXACTLY as its probe wrote them; you are SELECTING, not rewriting.
+nextSources: the union of every probe's nextSources, deduped by ref.
+claims: the union of every probe's claims, dropping exact duplicates (the same quote reported by more than one probe).
+newTerms: the union, deduped by term.
+deadEnds: the union.
+Only use what the probes actually returned — never invent a page, claim, or term no probe reported.
 `;
 
-const buildRefiner = ({
-  net,
-  query,
-  fact,
-  why,
-  directive,
-  claimQuote,
-  claimSource,
-}            ) => {
-  const directiveClause = directive
-    ? `\nA judge flagged the prior verification — re-check it: ${directive}`
-    : '';
-  const pinnedClause = claimQuote
-    ? `\nTHE CLAIM AS PINNED: "${claimQuote}" — ${claimSource || ''}`
-    : '';
-  return render(REFINE_TPL, { net, query, fact, why, pinnedClause, directiveClause, WEB_ONLY });
-};
-// ╔══ module: src/agents/refiner/index.ts ═════════════════════════════════
-// REFINER — one per load-bearing fact (parallel) in the Finalize phase. Adversarially fact-checks a fact
-// against the web and returns its corrected, hardened claim. Tier: sonnet (adversarial verification on the
-// web — modest middle tier). Effort: high.
+const buildScoutMerger = ({ query, decomposition, probes }                 ) =>
+  render(SCOUT_MERGER_TPL, { query, decomposition, probes: plain(probes) });
+// ╔══ module: src/agents/scout/index.ts ═══════════════════════════════════
+// SCOUT SWARM — the wave-0 seed, now three stages instead of one broad sweep: scoutPlanner (sonnet, high)
+// runs 1-2 quick WebSearches to ground the landscape then decomposes the query + proposes 3..SCOUT_PROBES
+// search angles; a swarm of `scout` probes (haiku, medium — UNCHANGED tier: the page reading stays the
+// fixed haiku reader's job, only its scope narrows to one angle) each sweep one angle; scoutMerger (sonnet,
+// high, no tools) folds every surviving probe into the final ScoutOut, naming the tensions between angles.
+// Every stage degrades to a named JS fallback — see run.ts.
 
 
-                                                                      
 
-const REFINE         = {
+             
+        
+            
+                  
+                   
+         
+                              
+
+// ── stage 1 schema — the planner's decomposition + proposed angles ──
+const SCOUT_ANGLE         = {
   type: 'object',
   properties: {
-    report: {
+    name: {
       type: 'string',
-      description:
-        'markdown: the clean / corrected claim(s) for this fact after adversarial fact-checking against the sources',
+      description: 'short angle label, e.g. "direct", "skeptic", "recent"',
     },
-    queriesTried: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'the exact counter-searches you ran',
-    },
-    counterFound: {
-      type: 'boolean',
-      description: 'true only when a real counter-example/contradiction turned up',
-    },
-    counterNote: {
+    searchQuery: {
       type: 'string',
-      description: 'what the counter-evidence was, when counterFound is true',
+      description: 'a concrete, distinct search query for THIS angle — never a reworded sibling',
+    },
+    why: { type: 'string', description: 'why this angle matters for the query' },
+    lens: {
+      type: 'string',
+      description: 'the interpretive lens the probe should read its sources through',
     },
   },
-  required: ['report', 'queriesTried', 'counterFound'],
+  required: ['name', 'searchQuery', 'why'],
 };
 
-const refiner                    = {
-  tier: CONFIG.TIER.refiner,
-  effort: CONFIG.EFFORT.refiner,
-  schema: REFINE,
-  buildPrompt: buildRefiner,
+const SCOUT_PLANNER         = {
+  type: 'object',
+  properties: {
+    decomposition: { type: 'string', description: "the query's distinct axes, one line each" },
+    angles: {
+      type: 'array',
+      items: SCOUT_ANGLE,
+      description: `3..${CONFIG.SCOUT_PROBES} distinct, non-overlapping search angles for the probe swarm`,
+    },
+  },
+  required: ['decomposition', 'angles'],
 };
-// ╔══ module: src/agents/judge/prompts.ts ═════════════════════════════════
-// JUDGE prompts — the finalize-phase terminal-skeptic template + its assembly function. Template
-// strings are module-level consts; buildJudge only assembles/substitutes the compute-aware clauses.
+
+const scoutPlanner                          = {
+  tier: CONFIG.TIER.scoutPlanner,
+  effort: CONFIG.EFFORT.scoutPlanner,
+  schema: SCOUT_PLANNER,
+  buildPrompt: buildScoutPlanner,
+};
+
+// ── stage 2 schema — one probe's return. UNCHANGED shape from v2's single scout: field-compatible so
+// scoutMerger (and both JS fallbacks) can reuse this exact schema for the FINAL ScoutOut too. ──
+const SCOUT         = {
+  type: 'object',
+  properties: {
+    landscape: { type: 'string' },
+    pages: { type: 'array', items: PAGE },
+    deadEnds: { type: 'array', items: { type: 'string' } },
+    claims: {
+      type: 'array',
+      items: CLAIM_ITEM,
+      description:
+        "union of the fetched pages' load-bearing facts, each pinned to a verbatim quote — no digest exists yet, so never carries `stance`",
+    },
+    nextSources: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          ref: {
+            type: 'string',
+            description: 'an exact url or DOI a fetched page points to, worth fetching directly',
+          },
+          why: { type: 'string', description: 'one line on why following it matters' },
+        },
+        required: ['ref', 'why'],
+      },
+      description:
+        "union of the fetched pages' highest-value outbound citations — no ledger exists yet, so never carries expect/target",
+    },
+    newTerms: {
+      type: 'array',
+      items: TERM_SEED,
+      description: "union of the fetched pages' community terms of art that we did not use",
+    },
+  },
+  required: ['landscape', 'pages'],
+};
+
+const scout                   = {
+  tier: CONFIG.TIER.scout,
+  effort: CONFIG.EFFORT.scout,
+  schema: SCOUT,
+  buildPrompt: buildScout,
+};
+
+// ── stage 3 — scoutMerger: folds every probe's SCOUT-shaped output into ONE final SCOUT-shaped output. ──
+const scoutMerger                         = {
+  tier: CONFIG.TIER.scoutMerger,
+  effort: CONFIG.EFFORT.scoutMerger,
+  schema: SCOUT, // same shape as a probe's output — the merger folds N of them into one
+  buildPrompt: buildScoutMerger,
+};
+// ╔══ module: src/agents/scout/run.ts ═════════════════════════════════════
+
+
 
 
                                                       
+             
+            
+             
+       
+             
+           
+                  
+                   
+           
+           
+                              
 
-const JUDGE_TPL = `{{! judge — finalize-phase terminal skeptic: judges the hardened answer before the report is written }}
-You are the JUDGE — the terminal skeptic of the FINALIZE phase for: "{{query}}". The crawl is done and its load-bearing facts were just hardened. Judge whether the answer is actually sound before the report is written.
-The answer + its keyClaimIds + \`working\` derivation (the run's living memory):
-{{resultSoFar}}
-Hardened facts (each adversarially fact-checked + source-corrected by a refine pass):
-{{cleanReports}}
-What the answer must deliver: {{focus}}{{openClause}}{{modeClause}}{{ledgerClause}}{{nullAttacksClause}}{{confidenceClause}}{{stopClause}}
-Before upholding, actively try to disprove the load-bearing claim as hard as you can — \`verificationSound\` holds only when it survives every angle:
-- funding / conflict of interest — is the trial run or funded by the product's own seller?
-- independent replication — does a separate group confirm it, or does the headline rest on a single source?
-- contradicting / null results — search for failed replications and negative trials that cut against it.
-- retraction status — check PubPeer, retraction notices, and expressions of concern.
-- evidence quality — a weak sample size or unaddressed limitations downgrade a claim, however confidently stated.
-A claim that survives this cross-examination is sound; one that does not → \`verificationSound\` false, naming the specific weakness in \`directive\`.
-Judge four things, each a strict boolean:
-- goalMet — the answer fully meets the goal AND delivers the spec above, not merely "close enough".
-- verificationSound — the refine pass genuinely verified the facts (caught real errors, used current correct values) rather than rubber-stamping or mis-hardening one.
-- needsCompute — the answer rests on a quantitative derivation it does not yet hold.{{computeClause}}
-- computeSound — any derivation already present is valid (right inputs, propagated error bars, no arithmetic slip); true when none is needed.
-Uphold a sound finish: when goalMet, verificationSound, and computeSound all hold, return them true with an empty directive. Otherwise name the single most load-bearing problem and the precise fix.
-Return goalMet, verificationSound, needsCompute, computeSound, reasoning (the load-bearing reason for the verdict), directive (the exact fix or derivation to perform; '' when satisfied), reopenRabbitHoles (1-3 {keyword, why} ONLY when a real evidence/coverage gap needs more crawling, else []), retractClaimIds (ledger claim ids whose evidence is discredited — retraction, fabrication, or misattribution surfaced during verification; [] otherwise).{{thinkerClause}}{{FINISH}}
-`;
-
-const buildJudge = ({
-  query,
-  resultSoFar,
-  cleanReports,
-  focus,
-  openRabbitHoles,
-  compute,
-  mode,
-  computeNote,
-  thinkerNote,
-  ledger,
-  survivedAttacks,
-  neverChallenged,
-  computedConfidence,
-  stop,
-}           ) => {
-  const thinkerClause = thinkerNote ? '\n\n' + thinkerNote : '';
-  // collect mode ⇒ goalMet is INVENTORY COMPLETENESS + per-item verification, not whether one answer is reached.
-  const modeClause =
-    mode === 'collect'
-      ? `
-MODE = collect — judge goalMet as INVENTORY COMPLETENESS: every major sub-area of the landscape is catalogued AND each catalogued item is individually verified, not whether a single answer is reached.`
-      : '';
-  const computeClause = compute
-    ? ` A derivation may be written and run (Python scientific stack).${computeNote ? '\n' + computeNote : ''}`
-    : ' Derivation is off for this run — you cannot run any computation. If the answer is complete without one, set needsCompute false and computeSound true; if it genuinely rests on a quantitative derivation this run cannot perform, report that honestly — set needsCompute true and name the missing derivation in `directive` (it is surfaced as a stated limitation, never fabricated). Either way set computeSound true: no derivation is present to be unsound.';
-  const openClause =
-    openRabbitHoles && openRabbitHoles.length
-      ? `
-LEFTOVER OPEN RABBIT-HOLES — leads the crawl surfaced but never pursued (it stopped first). Decide whether any names a REAL gap the answer needs; if one does, set goalMet false and return it in reopenRabbitHoles to reopen the crawl on it — otherwise ignore them:
-${plain(openRabbitHoles)}`
-      : '';
-  // ledgerClause — the CLAIM LEDGER digest + the independence discipline (v3 FINALIZE): corroboration counts
-  // CLUSTERS, not distinct-sounding source names — a claim whose supports share one cluster is single-source
-  // however many names it wears.
-  const ledgerClause = ledger
-    ? `
-CLAIM LEDGER — the run's evidence (ids look like c12, clusters like clu2: c12 [status·clu2·audit] claim = value):
-${ledger}
-Corroboration counts CLUSTERS: a claim whose supports share one cluster is SINGLE-SOURCE however many names it wears — flag any "independent" label the answer asserts that the clusters do not back.`
-    : '';
-  // nullAttacksClause — challenged-and-survived vs never-challenged (v3 FINALIZE): a completed counter-search
-  // that found nothing is first-class state, distinct from a key claim nobody has put to the test yet.
-  const survivedLine =
-    survivedAttacks && survivedAttacks.length
-      ? 'CHALLENGED AND SURVIVED (counter-searched, nothing found): ' + survivedAttacks.join('; ')
-      : '';
-  const neverLine =
-    neverChallenged && neverChallenged.length
-      ? 'NEVER CHALLENGED key claims: ' + neverChallenged.join('; ')
-      : '';
-  const nullAttacksClause =
-    survivedLine || neverLine ? '\n' + [survivedLine, neverLine].filter(Boolean).join('\n') : '';
-  // confidenceClause — the computed-confidence, lower-only discipline (v3 FINALIZE).
-  const confidenceClause = computedConfidence
-    ? `
-Machinery-computed confidence from evidence topology: ${computedConfidence} — weigh it when judging \`verificationSound\`; you do not set confidence yourself (only the synthesiser does, and it may only lower this value).`
-    : '';
-  // stopClause — STOP RECONCILE (v3 FINALIZE, run-forensics fix): the crawl's own final word, so a directive
-  // to keep digging is never silently converted into a shipped caveat.
-  const stopClause = stop
-    ? `
-THE CRAWL'S LAST WORD: stopped with done=${stop.done}, reason="${stop.reason}". If that reason names remaining work, either return reopenRabbitHoles for it or explicitly justify the override in your reasoning — never silently convert remaining work into a caveat.`
-    : '';
-  return render(JUDGE_TPL, {
-    query,
-    resultSoFar: plain(resultSoFar),
-    cleanReports: plain(cleanReports),
-    focus: focus || '(meet the goal as stated)',
-    openClause,
-    modeClause,
-    computeClause,
-    ledgerClause,
-    nullAttacksClause,
-    confidenceClause,
-    stopClause,
-    thinkerClause,
-    FINISH,
-  });
-};
-// ╔══ module: src/agents/judge/index.ts ═══════════════════════════════════
-// JUDGE — the TERMINAL skeptic of the Finalize phase, the inverse of the synthesiser. Runs AFTER refine:
-// sees the hardened facts + the brain's resultSoFar + the goal/deliverable, and judges whether the answer
-// is sound (goal met, verification real, derivation valid). Drives a bounded remediation loop in the engine.
-// Tier: opus (adversarial judgment). Effort: xhigh.
-
-
-
-                                                                     
-
-const JUDGE         = {
-  type: 'object',
-  properties: {
-    goalMet: {
-      type: 'boolean',
-      description:
-        'true = the answer fully meets the goal AND delivers the spec; false = it falls short',
-    },
-    verificationSound: {
-      type: 'boolean',
-      description:
-        'true = the refine pass genuinely verified the facts; false = it rubber-stamped or mis-hardened a load-bearing fact',
-    },
-    needsCompute: {
-      type: 'boolean',
-      description: 'true = the answer rests on a quantitative derivation it does not yet hold',
-    },
-    computeSound: {
-      type: 'boolean',
-      description:
-        'true = any derivation already present is valid (or none is needed); false = an existing derivation is wrong / lacks error bars',
-    },
-    reasoning: {
-      type: 'string',
-      description:
-        'the load-bearing reason for the verdict — why it is sound, or the single biggest problem',
-    },
-    directive: {
-      type: 'string',
-      description: "the precise fix or derivation to perform when not satisfied; '' when satisfied",
-    },
-    reopenRabbitHoles: {
-      type: 'array',
-      items: RABBITHOLE,
-      description:
-        '1-3 concrete gap searches ONLY when a real evidence/coverage gap needs more crawling (NONE already pursued); empty otherwise',
-    },
-    retractClaimIds: {
-      type: 'array',
-      items: { type: 'number' },
-      description:
-        'ledger claim ids whose evidence is discredited (retraction/fabrication/misattribution) — the engine retracts them and recomputes everything downstream',
-    },
-  },
-  required: ['goalMet', 'verificationSound', 'needsCompute', 'computeSound', 'reasoning'],
+// FALLBACK A — the planner died (or returned no usable angle): degrade to v2's single-scout behavior, one
+// probe on the naive query itself. Exported for direct unit coverage.
+const FALLBACK_ANGLE             = {
+  name: 'direct',
+  searchQuery: CONFIG.query,
+  why: 'planner died — v2 single-scout fallback',
+  lens: '',
 };
 
-const judge                   = {
-  tier: CONFIG.TIER.judge,
-  effort: CONFIG.EFFORT.judge,
-  schema: JUDGE,
-  buildPrompt: buildJudge,
-};
+// a planner angle is usable only when it carries the fields a probe actually needs.
+const isUsableAngle = (a         )                  =>
+  !!a &&
+  typeof (a              ).name === 'string' &&
+  !!(a              ).name &&
+  typeof (a              ).searchQuery === 'string' &&
+  !!(a              ).searchQuery;
+
+// FALLBACK B — the merger died: a pure, deterministic JS merge of every surviving probe's output. Exported
+// for direct unit coverage. url dedup via normRef (survivor order, first occurrence wins), capped at
+// SCOUT_PAGES_CAP; claims/newTerms deduped by norm() of their quote/term; deadEnds is a plain union.
+function mechanicalMerge(survivors                                        )           {
+  const landscape = survivors
+    .map(({ angle, out }) => '«' + angle.name + '»: ' + out.landscape)
+    .join('\n');
+  const seenUrls = new Set        ();
+  const pages         = [];
+  for (const { out } of survivors)
+    for (const p of out.pages || [])
+      if (p && p.url && !seenUrls.has(normRef(p.url))) {
+        seenUrls.add(normRef(p.url));
+        pages.push(p);
+      }
+  const seenQuotes = new Set        ();
+  const claims              = [];
+  for (const { out } of survivors)
+    for (const c of out.claims || [])
+      if (c && !seenQuotes.has(norm(c.quote))) {
+        seenQuotes.add(norm(c.quote));
+        claims.push(c);
+      }
+  const seenRefs = new Set        ();
+  const nextSources               = [];
+  for (const { out } of survivors)
+    for (const s of out.nextSources || [])
+      if (s && s.ref && !seenRefs.has(normRef(s.ref))) {
+        seenRefs.add(normRef(s.ref));
+        nextSources.push(s);
+      }
+  const seenTerms = new Set        ();
+  const newTerms             = [];
+  for (const { out } of survivors)
+    for (const t of out.newTerms || [])
+      if (t && !seenTerms.has(norm(t.term))) {
+        seenTerms.add(norm(t.term));
+        newTerms.push(t);
+      }
+  const deadEnds = survivors.flatMap(({ out }) => out.deadEnds || []);
+  return {
+    landscape,
+    pages: pages.slice(0, CONFIG.SCOUT_PAGES_CAP),
+    claims,
+    nextSources,
+    newTerms,
+    deadEnds,
+  };
+}
+
+// SCOUT SWARM (wave-0 seed): scoutPlanner decomposes the query + proposes 3..SCOUT_PROBES search angles →
+// a `scout` probe sweeps each angle in parallel (broad WebSearch → fetch with the rabbit-hole footer,
+// scoped to its angle) → scoutMerger folds every surviving probe into the FINAL ScoutOut, naming the
+// tensions between angles. Each stage degrades to a named JS fallback; only a total probe wipeout is
+// fatal (unchanged from v2's single-scout semantics). Sets rr.scout + rr.scoutRabbitHoles and returns the
+// seed leads (the engine seeds the open store from them) — signature/return/assignment unchanged from v2.
+async function runScout(rr                )                      {
+  phase(CONFIG.PHASE.scout);
+
+  // ── stage 1: scoutPlanner ──
+  log('· scout planner DISPATCH · ' + scoutPlanner.tier);
+  const planner = await retryAgent                 (
+    scoutPlanner.buildPrompt({
+      query: CONFIG.query,
+      mode: CONFIG.mode,
+      net: CONFIG.NET,
+      researcherNote: CONFIG.RESEARCHER_NOTE,
+    }),
+    {
+      label: 'scout-planner',
+      phase: CONFIG.PHASE.scout,
+      model: scoutPlanner.tier,
+      effort: scoutPlanner.effort,
+      agentType: CONFIG.GENERAL_PURPOSE,
+      schema: scoutPlanner.schema,
+    },
+  );
+  const usableAngles =
+    planner && Array.isArray(planner.angles) ? planner.angles.filter(isUsableAngle) : [];
+  const plannerFellBack = !planner || !usableAngles.length;
+  const angles               = plannerFellBack
+    ? [FALLBACK_ANGLE]
+    : usableAngles.slice(0, CONFIG.SCOUT_PROBES);
+  const decomposition = (planner && planner.decomposition) || '';
+  if (plannerFellBack) log('  ⚠ scout planner died → v2 single-scout fallback (angle: direct)');
+  log('· scout planner · ' + angles.length + ' angles');
+
+  // ── stage 2: the probe swarm — one `scout` call per angle, in parallel ──
+  const probeResults = await parallel(
+    angles.map((angle, i) => async () => {
+      const out = await retryAgent          (
+        scout.buildPrompt({
+          query: CONFIG.query,
+          net: CONFIG.NET,
+          footer: CONFIG.FOOTER,
+          angleName: angle.name,
+          angleWhy: angle.why,
+          angleLens: angle.lens || '',
+          searchQuery: angle.searchQuery,
+          index: i + 1,
+          total: angles.length,
+          researcherNote: CONFIG.RESEARCHER_NOTE,
+        }),
+        {
+          label: 'scout-probe:' + lab(angle.name),
+          phase: CONFIG.PHASE.scout,
+          model: scout.tier,
+          effort: scout.effort,
+          agentType: CONFIG.GENERAL_PURPOSE,
+          schema: scout.schema,
+        },
+      );
+      return { angle, out };
+    }),
+  );
+  const survivors = probeResults.filter((r)                                            => !!(r && r.out));
+  survivors.forEach(({ angle, out }) =>
+    log('· scout probe «' + angle.name + '» RETURN · pages=' + out.pages.length),
+  );
+  probeResults
+    .filter((r) => !r.out)
+    .forEach(({ angle }) => log('  ✗ scout probe «' + angle.name + '» DIED'));
+  if (!survivors.length) {
+    log('✗ scout DIED');
+    throw new Error('scout died');
+  }
+
+  // ── stage 3: scoutMerger ──
+  const mergerProbes                     = survivors.map(({ angle, out }) => ({
+    name: angle.name,
+    landscape: out.landscape,
+    pages: out.pages || [],
+    claims: out.claims || [],
+    nextSources: out.nextSources || [],
+    newTerms: out.newTerms || [],
+    deadEnds: out.deadEnds || [],
+  }));
+  const merged = await retryAgent          (
+    scoutMerger.buildPrompt({ query: CONFIG.query, decomposition, probes: mergerProbes }),
+    {
+      label: 'scout-merger',
+      phase: CONFIG.PHASE.scout,
+      model: scoutMerger.tier,
+      effort: scoutMerger.effort,
+      schema: scoutMerger.schema,
+    },
+  );
+  const mergerFellBack = !merged;
+  const scoutOut           = merged || mechanicalMerge(survivors);
+  const fallbackLabel =
+    [plannerFellBack && 'planner', mergerFellBack && 'merger'].filter(Boolean).join('+') || 'none';
+  log(
+    '· scout merged · pages=' +
+      scoutOut.pages.length +
+      ' · claims=' +
+      (scoutOut.claims || []).length +
+      ' (fallback: ' +
+      fallbackLabel +
+      ')',
+  );
+
+  rr.scout = scoutOut;
+  const scoutRabbitHoles             = scoutOut.pages.flatMap((p) =>
+    (p.rabbitHoles || []).map((l) => ({
+      keyword: l.keyword,
+      why: l.why,
+      path: []            ,
+      kind: 'seed'         ,
+    })),
+  ); // PATH: scout rabbit-holes descend directly from the goal
+  rr.scoutRabbitHoles = scoutRabbitHoles;
+  log(
+    '· scout RETURN · pages=' +
+      scoutOut.pages.length +
+      ' · rabbit-holes=' +
+      scoutRabbitHoles.length +
+      ' · claims=' +
+      (scoutOut.claims || []).length +
+      ' · newTerms=' +
+      (scoutOut.newTerms || []).length +
+      ' · deadEnds=' +
+      (scoutOut.deadEnds || []).length,
+  );
+  scoutOut.pages.forEach((p, i) =>
+    log(
+      '    source ' + (i + 1) + ' · rabbit-holes=' + (p.rabbitHoles || []).length + ' · ' + p.url,
+    ),
+  );
+  return scoutRabbitHoles;
+}
 // ╔══ module: src/agents/synthesiser/prompts.ts ═══════════════════════════
 // SYNTHESISER prompts — the report-writer template + its assembly function. Template strings are
 // module-level consts; buildSynthesiser only assembles/substitutes the compute-mention clauses.
@@ -2973,107 +3767,46 @@ const synthesiser                         = {
   schema: REPORT,
   buildPrompt: buildSynthesiser,
 };
-// ╔══ module: src/agents/debugAnalyst/prompts.ts ══════════════════════════
-// DEBUG ANALYST prompts — the diagnostics template + its assembly function. Template strings are
-// module-level consts; buildDebugAnalyst only assembles/substitutes the focus clause.
+// ╔══ module: src/agents/validator/prompts.ts ═════════════════════════════
+// VALIDATOR prompts — the per-wave coverage-gate template + its assembly function. Template strings are
+// module-level consts; buildValidator only assembles/substitutes the null-lane clause.
 
 
-                                                             
+                                                          
 
-const DEBUG_TPL = `{{! debug — consolidates metrics, run log, and raw agent I/O into one debug report }}
-Consolidate and analyze this RR run's diagnostics for an engineer debugging the pipeline. Goal: "{{query}}".
-Walk it phase by phase — scout → prospector → each research wave → finalize (initiate → refine → judge → synthesise) — reporting what happened at each with the actual numbers, plus anomalies, degraded/failed agents, or wasted effort to fix.
-Prospector→researcher utilization (run this check): the prospector named these venues:
-{{highValueSources}}
-Each lane in laneRecords carries the \`assignedVenues\` the brainer gave it; from that lane's summary + rabbitHoles, judge whether the researcher actually drew on those venues. Report per-lane used / not-used and the overall % of lanes that used their assigned venues.{{focusClause}}
-v3 ledger machinery to sanity-check: claims are quote-pinned + audited by a claimAuditor (dead auditor ⇒ claims stuck pending), clustered by a lineageClerk (bad clustering ⇒ wrong settled/tentative), derivations rerun by a rerunner — all degrade to null. Check metrics.claimsTotal / nullAttacksTotal / citationsBogus / chao for anomalies (e.g. all claims pending, zero nullAttacks on a contested topic, bogus citations stripped).
-Metrics:
-{{metrics}}
-Lane records (wave, keyword, assignedVenues, summary, rabbitHoles):
-{{laneRecords}}
-Per-wave log:
-{{waveLog}}
-Per-wave result-so-far log (the brainer's running memory each wave):
-{{resultLog}}
-Return diagnosis (markdown).{{FINISH}}
+const VALIDATE_TPL = `{{! validator — per-wave coverage gate: did this wave's lanes fulfill their requests? }}
+You are the VALIDATOR for one research wave of: "{{query}}". Judge cheaply, from the intros below, whether each lane fulfilled what it was sent to find.
+Requests this wave (\`#id keyword — why\`):
+{{requests}}
+What each lane returned (intro only):
+{{findings}}{{nullClause}}
+For each request return {id, fulfilled, reason}: fulfilled=true when the return actually answers the request; false when it is off-target, empty, or too thin to use (one-line reason). Then set enough — did the wave make real progress overall? — and missing — the specific gaps still open for the next wave to re-pursue.
+Return checks, enough, missing.{{FINISH}}
 `;
 
-const buildDebugAnalyst = ({
-  query,
-  focus,
-  metrics,
-  waveLog,
-  resultLog,
-  highValueSources,
-  laneRecords,
-}                  ) => {
-  const focusClause = focus
-    ? `
-Then answer this run-specific question directly: ${focus}`
-    : '';
-  return render(DEBUG_TPL, {
+const buildValidator = ({ query, requests, findings, nullLanes }               ) => {
+  const nullClause =
+    nullLanes && nullLanes.length
+      ? `\nLanes that returned nothing (failed outright): ${plain(nullLanes)}`
+      : '';
+  return render(VALIDATE_TPL, {
     query,
-    highValueSources: plain(highValueSources),
-    focusClause,
-    metrics: plain(metrics),
-    laneRecords: plain(laneRecords),
-    waveLog: plain(waveLog),
-    resultLog: plain(resultLog),
+    requests: plain(requests),
+    findings: plain(findings),
+    nullClause,
     FINISH,
   });
 };
-// ╔══ module: src/agents/debugAnalyst/index.ts ════════════════════════════
-// DEBUG ANALYST — last phase, opt-in (arg.debug). Consolidates the run's diagnostics corner by corner
-// (incl. prospector→researcher venue utilization + any arg.debugPrompt question) into one _debug.md.
-// Tier: opus (diagnostic synthesis). Effort: high.
+// ╔══ module: src/agents/validator/index.ts ═══════════════════════════════
+// VALIDATOR — the per-wave coverage gate of the Crawl phase (distinct from the terminal judge). After each
+// research wave it asks, cheaply, whether every lane fulfilled its request; the engine re-opens any lane that
+// returned null or fulfilled:false (bounded by a per-lane failCount) so the next brainer can re-pursue it.
+// Tier: sonnet (a bounded, cheap per-wave check). Effort: medium.
 
 
-                                                                            
+                                                                         
 
-const DIAG         = {
-  type: 'object',
-  properties: {
-    diagnosis: {
-      type: 'string',
-      description: 'the full corner-by-corner debug consolidation + analysis as markdown',
-    },
-  },
-  required: ['diagnosis'],
-};
-
-const debugAnalyst                          = {
-  tier: CONFIG.TIER.debugAnalyst,
-  effort: CONFIG.EFFORT.debugAnalyst,
-  schema: DIAG,
-  buildPrompt: buildDebugAnalyst,
-};
-// ╔══ module: src/agents/claimAuditor/prompts.ts ══════════════════════════
-// CLAIM AUDITOR prompts — the batched mechanical quote-audit template + its assembly function. Template
-// strings are module-level consts; buildClaimAuditor only assembles/substitutes the items list.
-
-
-                                                           
-
-const CLAIM_AUDIT_TPL = `{{! claimAuditor — batched mechanical quote audit: does each claim's quote exist verbatim in its cache file, and does it carry the claim on its own? }}
-You are the CLAIM AUDITOR. For each item below, mechanically verify its quote against the cache file on disk — you are grepping for a pin, not judging truth.
-Items (\`#id claim | quote | cachePath\`):
-{{items}}
-For EACH item, use python3 for a robust substring search: read the file at cachePath with errors='replace'; collapse runs of whitespace to a single space in BOTH the file text and the quote; then test whether the normalized quote is a substring of the normalized file text. If the file cannot be read for any reason (missing, permission error, anything) NEVER fabricate a verdict — that item's verdict is 'fail' with note "file unreadable".
-When the quote IS found verbatim, also judge whether the quoted text, on its own, actually carries the claim (not merely nearby context) — verdict 'pass' only when both hold; otherwise 'fail' with a one-line note.
-Return checks: one {id, verdict, note?} per item — verdict is 'pass' or 'fail'.{{FINISH}}
-`;
-
-const buildClaimAuditor = ({ items }                ) =>
-  render(CLAIM_AUDIT_TPL, { items: plain(items), FINISH });
-// ╔══ module: src/agents/claimAuditor/index.ts ════════════════════════════
-// CLAIM AUDITOR — batched per wave: for each new claim with a cachePath, mechanically verify (Bash/python3
-// grep) that its verbatim quote exists in the cache file AND carries the claim on its own. Tier: haiku (a
-// bounded, mechanical per-batch job). Effort: medium. Dies → its claims stay 'pending' (unpinned downstream).
-
-
-                                                                          
-
-const CLAIM_AUDIT         = {
+const VALIDATE         = {
   type: 'object',
   properties: {
     checks: {
@@ -3081,317 +3814,631 @@ const CLAIM_AUDIT         = {
       items: {
         type: 'object',
         properties: {
-          id: { type: 'number', description: 'the claim id this verdict is for' },
-          verdict: { type: 'string', enum: ['pass', 'fail'] },
-          note: {
+          id: { type: 'number', description: 'the request id this verdict is for' },
+          fulfilled: {
+            type: 'boolean',
+            description:
+              'true = the lane answered its request; false = off-target, empty, or too thin',
+          },
+          reason: {
             type: 'string',
-            description: 'one line, e.g. "file unreadable" or why the audit failed',
+            description: 'one line — why it fell short (when fulfilled is false)',
           },
         },
-        required: ['id', 'verdict'],
+        required: ['id', 'fulfilled'],
       },
-      description: 'one verdict per audited claim',
+      description: 'one verdict per request',
     },
-  },
-  required: ['checks'],
-};
-
-const claimAuditor                        = {
-  tier: CONFIG.TIER.claimAuditor,
-  effort: CONFIG.EFFORT.claimAuditor,
-  schema: CLAIM_AUDIT,
-  buildPrompt: buildClaimAuditor,
-};
-// ╔══ module: src/agents/lineageClerk/prompts.ts ══════════════════════════
-// LINEAGE CLERK prompts — the batched entity-canonicalization template + its assembly function. Template
-// strings are module-level consts; buildLineageClerk only assembles/substitutes the items + known keys.
-// No FINISH here: the clerk carries no tools (a plain subagent) — there is no tool-use rabbit hole to guard against.
-
-                                                             
-
-const LINEAGE_TPL = `{{! lineageClerk — canonicalize provenance entities so JS can union-find independence clusters }}
-You are the LINEAGE CLERK. Canonicalize each new claim's provenance entities into stable keys so independence clusters can be computed mechanically downstream — this IS the whole job: the SAME real-world entity spelled differently must map to the SAME key ("Pfizer Inc." and "Pfizer" both → funder:pfizer).
-New claims (\`#id source | entities\`):
-{{items}}
-Known canonical keys already in use this run (reuse one of these EXACTLY whenever a claim's entity is the same real-world thing, however it is spelled):
-{{knownKeys}}
-For each claim return its canonical keys: lowercase, kebab-ish, prefixed by entity type — author:j-smith, funder:pfizer, dataset:gaia-dr3, venue:apj. Only emit a key for an entity actually present on that claim; skip absent/unknown entities entirely (never invent one to fill a slot).
-Return links: one {id, keys} per claim.
-`;
-
-const buildLineageClerk = ({ items, knownKeys }                  ) =>
-  render(LINEAGE_TPL, { items: plain(items), knownKeys: plain(knownKeys) });
-// ╔══ module: src/agents/lineageClerk/index.ts ════════════════════════════
-// LINEAGE CLERK — batched per wave: canonicalizes new claims' provenance entities against the known
-// canonical-key list so JS can union-find independence clusters. Tier: haiku (bounded, mechanical
-// canonicalization — no tools, a plain subagent). Effort: medium. Dies → deterministic JS fallback
-// (utils.lineageKeyOf clusters by norm(funder || venue || source-domain); unresolvable → cluster 0).
-
-
-                                                                            
-
-const LINEAGE         = {
-  type: 'object',
-  properties: {
-    links: {
+    enough: { type: 'boolean', description: 'true = the wave made real progress overall' },
+    missing: {
       type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'number', description: 'the claim id these canonical keys belong to' },
-          keys: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'canonical entity keys present on this claim, e.g. "funder:pfizer"',
-          },
-        },
-        required: ['id', 'keys'],
-      },
-      description: 'one canonical-key set per claim',
+      items: { type: 'string' },
+      description: 'the specific gaps still open, for the next brainer to re-pursue',
     },
   },
-  required: ['links'],
+  required: ['checks', 'enough'],
 };
 
-const lineageClerk                          = {
-  tier: CONFIG.TIER.lineageClerk,
-  effort: CONFIG.EFFORT.lineageClerk,
-  schema: LINEAGE,
-  buildPrompt: buildLineageClerk,
+const validator                       = {
+  tier: CONFIG.TIER.validator,
+  effort: CONFIG.EFFORT.validator,
+  schema: VALIDATE,
+  buildPrompt: buildValidator,
 };
-// ╔══ module: src/agents/rerunner/prompts.ts ══════════════════════════════
-// RERUNNER prompts — the derivation re-execution template + its assembly function. Template strings are
-// module-level consts; buildRerunner only assembles/substitutes the code + current inputs.
+// ╔══ module: src/agents/initiator/run.ts ═════════════════════════════════
 
 
-                                                         
-
-const RERUN_TPL = `{{! rerunner — re-executes the stored derivation artifact, verbatim, with the run's current inputs }}
-You are the RERUNNER. A derivation was authored once as a pure, seeded Python script; re-execute it EXACTLY as given with the current inputs — the script is canonical. NEVER repair or rewrite it, even to fix an obvious bug: a broken artifact is the brainer's problem, not yours.
-The script (reads ONE JSON argument, prints ONE JSON object {quantiles, sensitivity}):
-\`\`\`python
-{{code}}
-\`\`\`
-Current inputs — the single JSON argument to pass, verbatim:
-{{inputsJson}}
-Steps: write the script verbatim to a temp file via a Bash heredoc; run \`python3 FILE 'INPUTS'\` (FILE = the temp path, INPUTS = the JSON shown above, unescaped/verbatim); return exactly what it printed.
-If it errors for any reason, return ok:false with the error message in note — do not repair, do not rewrite, do not retry with a fix of your own.
-Return ok, quantiles, sensitivity, note.{{FINISH}}
-`;
-
-const buildRerunner = ({ code, inputsJson }              ) =>
-  render(RERUN_TPL, { code, inputsJson, FINISH });
-// ╔══ module: src/agents/rerunner/index.ts ════════════════════════════════
-// RERUNNER — re-executes the stored derivation artifact (a pure, seeded Python script) with the run's
-// current inputs. Tier: haiku (bounded, mechanical re-execution — never repairs the artifact). Effort: low.
-// Dies or errors → lastRun stays stale; the caller keeps the last good run and tells the brainer it is stale.
 
 
-                                                                        
+                                                          
+                                                                       
 
-const RERUN         = {
-  type: 'object',
-  properties: {
-    ok: { type: 'boolean' },
-    quantiles: {
-      type: 'object',
-      additionalProperties: { type: 'number' },
-      description: "the script's printed quantiles, verbatim",
-    },
-    sensitivity: {
-      type: 'object',
-      additionalProperties: { type: 'number' },
-      description: "the script's printed variance-share sensitivity, verbatim",
-    },
-    note: { type: 'string', description: 'the error message when ok is false' },
-  },
-  required: ['ok'],
-};
-
-const rerunner                      = {
-  tier: CONFIG.TIER.rerunner,
-  effort: CONFIG.EFFORT.rerunner,
-  schema: RERUN,
-  buildPrompt: buildRerunner,
-};
-// ╔══ module: src/store.ts ════════════════════════════════════════════════
-
-
-             
-                    
-             
-             
-             
-              
-             
-             
-                          
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Store reducers — pure functions over a `state` object that carries the crawl's
-// rabbit-hole store (rabbitHoles, nextId, pursuedKeys, pursuedList, pursuedArchive).
-// In the original these were methods on ResearchReport; here `state` is the first
-// arg (the engine passes `this`). Logic is identical.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// the brainer-delta subset applyDeltas consumes (the test passes partial coords, so each field is optional).
-                   
-                        
-                  
-                          
-                     
-  
-
-// light near-duplicate check — Jaccard token-set overlap ≥ CONFIG.NEAR_DUP counts as "the same lead, reworded"
-// (catches re-orderings the exact norm() match misses); the threshold is kept high so distinct leads are never
-// merged. Exported: the v3 chao1 coverage estimate (engine.ts) reuses it to group near-duplicate claims —
-// ONE Jaccard near-dup definition for the whole engine, never a second copy.
-const tokenSet = (s        )              => new Set(norm(s).split(' ').filter(Boolean));
-const nearDup = (a        , b        )          => {
-  const A = tokenSet(a);
-  const B = tokenSet(b);
-  if (!A.size || !B.size) return false;
-  let inter = 0;
-  for (const t of A) if (B.has(t)) inter++;
-  return inter / (A.size + B.size - inter) >= CONFIG.NEAR_DUP;
-};
-
-// add-or-find an OPEN rabbit-hole. Dedup by norm(keyword), a near-duplicate keyword, AND normRef(ref) against the
-// open store AND the pursued sets; returns the existing/new entry, or null when the keyword/ref is already pursued
-// (never re-open a pursued lane or re-fetch a pursued citation). New entries get a fresh id; scoreHistory seeded only when scored.
-function addRabbitHole(
-  state            ,
-  { keyword, why, path, score, wave, ref, kind }                   ,
-)                    {
-  const k = norm(keyword);
-  const r = ref ? normRef(ref) : '';
-  if (!k && !r) return null;
-  if (k && state.pursuedKeys.has(k)) return null;
-  if (r && state.pursuedRefs.has(r)) return null;
-  if (k && state.pursuedList.some((p) => nearDup(keyword, p))) return null; // near-duplicate of a pursued lane
-  const existing = state.rabbitHoles.find(
-    (x) =>
-      (k && norm(x.keyword) === k) ||
-      (r && x.ref && normRef(x.ref) === r) ||
-      (k && nearDup(keyword, x.keyword)),
+// INITIATOR — shapes the finish to the query: names the load-bearing facts to harden + sets the report focus.
+// Returns the facts + synthesiser focus the finalize loop consumes, plus the initiator artifact markdown.
+async function runInitiator(
+  bs              ,
+  topOpen          ,
+)                                                                           {
+  log(
+    '· finalize · initiator · ' +
+      initiator.tier +
+      ' · naming the facts to harden + the report focus',
   );
-  if (existing) return existing;
-  const scored = typeof score === 'number';
-  const rh             = {
-    id: state.nextId++,
-    keyword: keyword || ref || '',
-    why: why || '',
-    score: scored ? score : null,
-    scoreHistory: scored ? [{ wave, score }] : [],
-    path: path || [],
-  };
-  if (ref) rh.ref = ref;
-  if (kind) rh.kind = kind; // the lead's origin channel — keys the yieldCalib table
-  state.rabbitHoles.push(rh);
-  return rh;
+  // v3 FINALIZE — the ledger digest (facts can bind to an existing claim via claimId) + the sensitivity
+  // ranking (once a derivation has a completed rerun) — pre-rendered so initiator/prompts.ts stays pure
+  // clause assembly.
+  const ledger = ledgerLines(bs, CONFIG.BRAINER_LEDGER_CAP);
+  const sensitivity =
+    bs.derivation && bs.derivation.lastRun
+      ? sensitivityRanking(
+          { inputs: bs.derivation.inputs, sensitivity: bs.derivation.lastRun.sensitivity },
+          bs.claims,
+        )
+      : '';
+  const plan = await retryAgent              (
+    initiator.buildPrompt({
+      query: CONFIG.query,
+      resultSoFar: bs.resultSoFar,
+      waveLog: bs.waveLog,
+      landscape: bs.scout .landscape,
+      openRabbitHoles: topOpen,
+      mode: CONFIG.mode,
+      thinkerNote: CONFIG.THINKER_NOTE,
+      ledger,
+      sensitivity,
+    }),
+    {
+      label: 'initiator',
+      phase: CONFIG.PHASE.finalize,
+      model: initiator.tier,
+      effort: initiator.effort,
+      schema: initiator.schema,
+    },
+  );
+  const facts =
+    plan && plan.refinement && Array.isArray(plan.refinement.facts) ? plan.refinement.facts : [];
+  const synthFocus = (plan && plan.synthesiser && plan.synthesiser.focus) || '';
+  log(
+    '· finalize · plan · facts=' +
+      facts.length +
+      ' · synthFocus=' +
+      (synthFocus ? '"' + synthFocus.slice(0, 60) + '"' : 'none'),
+  );
+  const artifact = withPrompt(
+    'initiator',
+    '# Initiator — finalize plan\n\n' +
+      '## Facts to harden (' +
+      facts.length +
+      ')\n\n' +
+      (facts.map((f, i) => i + 1 + '. **' + f.fact + '** — ' + f.why).join('\n') || '_none_') +
+      '\n\n## Synthesiser focus\n\n' +
+      (synthFocus || '_none_') +
+      '\n',
+  );
+  return { facts, synthFocus, artifact };
 }
+// ╔══ module: src/agents/judge/run.ts ═════════════════════════════════════
 
-// apply the brainer's DELTAS to the open store, in order: rename → drop → rescore → add. scoreHistory carried natively by id (no reconcile).
-function applyDeltas(state            , coord            , wave        )       {
-  for (const r of coord.rename || []) {
-    const rh = state.rabbitHoles.find((x) => x.id === r.id);
-    if (rh) {
-      rh.keyword = r.keyword;
-      if (r.why) rh.why = r.why;
-    }
-  }
-  if (coord.drop && coord.drop.length) {
-    const gone = new Set(coord.drop);
-    state.rabbitHoles = state.rabbitHoles.filter((x) => !gone.has(x.id));
-  }
-  for (const r of coord.rescore || []) {
-    const rh = state.rabbitHoles.find((x) => x.id === r.id);
-    if (rh) {
-      rh.score = r.score;
-      rh.scoreHistory.push({ wave, score: r.score });
-    }
-  }
-  for (const a of coord.add || [])
-    addRabbitHole(state, {
-      keyword: a.keyword,
-      why: a.why,
-      path: [],
-      score: a.score,
-      wave,
-      kind: a.kind,
-    });
-}
 
-// resolve the brainer's `lookupNext` into open-store entries to pursue NOW: id → existing lead; keyword → originate (or find). Drop any
-// already pursued, attach the lane's assigned venues, dedup, then take the highest-scoring up to laneCount (the hard ceiling).
-function resolveLookupNext(
-  state            ,
-  coord                               ,
-  wave        ,
-  laneCount        ,
-)               {
-  const picks               = [];
-  for (const item of coord.lookupNext || []) {
-    let rh                                = null;
-    if (typeof item.id === 'number') rh = state.rabbitHoles.find((x) => x.id === item.id);
-    else if (item.keyword || item.ref)
-      rh = addRabbitHole(state, {
-        keyword: item.keyword || '',
-        why: item.why,
-        path: [],
-        score: item.score,
-        wave,
-        ref: item.ref,
-        kind: item.kind, // origin channel rides along when the brainer originates a lane
-      });
-    if (!rh || state.pursuedKeys.has(norm(rh.keyword))) continue;
-    if (item.sources) rh.sources = item.sources;
-    if (item.note) rh.note = item.note; // the brainer's per-lane directive → rides to the scheduler + reader as noteFromBrainer
-    if (item.ref && !rh.ref) rh.ref = item.ref;
-    if (!picks.some((p) => p.id === rh.id)) picks.push(rh);
+
+
+                                                          
+                                                                         
+
+// the prefix shared by the compute-off limitation message and the engine's openGaps dedup, so editing the wording edits both.
+const COMPUTE_LIMIT_PREFIX = 'Quantitative derivation unavailable';
+
+// JUDGE — the TERMINAL skeptic of the finalize phase. Judges the hardened answer (goal met, verification real, derivation valid) and
+// names the precise fix when not. When compute is off, needsCompute/computeSound are forced (no derivation path). Bounded by MAX_JUDGE_PASSES.
+async function runJudge(
+  bs              ,
+  cleanReports               ,
+  focus        ,
+  pass        ,
+)                           {
+  log('· finalize · judge · ' + judge.tier + ' · judging the hardened answer (pass ' + pass + ')');
+  // B1-refinement: the judge sees the leftover/unpursued open rabbit-holes (top by score) so it can rule whether a real gap remains and reopen the crawl.
+  const openRabbitHoles = [...bs.rabbitHoles]
+    .sort((a, b) => (lastScore(b) ?? -1) - (lastScore(a) ?? -1))
+    .slice(0, CONFIG.FINALIZE_TOP_OPEN)
+    .map((r) => '[' + (lastScore(r) ?? 'new') + '] ' + r.keyword + ' — ' + r.why);
+  // v3 FINALIZE — the ledger digest, the challenged-vs-never-challenged split, the computed confidence, and
+  // the crawl's own final stop (STOP RECONCILE): all pre-rendered here so judge/prompts.ts stays pure clause
+  // assembly. keyClaimIds is the answer's OWN load-bearing set — "never challenged" is scoped to those, not
+  // every tentative claim in the ledger.
+  const ledger = ledgerLines(bs, CONFIG.BRAINER_LEDGER_CAP);
+  const keyClaimIds = (bs.resultSoFar && bs.resultSoFar.keyClaimIds) || [];
+  const survivedAttacks = bs.nullAttacks.map(
+    (na) =>
+      na.topic +
+      (na.claimIds.length ? ' → c' + na.claimIds.join(', c') : '') +
+      ' (queries: ' +
+      na.queries.join('; ') +
+      ')',
+  );
+  const challengedIds = new Set(bs.nullAttacks.flatMap((na) => na.claimIds));
+  const neverChallenged = keyClaimIds
+    .map((id) => bs.claims.find((c) => c.id === id))
+    .filter(
+      (c)             => !!c && !c.retracted && !challengedIds.has(c.id) && !c.attacksSurvived,
+    )
+    .map((c) => 'c' + c.id + ' ' + clip(c.claim, CONFIG.CLAIM_DIGEST_CLIP));
+  const out = await retryAgent          (
+    judge.buildPrompt({
+      query: CONFIG.query,
+      resultSoFar: bs.resultSoFar,
+      cleanReports,
+      focus,
+      openRabbitHoles,
+      compute: CONFIG.compute,
+      mode: CONFIG.mode,
+      computeNote: CONFIG.COMPUTE_NOTE,
+      thinkerNote: CONFIG.THINKER_NOTE,
+      ledger,
+      survivedAttacks,
+      neverChallenged,
+      computedConfidence: computedConfidence(keyClaimIds, bs.claims),
+      stop: bs.coord ? bs.coord.stop : undefined,
+    }),
+    {
+      label: 'judge-' + pass,
+      phase: CONFIG.PHASE.finalize,
+      model: judge.tier,
+      effort: judge.effort,
+      schema: judge.schema,
+    },
+  );
+  if (out && !CONFIG.compute) {
+    // compute off → no derivation can run; computeSound is true because none is PRESENT to be unsound (this never
+    // blocks the exit). But do NOT rubber-stamp needsCompute to false: if the judge says the answer genuinely needs
+    // a derivation it cannot have, RETURN that honest signal as a STATED LIMITATION for the engine to fold into
+    // openGaps (the report's Open questions) — the engine owns every resultSoFar mutation, not this run fn.
+    out.computeSound = true;
+    if (out.needsCompute && bs.resultSoFar)
+      out.computeLimitation =
+        COMPUTE_LIMIT_PREFIX +
+        ' (compute is off): ' +
+        (out.directive ||
+          out.reasoning ||
+          'the answer rests on a derivation this run could not perform');
   }
-  // v3 CALIBRATION — the sort key is the score weighted by its kind's predicted-vs-realized yield (selection
-  // only; the stored score itself is never touched). kind = the stored lead's own kind (an id-resolved pick
-  // already carries it; an originated one got it from addRabbitHole's `kind: item.kind` above); an unseen
-  // kind (or none) is neutral (calibFactor defaults to 1) — degrades to the old plain-score sort untouched.
-  const weighted = (p            )         =>
-    (p.score ?? 0) *
-    calibFactor(
-      state.yieldCalib ?? {},
-      p.kind ?? 'origin',
-      CONFIG.CALIB_CLAMP_LO,
-      CONFIG.CALIB_CLAMP_HI,
+  if (out)
+    log(
+      '· finalize · judge pass ' +
+        pass +
+        ' · goalMet=' +
+        out.goalMet +
+        ' verif=' +
+        out.verificationSound +
+        ' needsCompute=' +
+        out.needsCompute +
+        ' computeSound=' +
+        out.computeSound,
     );
-  return picks.sort((a, b) => weighted(b) - weighted(a)).slice(0, laneCount);
+  return out;
 }
+// ╔══ module: src/agents/prospector/run.ts ════════════════════════════════
 
-// REOPEN — the inverse of pursue (validator-driven): move a pursued lead back into the open store so the next
-// brainer can re-pursue it. Clears its pursued keys/ref + drops it from the archive, and bumps failCount (the cap).
-function reopenRabbitHole(state            , rh            )             {
-  const ai = state.pursuedArchive.indexOf(rh);
-  if (ai >= 0) state.pursuedArchive.splice(ai, 1);
-  state.pursuedKeys.delete(norm(rh.keyword));
-  if (rh.ref) state.pursuedRefs.delete(normRef(rh.ref));
-  const li = state.pursuedList.indexOf(rh.keyword);
-  if (li >= 0) state.pursuedList.splice(li, 1);
-  rh.failCount = (rh.failCount || 0) + 1;
-  // clear the stale directive: the `note` that already produced a dead lane must NOT be re-sent verbatim — the
-  // next brainer re-authors a fresh directive (or the scheduler/reader fall back to the rabbit-hole + goal).
-  delete rh.note;
-  if (!state.rabbitHoles.some((x) => x.id === rh.id)) state.rabbitHoles.push(rh);
-  return rh;
+
+
+
+                                                      
+                                                       
+
+// PROSPECT — one Opus prospector after the scout names the high-value source venues; the brainer assigns the
+// relevant subset per lane. Sets rr.highValueSources/languageGuidance/sourcesReasoning and RETURNS the
+// 02-prospector.md markdown (the engine writes it); on failure the venues degrade to none.
+async function runProspector(rr                )                  {
+  log('· prospector DISPATCH · ' + prospector.tier);
+  const res = await retryAgent            (
+    prospector.buildPrompt({
+      query: CONFIG.query,
+      landscape: rr.scout .landscape,
+      sources: rr.scout .pages.map((p) => p.url),
+      thinkerNote: CONFIG.THINKER_NOTE,
+      researcherNote: CONFIG.RESEARCHER_NOTE,
+    }),
+    {
+      label: 'prospector',
+      phase: CONFIG.PHASE.scout,
+      model: prospector.tier,
+      effort: prospector.effort,
+      schema: prospector.schema,
+    },
+  );
+  rr.highValueSources = (res && res.highValueSources) || [];
+  rr.languageGuidance = (res && res.languageGuidance) || '';
+  rr.sourcesReasoning = (res && res.reasoning) || '';
+  log(
+    '· prospector RETURN · venues=' +
+      rr.highValueSources.length +
+      (rr.languageGuidance ? ' · languages="' + rr.languageGuidance.slice(0, 80) + '"' : '') +
+      (res ? '' : ' (FAILED → none; researchers fall back to general search)'),
+  );
+  rr.highValueSources.forEach((s, i) =>
+    log('    venue ' + (i + 1) + ' · ' + s.source + ' — ' + s.goodFor),
+  );
+  return withPrompt(
+    'prospector',
+    '# 02 — Prospector\n\n**Query:** ' +
+      CONFIG.query +
+      (rr.sourcesReasoning ? '\n\n_' + rr.sourcesReasoning + '_' : '') +
+      (rr.languageGuidance ? '\n\n**Language routing:** ' + rr.languageGuidance : '') +
+      '\n\n## High-value source venues\n\n' +
+      (rr.highValueSources
+        .map(
+          (s, i) =>
+            i +
+            1 +
+            '. **' +
+            s.source +
+            '**' +
+            (s.lang ? ' [' + s.lang + ']' : '') +
+            ' — ' +
+            s.goodFor,
+        )
+        .join('\n') || '_(none returned)_') +
+      '\n',
+  );
 }
+// ╔══ module: src/agents/refiner/run.ts ═══════════════════════════════════
 
-// PURSUE — MOVE picks out of the open store into the pursued-archive (no delete-on-pursue): the archive keeps each lead's id + scoreHistory + path.
-function pursue(state            , picks              )       {
-  for (const p of picks) {
-    state.pursuedKeys.add(norm(p.keyword));
-    if (p.ref) state.pursuedRefs.add(normRef(p.ref));
-    state.pursuedList.push(p.keyword);
-    state.pursuedArchive.push(p);
+
+
+                                                          
+                                                                                 
+
+// REFINE the named load-bearing facts in parallel — one sonnet refine agent per fact; on a re-run the judge `directive`
+// rides into each so it re-checks what the judge flagged. A fact carrying a `claimId` gets that ledger claim's
+// pinned quote + source rendered into its prompt (THE CLAIM AS PINNED). Returns the hardened reports + the
+// refinement artifact markdown (the engine writes/overwrites the refinement file) + the RAW per-fact outputs
+// (queriesTried/counterFound/counterNote) so the engine — never this pure run fn — can fold the attack outcome
+// into the ledger. passTag keeps labels unique per pass.
+async function runRefine(
+  bs              ,
+  facts                ,
+  directive        ,
+  passTag        ,
+)                                                                                            {
+  const refined = await parallel(
+    facts.map((f, i) => () => {
+      const pinned =
+        typeof f.claimId === 'number' ? bs.claims.find((c) => c.id === f.claimId) : undefined;
+      return retryAgent           (
+        refiner.buildPrompt({
+          net: CONFIG.NET,
+          query: CONFIG.query,
+          fact: f.fact,
+          why: f.why,
+          directive,
+          claimQuote: pinned?.quote,
+          claimSource: pinned?.source,
+        }),
+        {
+          label: 'refine-' + passTag + i,
+          phase: CONFIG.PHASE.finalize,
+          model: refiner.tier,
+          effort: refiner.effort,
+          schema: refiner.schema,
+        },
+      );
+    }),
+  );
+  const cleanReports                = facts.map((f, i) => ({
+    fact: f.fact,
+    why: f.why,
+    clean: (refined[i] && refined[i] .report) || '(refine failed)',
+  }));
+  const artifact =
+    '# Refinement — fact-check & harden the load-bearing facts\n\n' +
+    (facts.length
+      ? facts
+          .map((f, i) => {
+            const r = refined[i];
+            const attackNote = r
+              ? '\n\n_counter-search: ' +
+                (r.counterFound
+                  ? 'FOUND — ' + (r.counterNote || '(unspecified)')
+                  : 'none found (survived)') +
+                (r.queriesTried && r.queriesTried.length
+                  ? ' · queries: ' + r.queriesTried.join('; ')
+                  : '') +
+                '_'
+              : '';
+            return (
+              '## ' +
+              (i + 1) +
+              ' — ' +
+              f.fact +
+              '\n\n_' +
+              f.why +
+              '_\n\n' +
+              ((r && r.report) || '_(refine failed)_') +
+              attackNote
+            );
+          })
+          .join('\n\n')
+      : '_no facts to harden_') +
+    '\n';
+  return { cleanReports, artifact, refined };
+}
+// ╔══ module: src/agents/researchScheduler/run.ts ═════════════════════════
+
+
+
+
+                                                          
+                                                                                      
+
+// SCHEDULER (B4) — discovery. One Sonnet researchScheduler over the WHOLE wave's lanes: per lane (the
+// rabbit-hole + its steering `note` + assigned venues), it batches the searches, sizes every candidate via
+// mcp__harvester__fetch size_only, and returns the chosen sources grouped per lane id. Returns a Map<id, sources>;
+// the engine bin-packs each lane's sources into reader-units. Degrades to an empty map when the scheduler dies.
+async function runScheduler(
+  bs              ,
+  picks              ,
+  tag        ,
+  phaseName        ,
+)                                          {
+  const map = new Map                           ();
+  if (!picks.length) return map;
+  const out = await retryAgent              (
+    researchScheduler.buildPrompt({
+      query: CONFIG.query,
+      lanes: picks.map((p) => ({
+        id: p.id,
+        keyword: p.keyword,
+        why: p.why,
+        note: p.note || '',
+        venues: venuesFor(bs, p.sources),
+        ref: p.ref,
+      })),
+      researcherNote: CONFIG.RESEARCHER_NOTE,
+      vocabulary: vocabSummary(bs.vocabulary, CONFIG.SCHED_VOCAB_CAP),
+    }),
+    {
+      label: 'scheduler-' + tag,
+      phase: phaseName,
+      model: researchScheduler.tier,
+      effort: researchScheduler.effort,
+      agentType: CONFIG.GENERAL_PURPOSE,
+      schema: researchScheduler.schema,
+    },
+  );
+  // B6 — only accept lanes whose id is a REAL pick this wave: drop hallucinated ids the scheduler may invent;
+  // a duplicate id is last-wins (map.set), which is fine — the engine bin-packs whatever set lands on the id.
+  const pickIds = new Set(picks.map((p) => p.id));
+  for (const l of (out && out.lanes) || [])
+    if (l && typeof l.id === 'number' && pickIds.has(l.id) && Array.isArray(l.sources))
+      map.set(l.id, l.sources);
+  log(
+    '    scheduler · ' +
+      map.size +
+      '/' +
+      picks.length +
+      ' lane(s) sourced · sources=' +
+      [...map.values()].reduce((n, s) => n + s.length, 0),
+  );
+  return map;
+}
+// ╔══ module: src/agents/researcher/run.ts ════════════════════════════════
+
+
+
+
+                                                          
+             
+            
+           
+             
+             
+                 
+            
+            
+              
+                  
+           
+                              
+
+// LANE THREAD (B5) — one SEQUENTIAL reader thread for a lane, carrying the running answer across every read.
+// `readers` is the bin-packed list of reader-units (each a set of cache char-windows). Each reader reads its
+// slice(s) off disk + digests; only the clean parsed `runningAnswer` is forwarded (handoff hygiene — no
+// tool-call/StructuredOutput serialization). Yields one accumulated ResearchOut (or null if every reader failed).
+// `claimDigest` + `laneKind` come from the caller (runResearchers computes claimDigest ONCE per wave off the
+// ledger; laneKind is this lane's RabbitHole.kind — 'attack' flips the reader's brief to counter-evidence).
+async function runLaneThread(
+  p            ,
+  readers               ,
+  tag        ,
+  phaseName        ,
+  claimDigest        ,
+  laneKind           ,
+)                              {
+  const N = readers.length;
+  let priorAnswer = '';
+  const rabbitHoles                   = [];
+  const nextSources               = [];
+  const deadEnds           = [];
+  const claims              = [];
+  const newTerms             = [];
+  let surprise = ''; // keep the FIRST non-empty surprise note — the earliest contradiction this lane hit
+  let any = false;
+  let failed = false; // B3: any reader returned null (retries exhausted / open() threw) → the lane is INCOMPLETE
+  for (let i = 0; i < N; i++) {
+    const out = await retryAgent           (
+      researcher.buildPrompt({
+        query: CONFIG.query,
+        trail: trailOf(p.path, p.keyword),
+        keyword: p.keyword,
+        why: p.why,
+        note: p.note || '',
+        footer: CONFIG.FOOTER,
+        reads: readers[i],
+        readerIndex: i + 1,
+        readerCount: N,
+        priorAnswer, // clean parsed running answer from the prior reader ('' for reader 1) — renders LAST
+        claimDigest,
+        laneKind,
+        researcherNote: CONFIG.RESEARCHER_NOTE,
+      }),
+      {
+        label: 'lane-' + tag + ':' + lab(p.keyword) + '-r' + (i + 1) + 'of' + N,
+        phase: phaseName,
+        model: researcher.tier,
+        effort: researcher.effort,
+        agentType: CONFIG.GENERAL_PURPOSE,
+        schema: researcher.schema,
+      },
+    );
+    if (out) {
+      any = true;
+      if (typeof out.runningAnswer === 'string' && out.runningAnswer.trim())
+        priorAnswer = clip(out.runningAnswer, CONFIG.HANDOFF_CHARS); // handoff hygiene + B7: bound the forwarded running answer
+      for (const rh of out.rabbitHoles || []) rabbitHoles.push(rh);
+      for (const ns of out.nextSources || []) nextSources.push(ns);
+      for (const d of out.deadEnds || []) deadEnds.push(d);
+      for (const c of out.claims || []) claims.push(c);
+      for (const t of out.newTerms || []) newTerms.push(t);
+      if (!surprise && out.surprise && out.surprise.trim()) surprise = out.surprise;
+    } else {
+      failed = true; // a dropped chunk must NOT hide behind the surviving readers
+    }
   }
-  const gone = new Set(picks.map((p) => p.id));
-  state.rabbitHoles = state.rabbitHoles.filter((r) => !gone.has(r.id));
+  // B3 — if ANY reader on the lane failed (or none produced anything), return null so the validator gate
+  // (anyNull) reopens the lane; never emit a confident summary that silently dropped a chunk.
+  if (!any || failed) return null;
+  const out              = {
+    summary: priorAnswer || '(reader returned no answer)',
+    rabbitHoles,
+    nextSources,
+    deadEnds,
+    claims,
+    newTerms,
+  };
+  if (surprise) out.surprise = surprise;
+  return out;
+}
+
+// RUN RESEARCHERS (B5) — consume the scheduler's per-lane source sets: bin-pack each lane into ≤budget
+// reader-units, then spawn ONE sequential reader thread per lane in PARALLEL across lanes. A lane with no
+// scheduled source returns null (a dead lane → the validator gate reopens it). Returns each lane's accumulated
+// ResearchOut (or null), in pick order. The claim digest is computed ONCE here (the ledger only turns over
+// between waves, not within one) and threaded into every lane, alongside each pick's own kind (attack-lane
+// awareness) — down through runLaneThread into every reader's prompt.
+async function runResearchers(
+  bs              ,
+  picks              ,
+  schedule                                ,
+  tag        ,
+  phaseName        ,
+)                                  {
+  const claimDigest = claimDigestOf(bs);
+  return parallel(
+    picks.map((p) => () => {
+      // B7: cap sources-per-lane before packing; B2/B7: hand packReaders the slice cap + the token→char ratio.
+      const laneSources = (schedule.get(p.id) || []).slice(0, CONFIG.MAX_SOURCES_PER_LANE);
+      const readers = packReaders(
+        laneSources,
+        CONFIG.RESEARCHER_TOKEN_BUDGET,
+        CONFIG.CHUNK_OVERLAP_CHARS,
+        CONFIG.MAX_SLICES_PER_READER,
+        CONFIG.CHARS_PER_TOKEN,
+      );
+      if (!readers.length) {
+        log('    lane #' + p.id + ' ' + lab(p.keyword) + ' — no source scheduled → skipped');
+        return Promise.resolve(null);
+      }
+      return runLaneThread(p, readers, tag, phaseName, claimDigest, p.kind);
+    }),
+  );
+}
+// ╔══ module: src/agents/synthesiser/run.ts ═══════════════════════════════
+
+
+
+
+                                                          
+                                                                   
+
+// SYNTHESISER — writes the END report (always) from the judged answer (resultSoFar, any derivation folded into `working`) + the hardened facts.
+// gated on CONFIG.compute (not just a non-empty `working`) so compute-off runs never present a derivation. Returns the ReportOut; the engine
+// prepends the run-args banner and writes result.md.
+async function runSynthesiser(
+  bs              ,
+  cleanReports               ,
+  synthFocus        ,
+  topOpen          ,
+)                            {
+  const hasDerivation = !!(
+    CONFIG.compute &&
+    bs.resultSoFar &&
+    bs.resultSoFar.working &&
+    bs.resultSoFar.working.trim()
+  );
+  log(
+    '· finalize · synthesiser · ' +
+      synthesiser.tier +
+      ' · writing the report' +
+      (hasDerivation ? ' (with derivation)' : ''),
+  );
+  // v3 FINALIZE — cite the ledger + the challenged-and-survived summary + the computed confidence floor
+  // (pre-rendered here so synthesiser/prompts.ts stays pure clause assembly, mirroring judge/run.ts).
+  const ledger = ledgerLines(bs, CONFIG.BRAINER_LEDGER_CAP);
+  const nullAttacksSummary = bs.nullAttacks.map(
+    (na) => na.topic + (na.claimIds.length ? ' → c' + na.claimIds.join(', c') : ''),
+  );
+  const keyClaimIds = (bs.resultSoFar && bs.resultSoFar.keyClaimIds) || [];
+  return retryAgent           (
+    synthesiser.buildPrompt({
+      mode: CONFIG.mode,
+      query: CONFIG.query,
+      landscape: bs.scout .landscape,
+      resultSoFar: bs.resultSoFar,
+      waveLog: bs.waveLog,
+      cleanReports,
+      focus: synthFocus,
+      openRabbitHoles: topOpen,
+      compute: CONFIG.compute,
+      thinkerNote: CONFIG.THINKER_NOTE,
+      ledger,
+      nullAttacksSummary,
+      computedConfidence: computedConfidence(keyClaimIds, bs.claims),
+    }),
+    {
+      label: 'synthesiser',
+      phase: CONFIG.PHASE.finalize,
+      model: synthesiser.tier,
+      effort: synthesiser.effort,
+      schema: synthesiser.schema,
+    },
+  );
+}
+// ╔══ module: src/agents/validator/run.ts ═════════════════════════════════
+
+
+
+                                                          
+                                                                                             
+
+// VALIDATOR — the per-wave coverage gate (distinct from the terminal judge). Given the wave's lookupNext
+// requests + each lane's intro + which lanes died, it rules whether each request was fulfilled and what is still missing.
+async function runValidator(
+  bs              ,
+  wave        ,
+  requests                    ,
+  findings                    ,
+  nullLanes          ,
+)                               {
+  return retryAgent              (
+    validator.buildPrompt({ query: CONFIG.query, requests, findings, nullLanes }),
+    {
+      label: 'validator-w' + wave,
+      phase: CONFIG.PHASE.crawl,
+      model: validator.tier,
+      effort: validator.effort,
+      schema: validator.schema,
+    },
+  );
 }
 // ╔══ module: src/brainerState.ts ═════════════════════════════════════════
              
@@ -3634,1231 +4681,184 @@ function spawnBrainer(
   child.wave = parent.wave;
   return child;
 }
-// ╔══ module: src/runtime.ts ══════════════════════════════════════════════
+// ╔══ module: src/store.ts ════════════════════════════════════════════════
 
 
-                                                              
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Agent runtime — the shared sub-agent caller + the debug capture buffers. Lives
-// in its own module (bundled before the per-agent run.ts modules) so every run fn
-// imports retryAgent without a cycle back through engine.ts; the engine no longer
-// owns the agent-call plumbing, only the orchestration that consumes it.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// L7 retry indirection — wraps every agent() call; the _agent alias keeps it from rewriting itself.
-const _agent = agent;
-// Debug capture (opt-in via arg.debug): the raw agent I/O + the full run-log stream, consumed by the end Debug & Analysis agent.
-const IO_LOG               = [];
-const LOG_BUFFER           = [];
-const _log = globalThis.log;
-try {
-  globalThis.log = (m          ) => {
-    const s = typeof m === 'string' ? m : String(m);
-    // per-wave checkpoint lines are a live-output/recovery mechanism, not a debug narrative — keep them
-    // OUT of _debug.md's Run log so a long run's checkpoint spam never bloats it.
-    if (CONFIG.debug && !s.startsWith(CONFIG.CHECKPOINT_MARK)) LOG_BUFFER.push(s);
-    return _log(m);
-  };
-} catch (e) {
-  /* log not writable → run-log just won't be buffered */
-}
-
-// run a sub-agent with AGENT_RETRIES retries, narrowing the result to its agent's typed `*Out` shape (T); degrades to null when exhausted.
-const retryAgent = async    (prompt        , opts           )                    => {
-  if (opts && opts.label) PROMPT_LOG[opts.label] = prompt;
-  for (let attempt = 0; attempt <= CONFIG.AGENT_RETRIES; attempt++) {
-    try {
-      const out = (await _agent(prompt, opts))     ;
-      // The harness resolves to null WITHOUT throwing when the sub-agent dies on a
-      // terminal API error (e.g. a safety-classifier block) or is skipped mid-run.
-      // Route null through the same retry ladder as a thrown error — otherwise the
-      // ladder never engages on exactly the failure class it exists for. A borderline
-      // classifier block is often probabilistic; a fresh spawn frequently passes.
-      if (out == null)
-        throw new Error('agent returned null (terminal API error / skip / safety block)');
-      if (CONFIG.debug)
-        IO_LOG.push({
-          label: (opts && opts.label) || '?',
-          model: (opts && opts.model) || '?',
-          phase: (opts && opts.phase) || '?',
-          prompt,
-          output: out,
-        });
-      return out;
-    } catch (e) {
-      log(
-        '  ⚠ agent error (attempt ' +
-          (attempt + 1) +
-          '/' +
-          (CONFIG.AGENT_RETRIES + 1) +
-          '): ' +
-          ((e && e.message) || e),
-      );
-      if (attempt === CONFIG.AGENT_RETRIES) {
-        log('  ⚠ agent retries exhausted → degraded to null');
-        if (CONFIG.debug)
-          IO_LOG.push({
-            label: (opts && opts.label) || '?',
-            model: (opts && opts.model) || '?',
-            phase: (opts && opts.phase) || '?',
-            prompt,
-            output: null,
-            error: (e && e.message) || String(e),
-          });
-        return null;
-      }
-    }
-  }
-  return null;
-};
-// ╔══ module: src/agents/scout/run.ts ═════════════════════════════════════
-
-
-
-
-                                                      
              
-            
-             
-       
-             
-           
-                  
-                   
-           
-           
-                              
-
-// FALLBACK A — the planner died (or returned no usable angle): degrade to v2's single-scout behavior, one
-// probe on the naive query itself. Exported for direct unit coverage.
-const FALLBACK_ANGLE             = {
-  name: 'direct',
-  searchQuery: CONFIG.query,
-  why: 'planner died — v2 single-scout fallback',
-  lens: '',
-};
-
-// a planner angle is usable only when it carries the fields a probe actually needs.
-const isUsableAngle = (a         )                  =>
-  !!a &&
-  typeof (a              ).name === 'string' &&
-  !!(a              ).name &&
-  typeof (a              ).searchQuery === 'string' &&
-  !!(a              ).searchQuery;
-
-// FALLBACK B — the merger died: a pure, deterministic JS merge of every surviving probe's output. Exported
-// for direct unit coverage. url dedup via normRef (survivor order, first occurrence wins), capped at
-// SCOUT_PAGES_CAP; claims/newTerms deduped by norm() of their quote/term; deadEnds is a plain union.
-function mechanicalMerge(survivors                                        )           {
-  const landscape = survivors
-    .map(({ angle, out }) => '«' + angle.name + '»: ' + out.landscape)
-    .join('\n');
-  const seenUrls = new Set        ();
-  const pages         = [];
-  for (const { out } of survivors)
-    for (const p of out.pages || [])
-      if (p && p.url && !seenUrls.has(normRef(p.url))) {
-        seenUrls.add(normRef(p.url));
-        pages.push(p);
-      }
-  const seenQuotes = new Set        ();
-  const claims              = [];
-  for (const { out } of survivors)
-    for (const c of out.claims || [])
-      if (c && !seenQuotes.has(norm(c.quote))) {
-        seenQuotes.add(norm(c.quote));
-        claims.push(c);
-      }
-  const seenRefs = new Set        ();
-  const nextSources               = [];
-  for (const { out } of survivors)
-    for (const s of out.nextSources || [])
-      if (s && s.ref && !seenRefs.has(normRef(s.ref))) {
-        seenRefs.add(normRef(s.ref));
-        nextSources.push(s);
-      }
-  const seenTerms = new Set        ();
-  const newTerms             = [];
-  for (const { out } of survivors)
-    for (const t of out.newTerms || [])
-      if (t && !seenTerms.has(norm(t.term))) {
-        seenTerms.add(norm(t.term));
-        newTerms.push(t);
-      }
-  const deadEnds = survivors.flatMap(({ out }) => out.deadEnds || []);
-  return {
-    landscape,
-    pages: pages.slice(0, CONFIG.SCOUT_PAGES_CAP),
-    claims,
-    nextSources,
-    newTerms,
-    deadEnds,
-  };
-}
-
-// SCOUT SWARM (wave-0 seed): scoutPlanner decomposes the query + proposes 3..SCOUT_PROBES search angles →
-// a `scout` probe sweeps each angle in parallel (broad WebSearch → fetch with the rabbit-hole footer,
-// scoped to its angle) → scoutMerger folds every surviving probe into the FINAL ScoutOut, naming the
-// tensions between angles. Each stage degrades to a named JS fallback; only a total probe wipeout is
-// fatal (unchanged from v2's single-scout semantics). Sets rr.scout + rr.scoutRabbitHoles and returns the
-// seed leads (the engine seeds the open store from them) — signature/return/assignment unchanged from v2.
-async function runScout(rr                )                      {
-  phase(CONFIG.PHASE.scout);
-
-  // ── stage 1: scoutPlanner ──
-  log('· scout planner DISPATCH · ' + scoutPlanner.tier);
-  const planner = await retryAgent                 (
-    scoutPlanner.buildPrompt({
-      query: CONFIG.query,
-      mode: CONFIG.mode,
-      net: CONFIG.NET,
-      researcherNote: CONFIG.RESEARCHER_NOTE,
-    }),
-    {
-      label: 'scout-planner',
-      phase: CONFIG.PHASE.scout,
-      model: scoutPlanner.tier,
-      effort: scoutPlanner.effort,
-      agentType: CONFIG.GENERAL_PURPOSE,
-      schema: scoutPlanner.schema,
-    },
-  );
-  const usableAngles =
-    planner && Array.isArray(planner.angles) ? planner.angles.filter(isUsableAngle) : [];
-  const plannerFellBack = !planner || !usableAngles.length;
-  const angles               = plannerFellBack
-    ? [FALLBACK_ANGLE]
-    : usableAngles.slice(0, CONFIG.SCOUT_PROBES);
-  const decomposition = (planner && planner.decomposition) || '';
-  if (plannerFellBack) log('  ⚠ scout planner died → v2 single-scout fallback (angle: direct)');
-  log('· scout planner · ' + angles.length + ' angles');
-
-  // ── stage 2: the probe swarm — one `scout` call per angle, in parallel ──
-  const probeResults = await parallel(
-    angles.map((angle, i) => async () => {
-      const out = await retryAgent          (
-        scout.buildPrompt({
-          query: CONFIG.query,
-          net: CONFIG.NET,
-          footer: CONFIG.FOOTER,
-          angleName: angle.name,
-          angleWhy: angle.why,
-          angleLens: angle.lens || '',
-          searchQuery: angle.searchQuery,
-          index: i + 1,
-          total: angles.length,
-          researcherNote: CONFIG.RESEARCHER_NOTE,
-        }),
-        {
-          label: 'scout-probe:' + lab(angle.name),
-          phase: CONFIG.PHASE.scout,
-          model: scout.tier,
-          effort: scout.effort,
-          agentType: CONFIG.GENERAL_PURPOSE,
-          schema: scout.schema,
-        },
-      );
-      return { angle, out };
-    }),
-  );
-  const survivors = probeResults.filter((r)                                            => !!(r && r.out));
-  survivors.forEach(({ angle, out }) =>
-    log('· scout probe «' + angle.name + '» RETURN · pages=' + out.pages.length),
-  );
-  probeResults
-    .filter((r) => !r.out)
-    .forEach(({ angle }) => log('  ✗ scout probe «' + angle.name + '» DIED'));
-  if (!survivors.length) {
-    log('✗ scout DIED');
-    throw new Error('scout died');
-  }
-
-  // ── stage 3: scoutMerger ──
-  const mergerProbes                     = survivors.map(({ angle, out }) => ({
-    name: angle.name,
-    landscape: out.landscape,
-    pages: out.pages || [],
-    claims: out.claims || [],
-    nextSources: out.nextSources || [],
-    newTerms: out.newTerms || [],
-    deadEnds: out.deadEnds || [],
-  }));
-  const merged = await retryAgent          (
-    scoutMerger.buildPrompt({ query: CONFIG.query, decomposition, probes: mergerProbes }),
-    {
-      label: 'scout-merger',
-      phase: CONFIG.PHASE.scout,
-      model: scoutMerger.tier,
-      effort: scoutMerger.effort,
-      schema: scoutMerger.schema,
-    },
-  );
-  const mergerFellBack = !merged;
-  const scoutOut           = merged || mechanicalMerge(survivors);
-  const fallbackLabel =
-    [plannerFellBack && 'planner', mergerFellBack && 'merger'].filter(Boolean).join('+') || 'none';
-  log(
-    '· scout merged · pages=' +
-      scoutOut.pages.length +
-      ' · claims=' +
-      (scoutOut.claims || []).length +
-      ' (fallback: ' +
-      fallbackLabel +
-      ')',
-  );
-
-  rr.scout = scoutOut;
-  const scoutRabbitHoles             = scoutOut.pages.flatMap((p) =>
-    (p.rabbitHoles || []).map((l) => ({
-      keyword: l.keyword,
-      why: l.why,
-      path: []            ,
-      kind: 'seed'         ,
-    })),
-  ); // PATH: scout rabbit-holes descend directly from the goal
-  rr.scoutRabbitHoles = scoutRabbitHoles;
-  log(
-    '· scout RETURN · pages=' +
-      scoutOut.pages.length +
-      ' · rabbit-holes=' +
-      scoutRabbitHoles.length +
-      ' · claims=' +
-      (scoutOut.claims || []).length +
-      ' · newTerms=' +
-      (scoutOut.newTerms || []).length +
-      ' · deadEnds=' +
-      (scoutOut.deadEnds || []).length,
-  );
-  scoutOut.pages.forEach((p, i) =>
-    log(
-      '    source ' + (i + 1) + ' · rabbit-holes=' + (p.rabbitHoles || []).length + ' · ' + p.url,
-    ),
-  );
-  return scoutRabbitHoles;
-}
-// ╔══ module: src/agents/prospector/run.ts ════════════════════════════════
-
-
-
-
-                                                      
-                                                       
-
-// PROSPECT — one Opus prospector after the scout names the high-value source venues; the brainer assigns the
-// relevant subset per lane. Sets rr.highValueSources/languageGuidance/sourcesReasoning and RETURNS the
-// 02-prospector.md markdown (the engine writes it); on failure the venues degrade to none.
-async function runProspector(rr                )                  {
-  log('· prospector DISPATCH · ' + prospector.tier);
-  const res = await retryAgent            (
-    prospector.buildPrompt({
-      query: CONFIG.query,
-      landscape: rr.scout .landscape,
-      sources: rr.scout .pages.map((p) => p.url),
-      thinkerNote: CONFIG.THINKER_NOTE,
-      researcherNote: CONFIG.RESEARCHER_NOTE,
-    }),
-    {
-      label: 'prospector',
-      phase: CONFIG.PHASE.scout,
-      model: prospector.tier,
-      effort: prospector.effort,
-      schema: prospector.schema,
-    },
-  );
-  rr.highValueSources = (res && res.highValueSources) || [];
-  rr.languageGuidance = (res && res.languageGuidance) || '';
-  rr.sourcesReasoning = (res && res.reasoning) || '';
-  log(
-    '· prospector RETURN · venues=' +
-      rr.highValueSources.length +
-      (rr.languageGuidance ? ' · languages="' + rr.languageGuidance.slice(0, 80) + '"' : '') +
-      (res ? '' : ' (FAILED → none; researchers fall back to general search)'),
-  );
-  rr.highValueSources.forEach((s, i) =>
-    log('    venue ' + (i + 1) + ' · ' + s.source + ' — ' + s.goodFor),
-  );
-  return withPrompt(
-    'prospector',
-    '# 02 — Prospector\n\n**Query:** ' +
-      CONFIG.query +
-      (rr.sourcesReasoning ? '\n\n_' + rr.sourcesReasoning + '_' : '') +
-      (rr.languageGuidance ? '\n\n**Language routing:** ' + rr.languageGuidance : '') +
-      '\n\n## High-value source venues\n\n' +
-      (rr.highValueSources
-        .map(
-          (s, i) =>
-            i +
-            1 +
-            '. **' +
-            s.source +
-            '**' +
-            (s.lang ? ' [' + s.lang + ']' : '') +
-            ' — ' +
-            s.goodFor,
-        )
-        .join('\n') || '_(none returned)_') +
-      '\n',
-  );
-}
-// ╔══ module: src/agents/brainer/run.ts ═══════════════════════════════════
-
-
-
-
-                                                          
-                                                                                         
-
-// the single Opus BRAINER — the brain / global reducer. Sees the open store + pursued set + running resultSoFar; returns the updated
-// resultSoFar + DELTAS (rescore / add / lookupNext / rename / drop / stop). Can LOOK UP stored leads OR ORIGINATE new directions; code-capable
-// (general-purpose) when compute is on, so it can derive its own steering numbers inline — no separate compute stage.
-async function runBrainer(
-  bs              ,
-  wave        ,
-  findings           ,
-  phaseName         = CONFIG.PHASE.crawl,
-  ctx                                             ,
-)                        {
-  const open = bs.rabbitHoles.map(openLine);
-  // v3 STEERING — the ledger digest + calibration/sensitivity/coverage state, computed here (pure reads off
-  // bs) and handed to buildBrainer, which decides per-clause whether there is anything to say.
-  const ledger = ledgerLines(bs, CONFIG.BRAINER_LEDGER_CAP);
-  const derivation =
-    bs.derivation && bs.derivation.lastRun
-      ? {
-          quantiles: bs.derivation.lastRun.quantiles,
-          sensitivity: bs.derivation.lastRun.sensitivity,
-          inputs: bs.derivation.inputs,
-          stale: !!bs.derivationStale,
-        }
-      : undefined;
-  return retryAgent       (
-    brainer.buildPrompt({
-      wave,
-      query: CONFIG.query,
-      rubric: CONFIG.RUBRIC,
-      landscape: bs.scout .landscape,
-      pursuedList: bs.pursuedList,
-      open,
-      findings,
-      topScores: bs.topScores,
-      resultSoFar: bs.resultSoFar,
-      stop: CONFIG.STOP,
-      mode: CONFIG.mode,
-      venues: venuesWithYieldWarn(bs.highValueSources, bs.venueStats),
-      languageGuidance: bs.languageGuidance,
-      lastValidatorMissing: bs.lastValidatorMissing,
-      compute: CONFIG.compute,
-      computeNote: CONFIG.COMPUTE_NOTE,
-      thinkerNote: CONFIG.THINKER_NOTE,
-      researcherNote: CONFIG.RESEARCHER_NOTE,
-      ledger,
-      calib: bs.yieldCalib,
-      derivation,
-      chao: bs.chao,
-      // brainer-tree context — identity off the brainer, per-wave permissions off ctx (both inert in single-brainer runs)
-      isChild: !bs.isRoot,
-      parentName: bs.parentName || undefined,
-      mandate: bs.mandate || undefined,
-      trail: bs.trail || undefined,
-      canSpawn: ctx ? ctx.canSpawn : false,
-      lastWave: ctx ? ctx.lastWave : false,
-    }),
-    {
-      label: 'brainer-' + (bs.isRoot ? '' : bs.name + '-') + 'w' + wave,
-      phase: phaseName,
-      model: brainer.tier,
-      effort: brainer.effort,
-      // pruned per call — optional clauses inflate the schema past the spawn classifier's size limit
-      schema: buildCoord({ compute: CONFIG.compute, canSpawn: !!(ctx && ctx.canSpawn) }),
-      agentType: CONFIG.compute ? CONFIG.GENERAL_PURPOSE : undefined,
-    },
-  );
-}
-
-// brain FINALIZE-COMPUTE — the brain (code-capable) derives the answer on the hardened facts, per the judge directive.
-// Pure: returns the BrainComputeOut; the engine folds out.resultSoFar back into bs.
-async function runBrainerCompute(
-  bs              ,
-  hardenedFacts               ,
-  directive        ,
-  reason        ,
-  pass        ,
-)                                  {
-  return retryAgent                 (
-    buildBrainerCompute({
-      query: CONFIG.query,
-      resultSoFar: bs.resultSoFar,
-      hardenedFacts,
-      directive,
-      reason,
-      computeNote: CONFIG.COMPUTE_NOTE,
-      thinkerNote: CONFIG.THINKER_NOTE,
-    }),
-    {
-      label: 'brain-compute-' + pass,
-      phase: CONFIG.PHASE.finalize,
-      model: brainer.tier,
-      effort: brainer.effort,
-      agentType: CONFIG.GENERAL_PURPOSE,
-      schema: BRAIN_COMPUTE,
-    },
-  );
-}
-// ╔══ module: src/agents/validator/run.ts ═════════════════════════════════
-
-
-
-                                                          
-                                                                                             
-
-// VALIDATOR — the per-wave coverage gate (distinct from the terminal judge). Given the wave's lookupNext
-// requests + each lane's intro + which lanes died, it rules whether each request was fulfilled and what is still missing.
-async function runValidator(
-  bs              ,
-  wave        ,
-  requests                    ,
-  findings                    ,
-  nullLanes          ,
-)                               {
-  return retryAgent              (
-    validator.buildPrompt({ query: CONFIG.query, requests, findings, nullLanes }),
-    {
-      label: 'validator-w' + wave,
-      phase: CONFIG.PHASE.crawl,
-      model: validator.tier,
-      effort: validator.effort,
-      schema: validator.schema,
-    },
-  );
-}
-// ╔══ module: src/agents/researchScheduler/run.ts ═════════════════════════
-
-
-
-
-                                                          
-                                                                                      
-
-// SCHEDULER (B4) — discovery. One Sonnet researchScheduler over the WHOLE wave's lanes: per lane (the
-// rabbit-hole + its steering `note` + assigned venues), it batches the searches, sizes every candidate via
-// mcp__harvester__fetch size_only, and returns the chosen sources grouped per lane id. Returns a Map<id, sources>;
-// the engine bin-packs each lane's sources into reader-units. Degrades to an empty map when the scheduler dies.
-async function runScheduler(
-  bs              ,
-  picks              ,
-  tag        ,
-  phaseName        ,
-)                                          {
-  const map = new Map                           ();
-  if (!picks.length) return map;
-  const out = await retryAgent              (
-    researchScheduler.buildPrompt({
-      query: CONFIG.query,
-      lanes: picks.map((p) => ({
-        id: p.id,
-        keyword: p.keyword,
-        why: p.why,
-        note: p.note || '',
-        venues: venuesFor(bs, p.sources),
-        ref: p.ref,
-      })),
-      researcherNote: CONFIG.RESEARCHER_NOTE,
-      vocabulary: vocabSummary(bs.vocabulary, CONFIG.SCHED_VOCAB_CAP),
-    }),
-    {
-      label: 'scheduler-' + tag,
-      phase: phaseName,
-      model: researchScheduler.tier,
-      effort: researchScheduler.effort,
-      agentType: CONFIG.GENERAL_PURPOSE,
-      schema: researchScheduler.schema,
-    },
-  );
-  // B6 — only accept lanes whose id is a REAL pick this wave: drop hallucinated ids the scheduler may invent;
-  // a duplicate id is last-wins (map.set), which is fine — the engine bin-packs whatever set lands on the id.
-  const pickIds = new Set(picks.map((p) => p.id));
-  for (const l of (out && out.lanes) || [])
-    if (l && typeof l.id === 'number' && pickIds.has(l.id) && Array.isArray(l.sources))
-      map.set(l.id, l.sources);
-  log(
-    '    scheduler · ' +
-      map.size +
-      '/' +
-      picks.length +
-      ' lane(s) sourced · sources=' +
-      [...map.values()].reduce((n, s) => n + s.length, 0),
-  );
-  return map;
-}
-// ╔══ module: src/agents/researcher/run.ts ════════════════════════════════
-
-
-
-
-                                                          
-             
-            
-           
+                    
              
              
-                 
-            
-            
+             
               
-                  
-           
-                              
+             
+             
+                          
 
-// LANE THREAD (B5) — one SEQUENTIAL reader thread for a lane, carrying the running answer across every read.
-// `readers` is the bin-packed list of reader-units (each a set of cache char-windows). Each reader reads its
-// slice(s) off disk + digests; only the clean parsed `runningAnswer` is forwarded (handoff hygiene — no
-// tool-call/StructuredOutput serialization). Yields one accumulated ResearchOut (or null if every reader failed).
-// `claimDigest` + `laneKind` come from the caller (runResearchers computes claimDigest ONCE per wave off the
-// ledger; laneKind is this lane's RabbitHole.kind — 'attack' flips the reader's brief to counter-evidence).
-async function runLaneThread(
-  p            ,
-  readers               ,
-  tag        ,
-  phaseName        ,
-  claimDigest        ,
-  laneKind           ,
-)                              {
-  const N = readers.length;
-  let priorAnswer = '';
-  const rabbitHoles                   = [];
-  const nextSources               = [];
-  const deadEnds           = [];
-  const claims              = [];
-  const newTerms             = [];
-  let surprise = ''; // keep the FIRST non-empty surprise note — the earliest contradiction this lane hit
-  let any = false;
-  let failed = false; // B3: any reader returned null (retries exhausted / open() threw) → the lane is INCOMPLETE
-  for (let i = 0; i < N; i++) {
-    const out = await retryAgent           (
-      researcher.buildPrompt({
-        query: CONFIG.query,
-        trail: trailOf(p.path, p.keyword),
-        keyword: p.keyword,
-        why: p.why,
-        note: p.note || '',
-        footer: CONFIG.FOOTER,
-        reads: readers[i],
-        readerIndex: i + 1,
-        readerCount: N,
-        priorAnswer, // clean parsed running answer from the prior reader ('' for reader 1) — renders LAST
-        claimDigest,
-        laneKind,
-        researcherNote: CONFIG.RESEARCHER_NOTE,
-      }),
-      {
-        label: 'lane-' + tag + ':' + lab(p.keyword) + '-r' + (i + 1) + 'of' + N,
-        phase: phaseName,
-        model: researcher.tier,
-        effort: researcher.effort,
-        agentType: CONFIG.GENERAL_PURPOSE,
-        schema: researcher.schema,
-      },
-    );
-    if (out) {
-      any = true;
-      if (typeof out.runningAnswer === 'string' && out.runningAnswer.trim())
-        priorAnswer = clip(out.runningAnswer, CONFIG.HANDOFF_CHARS); // handoff hygiene + B7: bound the forwarded running answer
-      for (const rh of out.rabbitHoles || []) rabbitHoles.push(rh);
-      for (const ns of out.nextSources || []) nextSources.push(ns);
-      for (const d of out.deadEnds || []) deadEnds.push(d);
-      for (const c of out.claims || []) claims.push(c);
-      for (const t of out.newTerms || []) newTerms.push(t);
-      if (!surprise && out.surprise && out.surprise.trim()) surprise = out.surprise;
-    } else {
-      failed = true; // a dropped chunk must NOT hide behind the surviving readers
+// ─────────────────────────────────────────────────────────────────────────────
+// Store reducers — pure functions over a `state` object that carries the crawl's
+// rabbit-hole store (rabbitHoles, nextId, pursuedKeys, pursuedList, pursuedArchive).
+// In the original these were methods on ResearchReport; here `state` is the first
+// arg (the engine passes `this`). Logic is identical.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// the brainer-delta subset applyDeltas consumes (the test passes partial coords, so each field is optional).
+                   
+                        
+                  
+                          
+                     
+  
+
+// light near-duplicate check — Jaccard token-set overlap ≥ CONFIG.NEAR_DUP counts as "the same lead, reworded"
+// (catches re-orderings the exact norm() match misses); the threshold is kept high so distinct leads are never
+// merged. Exported: the v3 chao1 coverage estimate (engine.ts) reuses it to group near-duplicate claims —
+// ONE Jaccard near-dup definition for the whole engine, never a second copy.
+const tokenSet = (s        )              => new Set(norm(s).split(' ').filter(Boolean));
+const nearDup = (a        , b        )          => {
+  const A = tokenSet(a);
+  const B = tokenSet(b);
+  if (!A.size || !B.size) return false;
+  let inter = 0;
+  for (const t of A) if (B.has(t)) inter++;
+  return inter / (A.size + B.size - inter) >= CONFIG.NEAR_DUP;
+};
+
+// add-or-find an OPEN rabbit-hole. Dedup by norm(keyword), a near-duplicate keyword, AND normRef(ref) against the
+// open store AND the pursued sets; returns the existing/new entry, or null when the keyword/ref is already pursued
+// (never re-open a pursued lane or re-fetch a pursued citation). New entries get a fresh id; scoreHistory seeded only when scored.
+function addRabbitHole(
+  state            ,
+  { keyword, why, path, score, wave, ref, kind }                   ,
+)                    {
+  const k = norm(keyword);
+  const r = ref ? normRef(ref) : '';
+  if (!k && !r) return null;
+  if (k && state.pursuedKeys.has(k)) return null;
+  if (r && state.pursuedRefs.has(r)) return null;
+  if (k && state.pursuedList.some((p) => nearDup(keyword, p))) return null; // near-duplicate of a pursued lane
+  const existing = state.rabbitHoles.find(
+    (x) =>
+      (k && norm(x.keyword) === k) ||
+      (r && x.ref && normRef(x.ref) === r) ||
+      (k && nearDup(keyword, x.keyword)),
+  );
+  if (existing) return existing;
+  const scored = typeof score === 'number';
+  const rh             = {
+    id: state.nextId++,
+    keyword: keyword || ref || '',
+    why: why || '',
+    score: scored ? score : null,
+    scoreHistory: scored ? [{ wave, score }] : [],
+    path: path || [],
+  };
+  if (ref) rh.ref = ref;
+  if (kind) rh.kind = kind; // the lead's origin channel — keys the yieldCalib table
+  state.rabbitHoles.push(rh);
+  return rh;
+}
+
+// apply the brainer's DELTAS to the open store, in order: rename → drop → rescore → add. scoreHistory carried natively by id (no reconcile).
+function applyDeltas(state            , coord            , wave        )       {
+  for (const r of coord.rename || []) {
+    const rh = state.rabbitHoles.find((x) => x.id === r.id);
+    if (rh) {
+      rh.keyword = r.keyword;
+      if (r.why) rh.why = r.why;
     }
   }
-  // B3 — if ANY reader on the lane failed (or none produced anything), return null so the validator gate
-  // (anyNull) reopens the lane; never emit a confident summary that silently dropped a chunk.
-  if (!any || failed) return null;
-  const out              = {
-    summary: priorAnswer || '(reader returned no answer)',
-    rabbitHoles,
-    nextSources,
-    deadEnds,
-    claims,
-    newTerms,
-  };
-  if (surprise) out.surprise = surprise;
-  return out;
-}
-
-// RUN RESEARCHERS (B5) — consume the scheduler's per-lane source sets: bin-pack each lane into ≤budget
-// reader-units, then spawn ONE sequential reader thread per lane in PARALLEL across lanes. A lane with no
-// scheduled source returns null (a dead lane → the validator gate reopens it). Returns each lane's accumulated
-// ResearchOut (or null), in pick order. The claim digest is computed ONCE here (the ledger only turns over
-// between waves, not within one) and threaded into every lane, alongside each pick's own kind (attack-lane
-// awareness) — down through runLaneThread into every reader's prompt.
-async function runResearchers(
-  bs              ,
-  picks              ,
-  schedule                                ,
-  tag        ,
-  phaseName        ,
-)                                  {
-  const claimDigest = claimDigestOf(bs);
-  return parallel(
-    picks.map((p) => () => {
-      // B7: cap sources-per-lane before packing; B2/B7: hand packReaders the slice cap + the token→char ratio.
-      const laneSources = (schedule.get(p.id) || []).slice(0, CONFIG.MAX_SOURCES_PER_LANE);
-      const readers = packReaders(
-        laneSources,
-        CONFIG.RESEARCHER_TOKEN_BUDGET,
-        CONFIG.CHUNK_OVERLAP_CHARS,
-        CONFIG.MAX_SLICES_PER_READER,
-        CONFIG.CHARS_PER_TOKEN,
-      );
-      if (!readers.length) {
-        log('    lane #' + p.id + ' ' + lab(p.keyword) + ' — no source scheduled → skipped');
-        return Promise.resolve(null);
-      }
-      return runLaneThread(p, readers, tag, phaseName, claimDigest, p.kind);
-    }),
-  );
-}
-// ╔══ module: src/agents/initiator/run.ts ═════════════════════════════════
-
-
-
-
-                                                          
-                                                                       
-
-// INITIATOR — shapes the finish to the query: names the load-bearing facts to harden + sets the report focus.
-// Returns the facts + synthesiser focus the finalize loop consumes, plus the initiator artifact markdown.
-async function runInitiator(
-  bs              ,
-  topOpen          ,
-)                                                                           {
-  log(
-    '· finalize · initiator · ' +
-      initiator.tier +
-      ' · naming the facts to harden + the report focus',
-  );
-  // v3 FINALIZE — the ledger digest (facts can bind to an existing claim via claimId) + the sensitivity
-  // ranking (once a derivation has a completed rerun) — pre-rendered so initiator/prompts.ts stays pure
-  // clause assembly.
-  const ledger = ledgerLines(bs, CONFIG.BRAINER_LEDGER_CAP);
-  const sensitivity =
-    bs.derivation && bs.derivation.lastRun
-      ? sensitivityRanking(
-          { inputs: bs.derivation.inputs, sensitivity: bs.derivation.lastRun.sensitivity },
-          bs.claims,
-        )
-      : '';
-  const plan = await retryAgent              (
-    initiator.buildPrompt({
-      query: CONFIG.query,
-      resultSoFar: bs.resultSoFar,
-      waveLog: bs.waveLog,
-      landscape: bs.scout .landscape,
-      openRabbitHoles: topOpen,
-      mode: CONFIG.mode,
-      thinkerNote: CONFIG.THINKER_NOTE,
-      ledger,
-      sensitivity,
-    }),
-    {
-      label: 'initiator',
-      phase: CONFIG.PHASE.finalize,
-      model: initiator.tier,
-      effort: initiator.effort,
-      schema: initiator.schema,
-    },
-  );
-  const facts =
-    plan && plan.refinement && Array.isArray(plan.refinement.facts) ? plan.refinement.facts : [];
-  const synthFocus = (plan && plan.synthesiser && plan.synthesiser.focus) || '';
-  log(
-    '· finalize · plan · facts=' +
-      facts.length +
-      ' · synthFocus=' +
-      (synthFocus ? '"' + synthFocus.slice(0, 60) + '"' : 'none'),
-  );
-  const artifact = withPrompt(
-    'initiator',
-    '# Initiator — finalize plan\n\n' +
-      '## Facts to harden (' +
-      facts.length +
-      ')\n\n' +
-      (facts.map((f, i) => i + 1 + '. **' + f.fact + '** — ' + f.why).join('\n') || '_none_') +
-      '\n\n## Synthesiser focus\n\n' +
-      (synthFocus || '_none_') +
-      '\n',
-  );
-  return { facts, synthFocus, artifact };
-}
-// ╔══ module: src/agents/refiner/run.ts ═══════════════════════════════════
-
-
-
-                                                          
-                                                                                 
-
-// REFINE the named load-bearing facts in parallel — one sonnet refine agent per fact; on a re-run the judge `directive`
-// rides into each so it re-checks what the judge flagged. A fact carrying a `claimId` gets that ledger claim's
-// pinned quote + source rendered into its prompt (THE CLAIM AS PINNED). Returns the hardened reports + the
-// refinement artifact markdown (the engine writes/overwrites the refinement file) + the RAW per-fact outputs
-// (queriesTried/counterFound/counterNote) so the engine — never this pure run fn — can fold the attack outcome
-// into the ledger. passTag keeps labels unique per pass.
-async function runRefine(
-  bs              ,
-  facts                ,
-  directive        ,
-  passTag        ,
-)                                                                                            {
-  const refined = await parallel(
-    facts.map((f, i) => () => {
-      const pinned =
-        typeof f.claimId === 'number' ? bs.claims.find((c) => c.id === f.claimId) : undefined;
-      return retryAgent           (
-        refiner.buildPrompt({
-          net: CONFIG.NET,
-          query: CONFIG.query,
-          fact: f.fact,
-          why: f.why,
-          directive,
-          claimQuote: pinned?.quote,
-          claimSource: pinned?.source,
-        }),
-        {
-          label: 'refine-' + passTag + i,
-          phase: CONFIG.PHASE.finalize,
-          model: refiner.tier,
-          effort: refiner.effort,
-          schema: refiner.schema,
-        },
-      );
-    }),
-  );
-  const cleanReports                = facts.map((f, i) => ({
-    fact: f.fact,
-    why: f.why,
-    clean: (refined[i] && refined[i] .report) || '(refine failed)',
-  }));
-  const artifact =
-    '# Refinement — fact-check & harden the load-bearing facts\n\n' +
-    (facts.length
-      ? facts
-          .map((f, i) => {
-            const r = refined[i];
-            const attackNote = r
-              ? '\n\n_counter-search: ' +
-                (r.counterFound
-                  ? 'FOUND — ' + (r.counterNote || '(unspecified)')
-                  : 'none found (survived)') +
-                (r.queriesTried && r.queriesTried.length
-                  ? ' · queries: ' + r.queriesTried.join('; ')
-                  : '') +
-                '_'
-              : '';
-            return (
-              '## ' +
-              (i + 1) +
-              ' — ' +
-              f.fact +
-              '\n\n_' +
-              f.why +
-              '_\n\n' +
-              ((r && r.report) || '_(refine failed)_') +
-              attackNote
-            );
-          })
-          .join('\n\n')
-      : '_no facts to harden_') +
-    '\n';
-  return { cleanReports, artifact, refined };
-}
-// ╔══ module: src/agents/judge/run.ts ═════════════════════════════════════
-
-
-
-
-                                                          
-                                                                         
-
-// the prefix shared by the compute-off limitation message and the engine's openGaps dedup, so editing the wording edits both.
-const COMPUTE_LIMIT_PREFIX = 'Quantitative derivation unavailable';
-
-// JUDGE — the TERMINAL skeptic of the finalize phase. Judges the hardened answer (goal met, verification real, derivation valid) and
-// names the precise fix when not. When compute is off, needsCompute/computeSound are forced (no derivation path). Bounded by MAX_JUDGE_PASSES.
-async function runJudge(
-  bs              ,
-  cleanReports               ,
-  focus        ,
-  pass        ,
-)                           {
-  log('· finalize · judge · ' + judge.tier + ' · judging the hardened answer (pass ' + pass + ')');
-  // B1-refinement: the judge sees the leftover/unpursued open rabbit-holes (top by score) so it can rule whether a real gap remains and reopen the crawl.
-  const openRabbitHoles = [...bs.rabbitHoles]
-    .sort((a, b) => (lastScore(b) ?? -1) - (lastScore(a) ?? -1))
-    .slice(0, CONFIG.FINALIZE_TOP_OPEN)
-    .map((r) => '[' + (lastScore(r) ?? 'new') + '] ' + r.keyword + ' — ' + r.why);
-  // v3 FINALIZE — the ledger digest, the challenged-vs-never-challenged split, the computed confidence, and
-  // the crawl's own final stop (STOP RECONCILE): all pre-rendered here so judge/prompts.ts stays pure clause
-  // assembly. keyClaimIds is the answer's OWN load-bearing set — "never challenged" is scoped to those, not
-  // every tentative claim in the ledger.
-  const ledger = ledgerLines(bs, CONFIG.BRAINER_LEDGER_CAP);
-  const keyClaimIds = (bs.resultSoFar && bs.resultSoFar.keyClaimIds) || [];
-  const survivedAttacks = bs.nullAttacks.map(
-    (na) =>
-      na.topic +
-      (na.claimIds.length ? ' → c' + na.claimIds.join(', c') : '') +
-      ' (queries: ' +
-      na.queries.join('; ') +
-      ')',
-  );
-  const challengedIds = new Set(bs.nullAttacks.flatMap((na) => na.claimIds));
-  const neverChallenged = keyClaimIds
-    .map((id) => bs.claims.find((c) => c.id === id))
-    .filter(
-      (c)             => !!c && !c.retracted && !challengedIds.has(c.id) && !c.attacksSurvived,
-    )
-    .map((c) => 'c' + c.id + ' ' + clip(c.claim, CONFIG.CLAIM_DIGEST_CLIP));
-  const out = await retryAgent          (
-    judge.buildPrompt({
-      query: CONFIG.query,
-      resultSoFar: bs.resultSoFar,
-      cleanReports,
-      focus,
-      openRabbitHoles,
-      compute: CONFIG.compute,
-      mode: CONFIG.mode,
-      computeNote: CONFIG.COMPUTE_NOTE,
-      thinkerNote: CONFIG.THINKER_NOTE,
-      ledger,
-      survivedAttacks,
-      neverChallenged,
-      computedConfidence: computedConfidence(keyClaimIds, bs.claims),
-      stop: bs.coord ? bs.coord.stop : undefined,
-    }),
-    {
-      label: 'judge-' + pass,
-      phase: CONFIG.PHASE.finalize,
-      model: judge.tier,
-      effort: judge.effort,
-      schema: judge.schema,
-    },
-  );
-  if (out && !CONFIG.compute) {
-    // compute off → no derivation can run; computeSound is true because none is PRESENT to be unsound (this never
-    // blocks the exit). But do NOT rubber-stamp needsCompute to false: if the judge says the answer genuinely needs
-    // a derivation it cannot have, RETURN that honest signal as a STATED LIMITATION for the engine to fold into
-    // openGaps (the report's Open questions) — the engine owns every resultSoFar mutation, not this run fn.
-    out.computeSound = true;
-    if (out.needsCompute && bs.resultSoFar)
-      out.computeLimitation =
-        COMPUTE_LIMIT_PREFIX +
-        ' (compute is off): ' +
-        (out.directive ||
-          out.reasoning ||
-          'the answer rests on a derivation this run could not perform');
+  if (coord.drop && coord.drop.length) {
+    const gone = new Set(coord.drop);
+    state.rabbitHoles = state.rabbitHoles.filter((x) => !gone.has(x.id));
   }
-  if (out)
-    log(
-      '· finalize · judge pass ' +
-        pass +
-        ' · goalMet=' +
-        out.goalMet +
-        ' verif=' +
-        out.verificationSound +
-        ' needsCompute=' +
-        out.needsCompute +
-        ' computeSound=' +
-        out.computeSound,
+  for (const r of coord.rescore || []) {
+    const rh = state.rabbitHoles.find((x) => x.id === r.id);
+    if (rh) {
+      rh.score = r.score;
+      rh.scoreHistory.push({ wave, score: r.score });
+    }
+  }
+  for (const a of coord.add || [])
+    addRabbitHole(state, {
+      keyword: a.keyword,
+      why: a.why,
+      path: [],
+      score: a.score,
+      wave,
+      kind: a.kind,
+    });
+}
+
+// resolve the brainer's `lookupNext` into open-store entries to pursue NOW: id → existing lead; keyword → originate (or find). Drop any
+// already pursued, attach the lane's assigned venues, dedup, then take the highest-scoring up to laneCount (the hard ceiling).
+function resolveLookupNext(
+  state            ,
+  coord                               ,
+  wave        ,
+  laneCount        ,
+)               {
+  const picks               = [];
+  for (const item of coord.lookupNext || []) {
+    let rh                                = null;
+    if (typeof item.id === 'number') rh = state.rabbitHoles.find((x) => x.id === item.id);
+    else if (item.keyword || item.ref)
+      rh = addRabbitHole(state, {
+        keyword: item.keyword || '',
+        why: item.why,
+        path: [],
+        score: item.score,
+        wave,
+        ref: item.ref,
+        kind: item.kind, // origin channel rides along when the brainer originates a lane
+      });
+    if (!rh || state.pursuedKeys.has(norm(rh.keyword))) continue;
+    if (item.sources) rh.sources = item.sources;
+    if (item.note) rh.note = item.note; // the brainer's per-lane directive → rides to the scheduler + reader as noteFromBrainer
+    if (item.ref && !rh.ref) rh.ref = item.ref;
+    if (!picks.some((p) => p.id === rh.id)) picks.push(rh);
+  }
+  // v3 CALIBRATION — the sort key is the score weighted by its kind's predicted-vs-realized yield (selection
+  // only; the stored score itself is never touched). kind = the stored lead's own kind (an id-resolved pick
+  // already carries it; an originated one got it from addRabbitHole's `kind: item.kind` above); an unseen
+  // kind (or none) is neutral (calibFactor defaults to 1) — degrades to the old plain-score sort untouched.
+  const weighted = (p            )         =>
+    (p.score ?? 0) *
+    calibFactor(
+      state.yieldCalib ?? {},
+      p.kind ?? 'origin',
+      CONFIG.CALIB_CLAMP_LO,
+      CONFIG.CALIB_CLAMP_HI,
     );
-  return out;
+  return picks.sort((a, b) => weighted(b) - weighted(a)).slice(0, laneCount);
 }
-// ╔══ module: src/agents/synthesiser/run.ts ═══════════════════════════════
 
-
-
-
-                                                          
-                                                                   
-
-// SYNTHESISER — writes the END report (always) from the judged answer (resultSoFar, any derivation folded into `working`) + the hardened facts.
-// gated on CONFIG.compute (not just a non-empty `working`) so compute-off runs never present a derivation. Returns the ReportOut; the engine
-// prepends the run-args banner and writes result.md.
-async function runSynthesiser(
-  bs              ,
-  cleanReports               ,
-  synthFocus        ,
-  topOpen          ,
-)                            {
-  const hasDerivation = !!(
-    CONFIG.compute &&
-    bs.resultSoFar &&
-    bs.resultSoFar.working &&
-    bs.resultSoFar.working.trim()
-  );
-  log(
-    '· finalize · synthesiser · ' +
-      synthesiser.tier +
-      ' · writing the report' +
-      (hasDerivation ? ' (with derivation)' : ''),
-  );
-  // v3 FINALIZE — cite the ledger + the challenged-and-survived summary + the computed confidence floor
-  // (pre-rendered here so synthesiser/prompts.ts stays pure clause assembly, mirroring judge/run.ts).
-  const ledger = ledgerLines(bs, CONFIG.BRAINER_LEDGER_CAP);
-  const nullAttacksSummary = bs.nullAttacks.map(
-    (na) => na.topic + (na.claimIds.length ? ' → c' + na.claimIds.join(', c') : ''),
-  );
-  const keyClaimIds = (bs.resultSoFar && bs.resultSoFar.keyClaimIds) || [];
-  return retryAgent           (
-    synthesiser.buildPrompt({
-      mode: CONFIG.mode,
-      query: CONFIG.query,
-      landscape: bs.scout .landscape,
-      resultSoFar: bs.resultSoFar,
-      waveLog: bs.waveLog,
-      cleanReports,
-      focus: synthFocus,
-      openRabbitHoles: topOpen,
-      compute: CONFIG.compute,
-      thinkerNote: CONFIG.THINKER_NOTE,
-      ledger,
-      nullAttacksSummary,
-      computedConfidence: computedConfidence(keyClaimIds, bs.claims),
-    }),
-    {
-      label: 'synthesiser',
-      phase: CONFIG.PHASE.finalize,
-      model: synthesiser.tier,
-      effort: synthesiser.effort,
-      schema: synthesiser.schema,
-    },
-  );
+// REOPEN — the inverse of pursue (validator-driven): move a pursued lead back into the open store so the next
+// brainer can re-pursue it. Clears its pursued keys/ref + drops it from the archive, and bumps failCount (the cap).
+function reopenRabbitHole(state            , rh            )             {
+  const ai = state.pursuedArchive.indexOf(rh);
+  if (ai >= 0) state.pursuedArchive.splice(ai, 1);
+  state.pursuedKeys.delete(norm(rh.keyword));
+  if (rh.ref) state.pursuedRefs.delete(normRef(rh.ref));
+  const li = state.pursuedList.indexOf(rh.keyword);
+  if (li >= 0) state.pursuedList.splice(li, 1);
+  rh.failCount = (rh.failCount || 0) + 1;
+  // clear the stale directive: the `note` that already produced a dead lane must NOT be re-sent verbatim — the
+  // next brainer re-authors a fresh directive (or the scheduler/reader fall back to the rabbit-hole + goal).
+  delete rh.note;
+  if (!state.rabbitHoles.some((x) => x.id === rh.id)) state.rabbitHoles.push(rh);
+  return rh;
 }
-// ╔══ module: src/agents/debugAnalyst/run.ts ══════════════════════════════
 
-
-
-
-                                                      
-                                                          
-                                                             
-
-// DEBUG & ANALYSIS (last phase, opt-in via arg.debug): an Opus agent consolidates the run's diagnostics — corner-by-corner,
-// prospector→researcher venue utilization, and any arg.debugPrompt question — then JS appends the verbatim metrics, run log,
-// and raw agent I/O (exact prompt in / exact output out) into one shippable _debug.md. Returns the _debug.md markdown (the engine writes it).
-async function runDebug(
-  rr                ,
-  bs              ,
-  metrics         ,
-)                  {
-  phase(CONFIG.PHASE.debug);
-  log(
-    '· debug & analysis · ' +
-      debugAnalyst.tier +
-      ' · over ' +
-      IO_LOG.length +
-      ' agent calls + ' +
-      LOG_BUFFER.length +
-      ' log lines + ' +
-      rr.laneRecords.length +
-      ' lane records',
-  );
-  const diag = await retryAgent         (
-    debugAnalyst.buildPrompt({
-      query: CONFIG.query,
-      focus: CONFIG.debugPrompt,
-      metrics,
-      waveLog: bs.waveLog,
-      resultLog: bs.resultLog,
-      highValueSources: rr.highValueSources,
-      laneRecords: rr.laneRecords,
-    }),
-    {
-      label: 'debug-analyst',
-      phase: CONFIG.PHASE.debug,
-      model: debugAnalyst.tier,
-      effort: debugAnalyst.effort,
-      schema: debugAnalyst.schema,
-    },
-  );
-  const narrative = (diag && diag.diagnosis) || '_(debug analyst failed — see raw sections below)_';
-  const rawIO = IO_LOG.map(
-    (e, i) =>
-      '### ' +
-      (i + 1) +
-      '. `' +
-      e.label +
-      '` · ' +
-      e.model +
-      ' · ' +
-      e.phase +
-      '\n\n**PROMPT**\n\n' +
-      (e.prompt || '') +
-      '\n\n**OUTPUT**' +
-      (e.error ? ' _(' + e.error + ')_' : '') +
-      '\n\n' +
-      (e.output == null ? '_(null)_' : JSON.stringify(e.output, null, 2)),
-  ).join('\n\n');
-  const artifact =
-    '# RR debug & analysis — ' +
-    clip(CONFIG.query, 80) +
-    (CONFIG.debugPrompt ? '\n\n**Debug prompt:** ' + CONFIG.debugPrompt : '') +
-    '\n\n## Analysis (debug-analyst · ' +
-    debugAnalyst.tier +
-    ')\n\n' +
-    narrative +
-    '\n\n## Metrics\n\n```json\n' +
-    JSON.stringify(metrics, null, 2) +
-    '\n```' +
-    '\n\n## Run log (' +
-    LOG_BUFFER.length +
-    ' lines)\n\n```\n' +
-    LOG_BUFFER.join('\n') +
-    '\n```' +
-    '\n\n## Raw agent I/O — exact prompt in, exact output out (' +
-    IO_LOG.length +
-    ' calls)\n\n' +
-    (rawIO || '_(none captured)_') +
-    '\n';
-  log('· debug DONE · _debug.md assembled');
-  return artifact;
-}
-// ╔══ module: src/agents/claimAuditor/run.ts ══════════════════════════════
-// CLAIM AUDITOR dispatch — batches new claims with a cachePath into ≤AUDIT_BATCH-item chunks, one
-// retryAgent call per chunk, all chunks dispatched CONCURRENTLY via parallel(). A dead (null) chunk
-// contributes nothing — its claims simply stay 'pending' (the caller treats pending as unpinned
-// downstream). Hallucinated ids (not in the chunk's own input set) are dropped. Zero auditable claims →
-// no agent spawned at all.
-
-
-
-
-                                                          
-                                                                 
-
-async function runClaimAuditor(
-  bs              ,
-  claims         ,
-  tag        ,
-  phaseName        ,
-)                                                                    {
-  const out = new Map                                                     ();
-  const auditable = claims.filter((c) => !!c.cachePath); // only claims that can actually be greped
-  if (!auditable.length) return out;
-  const chunks = chunk(auditable, CONFIG.AUDIT_BATCH);
-  // parallel() journals thunk results as JSON (a Set would come back as {}), so the thunk returns
-  // the bare agent result and the id set is rebuilt per chunk on the consumer side (order-aligned).
-  const results = await parallel(
-    chunks.map((ch, i) => () =>
-      retryAgent               (
-        claimAuditor.buildPrompt({
-          items: ch.map((c) => ({
-            id: c.id,
-            claim: c.claim,
-            quote: c.quote,
-            cachePath: c.cachePath ,
-          })),
-        }),
-        {
-          label: 'claim-audit-' + tag + (chunks.length > 1 ? '-b' + i : ''),
-          phase: phaseName,
-          model: claimAuditor.tier,
-          effort: claimAuditor.effort,
-          agentType: CONFIG.GENERAL_PURPOSE,
-          schema: claimAuditor.schema,
-        },
-      ),
-    ),
-  );
-  results.forEach((res, i) => {
-    if (!res) return; // dead chunk — its claims stay 'pending'
-    const ids = new Set(chunks[i].map((c) => c.id));
-    for (const c of res.checks || [])
-      if (c && ids.has(c.id) && (c.verdict === 'pass' || c.verdict === 'fail'))
-        out.set(c.id, { verdict: c.verdict, note: c.note });
-  });
-  return out;
-}
-// ╔══ module: src/agents/lineageClerk/run.ts ══════════════════════════════
-// LINEAGE CLERK dispatch — batches new claims into ≤LINEAGE_BATCH-item chunks, one retryAgent call per
-// chunk, all chunks dispatched CONCURRENTLY via parallel(). A dead (null) chunk contributes nothing — its
-// claims fall back to the deterministic lineageKeyOf clustering (the caller's job, not this module's).
-// Hallucinated ids (not in the chunk's own input set) are dropped. Empty input → no agent spawned at all.
-
-
-
-
-                                                          
-                                                                   
-
-async function runLineageClerk(
-  bs              ,
-  claims         ,
-  knownKeys          ,
-  tag        ,
-  phaseName        ,
-)                                 {
-  const out = new Map                  ();
-  if (!claims.length) return out;
-  const chunks = chunk(claims, CONFIG.LINEAGE_BATCH);
-  // parallel() journals thunk results as JSON (a Set would come back as {}), so the thunk returns
-  // the bare agent result and the id set is rebuilt per chunk on the consumer side (order-aligned).
-  const results = await parallel(
-    chunks.map((ch, i) => () =>
-      retryAgent                 (
-        lineageClerk.buildPrompt({
-          items: ch.map((c) => ({ id: c.id, source: c.source, entities: c.entities })),
-          knownKeys,
-        }),
-        {
-          label: 'lineage-' + tag + (chunks.length > 1 ? '-b' + i : ''),
-          phase: phaseName,
-          model: lineageClerk.tier,
-          effort: lineageClerk.effort,
-          schema: lineageClerk.schema,
-        },
-      ),
-    ),
-  );
-  results.forEach((res, i) => {
-    if (!res) return; // dead chunk — its claims fall back to lineageKeyOf
-    const ids = new Set(chunks[i].map((c) => c.id));
-    for (const l of res.links || [])
-      if (l && ids.has(l.id) && Array.isArray(l.keys)) out.set(l.id, l.keys);
-  });
-  return out;
-}
-// ╔══ module: src/agents/rerunner/run.ts ══════════════════════════════════
-// RERUNNER dispatch — reads bs.derivation (null ⇒ nothing stored yet, no agent) and re-executes its code
-// with the CURRENT inputs (bs.derivation.inputs, passed verbatim — the engine keeps them current across
-// waves). Degrades to null on a dead agent or ok:false; the caller keeps the last lastRun and marks it stale.
-
-
-
-                                                          
-                                                        
-
-async function runRerunner(
-  bs              ,
-  phaseName        ,
-)                                                                                             {
-  if (!bs.derivation) return null;
-  const inputsJson = JSON.stringify(bs.derivation.inputs);
-  const out = await retryAgent             (
-    rerunner.buildPrompt({ code: bs.derivation.code, inputsJson }),
-    {
-      label: 'rerun-w' + bs.wave,
-      phase: phaseName,
-      model: rerunner.tier,
-      effort: rerunner.effort,
-      agentType: CONFIG.GENERAL_PURPOSE,
-      schema: rerunner.schema,
-    },
-  );
-  if (!out || !out.ok) return null;
-  return { quantiles: out.quantiles || {}, sensitivity: out.sensitivity || {} };
+// PURSUE — MOVE picks out of the open store into the pursued-archive (no delete-on-pursue): the archive keeps each lead's id + scoreHistory + path.
+function pursue(state            , picks              )       {
+  for (const p of picks) {
+    state.pursuedKeys.add(norm(p.keyword));
+    if (p.ref) state.pursuedRefs.add(normRef(p.ref));
+    state.pursuedList.push(p.keyword);
+    state.pursuedArchive.push(p);
+  }
+  const gone = new Set(picks.map((p) => p.id));
+  state.rabbitHoles = state.rabbitHoles.filter((r) => !gone.has(r.id));
 }
 // ╔══ module: src/engine.ts ═══════════════════════════════════════════════
 

@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execSync } from 'node:child_process'
+import { parse } from 'acorn'
 
 const SRC = dirname(fileURLToPath(import.meta.url))
 const BUNDLE = join(SRC, '..', 'workflow.js')
@@ -32,14 +33,43 @@ if (/module\.exports|exports\./.test(src)) fail('contains CommonJS exports')
 const exportHits = src.match(/^\s*export\b/gm) || []
 if (exportHits.length !== 1) fail('expected exactly ONE export (`export const meta`), found ' + exportHits.length)
 
-// 3) `export const meta = { … }` must be the first statement (top of file) and a pure literal.
-const firstStmt = src.replace(/^(?:\s*\/\/[^\n]*\n|\s*\n)*/, '')   // skip leading comments + blank lines
-if (!/^export const meta = \{/.test(firstStmt)) fail('file must BEGIN with `export const meta = {` (after comments)')
-// meta literal ends at the first COLUMN-0 `}` (nested braces are indented; a formatter's trailing `;` is tolerated).
-const metaEnd = firstStmt.indexOf('\n}')
-const metaBlock = metaEnd >= 0 ? firstStmt.slice(0, metaEnd + 2) : firstStmt.slice(0, 4000)
-if (/\.\.\./.test(metaBlock)) fail('meta object uses a spread — it must be a pure literal')
-if (/=>|\bfunction\b|\brequire\s*\(|\bimport\s*\(/.test(metaBlock)) fail('meta object is computed (call/function) — it must be a pure literal')
+// 3) `export const meta = { … }` must be the first statement (top of file) and a pure DATA literal —
+//    an AST check (acorn already parses the same syntax build.js's bundler does), not a string heuristic:
+//    body[0] must be exactly `export const meta = <ObjectExpression>` (acorn never counts comments as
+//    statements, so this is "after comments" for free), then the object is walked recursively and
+//    rejects any SpreadElement, function/arrow, call/new expression, or interpolated template literal —
+//    pure data only, no computation.
+// allowReturnOutsideFunction: the bundle deliberately ends in a top-level `return` (the harness wraps it
+// in an async function at runtime, per check 1b above) — not valid standalone module syntax, by design.
+const ast = parse(src, { ecmaVersion: 'latest', sourceType: 'module', allowReturnOutsideFunction: true })
+const first = ast.body[0]
+const decl =
+  first && first.type === 'ExportNamedDeclaration' && first.declaration &&
+  first.declaration.type === 'VariableDeclaration' && first.declaration.kind === 'const'
+    ? first.declaration.declarations[0]
+    : null
+if (!decl || decl.id.name !== 'meta' || !decl.init || decl.init.type !== 'ObjectExpression')
+  fail('file must BEGIN with `export const meta = { … }` (a pure object literal)')
+
+const FORBIDDEN_NODE_TYPES = new Set([
+  'SpreadElement', 'FunctionExpression', 'ArrowFunctionExpression', 'FunctionDeclaration',
+  'CallExpression', 'NewExpression', 'TaggedTemplateExpression',
+])
+function walkPureData(node) {
+  if (node === null || typeof node !== 'object') return
+  if (Array.isArray(node)) { for (const n of node) walkPureData(n); return }
+  if (typeof node.type === 'string') {
+    if (FORBIDDEN_NODE_TYPES.has(node.type))
+      fail('meta object contains a forbidden construct (' + node.type + ') — it must be pure data')
+    if (node.type === 'TemplateLiteral' && node.expressions && node.expressions.length > 0)
+      fail('meta object contains an interpolated template literal — it must be pure data')
+  }
+  for (const key of Object.keys(node)) {
+    if (key === 'start' || key === 'end' || key === 'loc' || key === 'range' || key === 'type') continue
+    walkPureData(node[key])
+  }
+}
+walkPureData(decl.init)
 
 // 4) determinism guard — none of these non-deterministic / host globals (usage-level, so prose
 //    words like "url"/"WebFetch"/"process" do not trip it). Mirrors the harness static guard.

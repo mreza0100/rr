@@ -6,6 +6,8 @@
   "description": "Research and Report (RR) Workflow engine — modular source that bundles to ../workflow.js",
   "scripts": {
     "build": "node --disable-warning=ExperimentalWarning build.js",
+    "verify": "node --disable-warning=ExperimentalWarning verify.js",
+    "pretest": "npm run verify",
     "test": "vitest run",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",

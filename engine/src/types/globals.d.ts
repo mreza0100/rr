@@ -19,6 +19,8 @@ declare global {
   var phase: (name: string) => void;
   // append a line to the run log.
   var log: (m?: unknown) => void;
+  // the harness DOES inject this; the engine just has no use for it (kept for parity with validate-bundle.js's HARNESS_GLOBALS).
+  var workflow: unknown;
   // the injected, untrusted run args (validated by Configs).
   var args: unknown;
   // the harness budget handle (unused by the engine logic).
