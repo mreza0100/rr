@@ -65,10 +65,12 @@ export const RESEARCH: Schema = {
     },
     deadEnds: { type: 'array', items: { type: 'string' } },
   },
-  // claims/newTerms are NOT required — a reader may legitimately surface neither on a thin/off-topic
-  // slice; the engine's `|| []` guards (ingestWave, mergeVocabulary) already treat their absence as
-  // empty. This matches ReaderOut's TS optionality (types/agents.ts) — the schema no longer over-requires.
-  required: ['runningAnswer'],
+  // The channel fields are REQUIRED so a reader consciously reports zero — an empty array is fine and
+  // normal on a thin slice, but a MISSING field is indistinguishable from a silently dropped one. Run
+  // forensics caught a degraded lane that returned ONLY runningAnswer, omitting claims/deadEnds entirely,
+  // so the engine's lane-reopen machinery never fired. newTerms/surprise stay optional (TS ReaderOut keeps
+  // its optionals — the engine's `|| []` guards still apply).
+  required: ['runningAnswer', 'claims', 'rabbitHoles', 'deadEnds'],
 };
 
 export const researcher: Agent<ResearcherArgs> = {

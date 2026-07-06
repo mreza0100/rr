@@ -164,27 +164,6 @@ export function scrubArtifacts(s: string): string {
   return isArtifactTagPrefix(frag) ? out.slice(0, lastLt) : out;
 }
 
-// makeUF — a path-compressed union-find over string keys (lineage clustering). find() returns the
-// canonical root of a key (a fresh key is its own root); union() merges two keys' groups.
-export function makeUF(): { find: (key: string) => string; union: (a: string, b: string) => void } {
-  const parent: Record<string, string> = {};
-  const find = (key: string): string => {
-    if (!(key in parent)) parent[key] = key;
-    let root = key;
-    while (parent[root] !== root) root = parent[root];
-    for (let cur = key; parent[cur] !== root;) {
-      const next = parent[cur];
-      parent[cur] = root; // path compression: repoint every walked node straight at the root
-      cur = next;
-    }
-    return root;
-  };
-  const union = (a: string, b: string): void => {
-    parent[find(a)] = find(b);
-  };
-  return { find, union };
-}
-
 // domainOf — the lineage signal inside a source ref: the host without www, or a DOI's registrant
 // prefix ('10.x' = the publisher, per the normRef conventions). '' when nothing resolvable.
 export const domainOf = (url: string | null | undefined): string => normRef(url).split('/')[0];
@@ -264,23 +243,36 @@ const CONF_RANK: Record<Confidence, number> = { low: 0, medium: 1, high: 2 };
 export const minConfidence = (a: Confidence, b: Confidence): Confidence =>
   CONF_RANK[a] <= CONF_RANK[b] ? a : b;
 
-// lintCitations — v3 SYNTHESISER citation lint (pure): scan `report` for every [cN] marker the model wrote;
-// one whose id is not a LIVE (non-retracted) ledger claim is stripped from the text in place (never left
+// lintCitations — v3 SYNTHESISER citation lint (pure): scan `report` for every [cN] marker the model wrote.
+// One whose id is not a LIVE (non-retracted) ledger claim is stripped from the text in place (never left
 // dangling, never fabricated back into a real id) and its id collected in `bogus` for the engine to log +
-// count. No markers / empty report ⇒ passthrough, bogus: [].
+// count. One that IS a live claim but whose mechanical quote-pin audit came back 'fail' is ALSO stripped —
+// a citation must never wear the authority of a pin the auditor actively disproved — and its id collected
+// in `auditFailed` instead (a distinct count from `bogus`: this is a real claim, just a discredited one).
+// No markers / empty report ⇒ passthrough, bogus: [], auditFailed: [].
 export function lintCitations(
   report: string,
   claims: Claim[],
-): { report: string; bogus: number[] } {
+): { report: string; bogus: number[]; auditFailed: number[] } {
   const live = new Set(claims.filter((c) => !c.retracted).map((c) => c.id));
+  const auditFail = new Set(
+    claims.filter((c) => !c.retracted && c.audit === 'fail').map((c) => c.id),
+  );
   const bogus: number[] = [];
+  const auditFailed: number[] = [];
   const cleaned = (report || '').replace(/\[c(\d+)\]/g, (marker, idStr: string) => {
     const id = Number(idStr);
-    if (live.has(id)) return marker;
-    bogus.push(id);
-    return '';
+    if (!live.has(id)) {
+      bogus.push(id);
+      return '';
+    }
+    if (auditFail.has(id)) {
+      auditFailed.push(id);
+      return '';
+    }
+    return marker;
   });
-  return { report: cleaned, bogus };
+  return { report: cleaned, bogus, auditFailed };
 }
 
 // chao1 — the coverage estimator (collect mode): from claim groups and how many distinct sources saw
@@ -466,15 +458,28 @@ export function compactCheckpoint(bs: {
 
 // venuesWithYieldWarn — per-wave copy of the prospector venues for the brainer prompt, with a
 // ' — ⚠ 0 yield in N lanes' suffix baked into `goodFor` for any venue assigned to ≥2 lanes that yielded
-// NOTHING (no ingested claim, no fresh lead) across the run so far. Pure: never mutates `venues` or the
-// stats map; a venue with no entry (or a healthy one) passes through unchanged.
+// NOTHING (no ingested claim, no fresh lead) across the run so far (assigned-vs-served reconciliation:
+// venueStats.served — set by the engine's scheduleSources — is not read here; this suffix is about
+// yield, not about whether the scheduler actually served the assignment). Pure: never mutates `venues`
+// or the stats map; a venue with a healthy yield passes through unchanged. NEW — unrouted-venue
+// surfacing: a venue with NO stats entry at all (the prospector named it but no lane was ever assigned
+// it) earns its own '⚠ never assigned to any lane yet' suffix once the run is far enough along
+// (`wave` given AND ≥ CONFIG.VENUE_UNROUTED_MIN_WAVE) that "not yet assigned" has become a real signal
+// rather than early-run noise; `wave` omitted (single-brainer wave-0 seed call, or a caller that does
+// not track wave) ⇒ the old passthrough-on-no-entry behavior.
 export function venuesWithYieldWarn(
   venues: Venue[],
   venueStats: Record<string, { assigned: number; yielded: number }>,
+  wave?: number,
 ): Venue[] {
   return venues.map((v) => {
     const s = venueStats[v.source];
-    if (!s || s.assigned < CONFIG.VENUE_WARN_MIN || s.yielded !== 0) return v;
+    if (!s) {
+      if (wave !== undefined && wave >= CONFIG.VENUE_UNROUTED_MIN_WAVE)
+        return { ...v, goodFor: v.goodFor + ' — ⚠ never assigned to any lane yet' };
+      return v;
+    }
+    if (s.assigned < CONFIG.VENUE_WARN_MIN || s.yielded !== 0) return v;
     return { ...v, goodFor: v.goodFor + ' — ⚠ 0 yield in ' + s.assigned + ' lanes' };
   });
 }

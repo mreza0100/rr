@@ -1191,7 +1191,13 @@ describe('ResearchReport.scheduleSources — id discipline (B6)', () => {
     const rr = new RR();
     const picks = [{ id: 1, keyword: 'k', why: 'w', score: 50, scoreHistory: [], path: [] }] as any;
     const map = await rr.scheduleSources(
-      { highValueSources: [] } as any,
+      {
+        highValueSources: [],
+        venueStats: {},
+        knownCachePaths: new Set(),
+        corruptCachePaths: new Set(),
+        lastUnsourced: '',
+      } as any,
       picks,
       'test',
       'Research',
@@ -1415,7 +1421,7 @@ const SCOUT_OUT_LEDGER = {
       claim: 'SCOUT_CLAIM: Acme drug reduces cardiovascular risk',
       quote: 'Acme drug reduces cardiovascular risk by 30 percent in the trial cohort text',
       source: 'https://scout.example.com/ACME-MARKER-trial',
-      cachePath: '/cache/scout-trial.txt',
+      cachePath: '/cache/.fetch/scout-trial.txt', // matches the harvester cache signature → trusted at ingest
       entities: { funder: 'Acme Corp' },
     },
   ],
@@ -1494,14 +1500,14 @@ function ledgerAgent() {
             claim: 'BETA_CLAIM: Beta compound improves outcome',
             quote: 'Beta compound improves outcome significantly across the studied cohort text',
             source: 'https://beta.example.com/ACME-MARKER-beta',
-            cachePath: '/cache/beta.txt',
+            cachePath: '/cache/.fetch/beta.txt', // matches the harvester cache signature → trusted at ingest
           },
           // an exact duplicate (same quote+source) — must be deduped, never a second ledger row
           {
             claim: 'BETA_CLAIM: Beta compound improves outcome',
             quote: 'Beta compound improves outcome significantly across the studied cohort text',
             source: 'https://beta.example.com/ACME-MARKER-beta',
-            cachePath: '/cache/beta.txt',
+            cachePath: '/cache/.fetch/beta.txt',
           },
         ],
         newTerms: [{ term: 'Biomarker', gloss: 'a measurable indicator' }],
@@ -1541,7 +1547,7 @@ function ledgerAgent() {
             claim: 'EPSILON_CLAIM: Attack claim undermines the trial',
             quote: 'Attack claim undermines the trial results reported by the original study text',
             source: 'https://epsilon.example.com/OTHERFUNDER-marker',
-            cachePath: '/cache/epsilon.txt',
+            cachePath: '/cache/.fetch/epsilon.txt', // matches the harvester cache signature → trusted at ingest
             stance: { target: 1, kind: 'attacks' }, // targets the scout's claim (id 1) — a REAL prior id
           },
         ],
@@ -1673,6 +1679,185 @@ describe('ResearchReport.run — v3 claim-ledger ingestion', () => {
     globalThis.log = (m?: unknown) => logs.push(typeof m === 'string' ? m : String(m));
     await new RR().run();
     expect(logs.some((l) => l.startsWith(CONFIG.CHECKPOINT_MARK))).toBe(false);
+  });
+});
+
+// ── (r2) v3 STANCE COERCION + CACHEPATH TRUST + AUDITOR REPIN — the ingest-time honesty gates.
+//     Direct calls to ingestClaimSeeds (mirrors the scheduleSources B6 direct-call style above) — these are
+//     small mechanical per-claim checks that do not need the whole pipeline driven end to end.
+describe('ResearchReport.ingestClaimSeeds — stance coercion, cachePath trust, and auditor repin', () => {
+  const globals = {
+    scout: null,
+    scoutRabbitHoles: [],
+    highValueSources: [],
+    languageGuidance: '',
+  };
+  const mkBs = () =>
+    new BrainerState(globals as any, {
+      name: 'root',
+      parentName: null,
+      mandate: '',
+      trail: '',
+      depth: 0,
+    });
+
+  it('coerces a prose stance target with a recoverable digit-run; drops one with no digits at all', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => null); // claim-audit/lineage both die — irrelevant here
+    const rr = new RR();
+    const bs = mkBs();
+    bs.claims.push({
+      id: 36,
+      claim: 'existing claim c36',
+      quote: 'q',
+      source: 's',
+      cluster: 0,
+      audit: 'pass',
+      status: 'tentative',
+      attacksSurvived: 0,
+      retracted: false,
+      wave: 0,
+      lane: 'seed',
+    } as Claim);
+    const fresh = await rr.ingestClaimSeeds(
+      bs,
+      [
+        {
+          lane: 'l',
+          claims: [
+            {
+              claim: 'recoverable prose target',
+              quote: 'quote text long enough to carry the fact',
+              source: 's2',
+              stance: { target: 'c36 (Dutch GGZ admin reduction)', kind: 'attacks' },
+            },
+            {
+              claim: 'unrecoverable prose target',
+              quote: 'another quote text long enough to carry it',
+              source: 's3',
+              stance: { target: 'no numeric id named at all', kind: 'attacks' },
+            },
+          ] as any,
+        },
+      ],
+      1,
+      'w1',
+      'Research',
+    );
+    expect(fresh[0].stance).toEqual({ target: 36, kind: 'attacks' });
+    expect(fresh[1].stance).toBeUndefined();
+  });
+
+  it('strips an untrusted cachePath to unpinned + counts cachePathsRejected; a harvester-signature path stays pending', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => null); // dead auditor — verdicts never override the initial audit value
+    const rr = new RR();
+    const bs = mkBs();
+    const fresh = await rr.ingestClaimSeeds(
+      bs,
+      [
+        {
+          lane: 'l',
+          claims: [
+            {
+              claim: 'untrusted path claim',
+              quote: 'quote text long enough to carry the fact here',
+              source: 's1',
+              cachePath: '/tmp/foo.txt', // not scheduler-known, no /.fetch/ signature → untrusted
+            },
+            {
+              claim: 'trusted path claim',
+              quote: 'another quote long enough to carry the fact here',
+              source: 's2',
+              cachePath: '/x/harvester/.fetch/html/a.md', // matches the harvester cache signature → trusted
+            },
+          ],
+        },
+      ],
+      1,
+      'w1',
+      'Research',
+    );
+    const untrusted = fresh.find((c) => c.claim === 'untrusted path claim')!;
+    const trusted = fresh.find((c) => c.claim === 'trusted path claim')!;
+    expect(untrusted.cachePath).toBeUndefined();
+    expect(untrusted.audit).toBe('unpinned');
+    expect(bs.cachePathsRejected).toBe(1);
+    expect(trusted.cachePath).toBe('/x/harvester/.fetch/html/a.md');
+    expect(trusted.audit).toBe('pending'); // auditor never ran a verdict on it — stays pending, never guessed
+  });
+
+  it('a claim whose cachePath the scheduler itself returned this run (bs.knownCachePaths) is also trusted', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => null);
+    const rr = new RR();
+    const bs = mkBs();
+    bs.knownCachePaths.add('/cache/scheduled-1.txt');
+    const fresh = await rr.ingestClaimSeeds(
+      bs,
+      [
+        {
+          lane: 'l',
+          claims: [
+            {
+              claim: 'scheduler-known path claim',
+              quote: 'a quote long enough to carry the fact right here',
+              source: 's1',
+              cachePath: '/cache/scheduled-1.txt',
+            },
+          ],
+        },
+      ],
+      1,
+      'w1',
+      'Research',
+    );
+    expect(fresh[0].cachePath).toBe('/cache/scheduled-1.txt');
+    expect(bs.cachePathsRejected).toBe(0);
+  });
+
+  it('auditor repin: a verdict of repinned + newQuote replaces the quote (clipped) and passes, counting quotesRepinned; repinned with no newQuote fails', async () => {
+    const repinAgent = (prompt: string, opts: AgentOpts) => {
+      if (opts.label.startsWith('claim-audit-'))
+        return {
+          checks: [
+            { id: 1, verdict: 'repinned', newQuote: 'the verified contiguous replacement span' },
+            { id: 2, verdict: 'repinned' }, // no newQuote — a malformed repin, never trusted
+          ],
+        };
+      return null; // lineage clerk dies — irrelevant to this check
+    };
+    const RR = await loadEngine({ query: 'q' }, repinAgent);
+    const rr = new RR();
+    const bs = mkBs();
+    const fresh = await rr.ingestClaimSeeds(
+      bs,
+      [
+        {
+          lane: 'l',
+          claims: [
+            {
+              claim: 'repinned with a replacement',
+              quote: 'a broken ... spliced quote',
+              source: 's1',
+              cachePath: '/x/harvester/.fetch/html/a.md',
+            },
+            {
+              claim: 'repinned with no replacement',
+              quote: 'another broken ... spliced quote',
+              source: 's2',
+              cachePath: '/x/harvester/.fetch/html/b.md',
+            },
+          ],
+        },
+      ],
+      1,
+      'w1',
+      'Research',
+    );
+    const withReplacement = fresh.find((c) => c.claim === 'repinned with a replacement')!;
+    const withoutReplacement = fresh.find((c) => c.claim === 'repinned with no replacement')!;
+    expect(withReplacement.quote).toBe('the verified contiguous replacement span');
+    expect(withReplacement.audit).toBe('pass');
+    expect(bs.quotesRepinned).toBe(1);
+    expect(withoutReplacement.audit).toBe('fail');
   });
 });
 

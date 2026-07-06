@@ -178,6 +178,20 @@ describe('venuesWithYieldWarn', () => {
     venuesWithYieldWarn(venues, { arXiv: { assigned: 5, yielded: 0 } });
     expect(JSON.stringify(venues)).toBe(before);
   });
+  it('a venue with NO stats entry at all earns the never-assigned suffix once wave >= VENUE_UNROUTED_MIN_WAVE (2)', () => {
+    const out = venuesWithYieldWarn(venues, { arXiv: { assigned: 3, yielded: 1 } }, 2);
+    expect(out.find((v) => v.source === 'PubMed')!.goodFor).toBe(
+      'clinical — ⚠ never assigned to any lane yet',
+    );
+    // a venue that DOES have a stats entry is unaffected by the never-assigned check
+    expect(out.find((v) => v.source === 'arXiv')!.goodFor).toBe('preprints');
+  });
+  it('wave < VENUE_UNROUTED_MIN_WAVE, or wave omitted entirely, leaves a no-stats-entry venue untouched', () => {
+    const early = venuesWithYieldWarn(venues, {}, 1);
+    expect(early.find((v) => v.source === 'PubMed')!.goodFor).toBe('clinical');
+    const noWave = venuesWithYieldWarn(venues, {});
+    expect(noWave.find((v) => v.source === 'PubMed')!.goodFor).toBe('clinical');
+  });
 });
 
 describe('resultSoFarMd', () => {

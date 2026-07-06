@@ -131,6 +131,7 @@ export function resolveLookupNext(
     if (item.sources) rh.sources = item.sources;
     if (item.note) rh.note = item.note; // the brainer's per-lane directive → rides to the scheduler + reader as noteFromBrainer
     if (item.ref && !rh.ref) rh.ref = item.ref;
+    if (item.refetch) rh.refetch = true; // corrupted-cache remediation rides to the scheduler
     if (!picks.some((p) => p.id === rh.id)) picks.push(rh);
   }
   // v3 CALIBRATION — the sort key is the score weighted by its kind's predicted-vs-realized yield (selection

@@ -38,12 +38,12 @@ Weight findings by evidence quality — funding independence, sample size, repli
 For each headline / load-bearing finding, originate a lane to hunt failed replications, null trials, or refutations. Corroboration is what feeds the ledger's own settled/tentative computation — you never set status yourself; originate lanes that give the machinery independent clusters to count.{{attackClause}}{{computeField}}
 
 Then return deltas against the store:
-(1) \`rescore\`: [{id, score}] — only the rabbit-holes whose 0-100 score changes this wave (score every "new" one at least once); unlisted ones keep their last score. Score honestly per the rubric; a marginal one scores low.
+(1) \`rescore\`: [{id, score}] — only the rabbit-holes whose 0-100 score changes this wave (score every "new" one at least once); unlisted ones keep their last score. Score honestly per the rubric; a marginal one scores low. When you are setting stop.done=true this wave, skip scoring the new ones — a frontier you are closing needs no scores.
 (2) \`add\`: [{keyword, why, score}] — new rabbit-holes to park in the store for a later wave (the engine assigns each an id).
-(3) \`lookupNext\`: the rabbit-holes to research now — each either {id} (a stored one) or {keyword, why, score{{scoreFields}}} (one you originate and pursue now). None may be already pursued.{{assignClause}} For EVERY lookupNext lane author a \`note\`: the research directive — WHAT to find plus ranked fallbacks ("if not X, focus on Y; give both if available"). It steers both the scheduler's source pick and the reader's extraction; keep it distinct from \`why\` (your store/scoring rationale).
+(3) \`lookupNext\`: the rabbit-holes to research now — each either {id} (a stored one) or {keyword, why, score{{scoreFields}}} (one you originate and pursue now). None may be already pursued.{{assignClause}} For EVERY lookupNext lane author a \`note\`: the research directive — WHAT to find plus ranked fallbacks ("if not X, focus on Y; give both if available"). It steers both the scheduler's source pick and the reader's extraction; keep it distinct from \`why\` (your store/scoring rationale). A lane's method must be executable by a READ-ONLY reader over fetched pages (attack lanes alone get a bounded live search) — never assign per-item tracker probes, review-cadence checks, or interactive verification; reshape such a method into fetchable-source questions. Set refetch:true on a lane whose cached copy was reported CORRUPT so the scheduler bypasses the poisoned cache.
 (4) \`rename\`: [{id, keyword, why?}] — relabel a rabbit-hole, keeping its id + history (optional).
 (5) \`drop\`: [id, …] — eliminate a dead/duplicate rabbit-hole; a merge = drop the duplicate and rescore the survivor (optional).{{spawnClause}}
-(6) \`stop\`: {done, reason}. {{stop}}{{goalClause}}{{voiClause}}{{validatorClause}}{{FINISH}}
+(6) \`stop\`: {done, reason}. {{stop}}{{goalClause}}{{voiClause}}{{validatorClause}}{{unsourcedClause}}{{FINISH}}
 `;
 
 export const buildBrainer = ({
@@ -61,6 +61,7 @@ export const buildBrainer = ({
   venues,
   languageGuidance,
   lastValidatorMissing,
+  unsourced,
   compute,
   computeNote,
   thinkerNote,
@@ -91,6 +92,9 @@ export const buildBrainer = ({
   const validatorClause = lastValidatorMissing
     ? `\nVALIDATOR — last wave left these unfilled; re-pursue the reopened lanes or originate new ones to close them: ${lastValidatorMissing}`
     : '';
+  const unsourcedClause = unsourced
+    ? '\nSCHEDULER REPORT — refs/venues the last wave could NOT source, substituted, or flagged: ' + unsourced + '\nA substituted venue is NOT covered — re-route it, set refetch, or record the gap explicitly in resultSoFar.openGaps.'
+    : '';
   const researcherClause = researcherNote ? '\n' + researcherNote : '';
   const trajectory = topScores.length
     ? `
@@ -106,7 +110,8 @@ Goal mode: if the goal is already well answered and the best remaining rabbit-ho
     venues && venues.length
       ? `
 SOURCE VENUES (from the prospector) — give each lookupNext pick the subset whose source fits its lane, in its \`sources\`, so its researcher searches the right places first:
-${plain(venues)}`
+${plain(venues)}
+A venue suffixed '⚠ never assigned' has had NO lane yet — either route a lane to it this wave or name the waiver in stop.reason when you declare done.`
       : '';
   const memoryClause =
     wave === 0
@@ -142,7 +147,7 @@ When the answer must be BUILT (an estimate, a synthesis with arithmetic), AUTHOR
     : '';
   // attackClause — gated on the SAME ledger presence: nothing to challenge before the first claim lands.
   const attackClause = ledger
-    ? ` For every keyClaim still \`tentative\` that has never been challenged (no attack lane, no nullAttack), originate ONE kind:"attack" lane hunting its strongest realistic counter-evidence — a claim that has survived attack outranks one nobody questioned.`
+    ? ` For every keyClaim still \`tentative\` that has never been challenged (no attack lane, no nullAttack), originate ONE kind:"attack" lane hunting its strongest realistic counter-evidence, NAMING the target's c-id in the lane's note (the machinery links the attack outcome to that claim) — a claim that has survived attack outranks one nobody questioned.`
     : '';
   // calibrationClause — only kinds with a real observation (n>0) render; an all-neutral table teaches nothing.
   const calibEntries = Object.entries(calib || {}).filter(([, v]) => v && v.n > 0);
@@ -208,6 +213,7 @@ When the answer must be BUILT (an estimate, a synthesis with arithmetic), AUTHOR
     goalClause,
     voiClause,
     validatorClause,
+    unsourcedClause,
     computeField,
     FINISH,
   });

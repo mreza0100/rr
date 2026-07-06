@@ -51,6 +51,7 @@ export interface RabbitHole {
   ref?: string; // a concrete fetch target (URL/DOI) this lane should fetch directly instead of WebSearching
   kind?: LeadKind; // the lead's origin channel — keys the yieldCalib table
   failCount?: number; // how many times the validator has reopened this lane after a failed/thin return (capped)
+  refetch?: boolean; // the cached copy is corrupted — the scheduler must bypass the cache for this lane (never reuse the poisoned path)
 }
 // a footer-surfaced lead (scout / researcher) before it enters the store.
 export interface RabbitHoleSeed {
@@ -117,10 +118,13 @@ export interface SchedulerSource {
   size: number; // size in tokens (the over-count heuristic from size_only)
   chars: number; // size in raw characters (drives the char windows)
 }
-// one scheduler-discovered lane: its rabbit-hole id + the sources chosen for it.
+// one scheduler-discovered lane: its rabbit-hole id + the sources chosen for it, plus the honesty
+// side-channels — the assigned-vs-served venue reconciliation and directive-named refs that could not be sourced.
 export interface SchedulerLane {
   id: number;
   sources: SchedulerSource[];
+  venuesServed?: string[]; // the subset of this lane's ASSIGNED venue source strings its chosen sources actually came from; [] when none
+  unsourced?: { ref: string; reason: string }[]; // directive-named refs/venues that could not be fetched — reported honestly, never silently substituted
 }
 // one packed read instruction handed to a reader: a char window [offset, offset+limit) of one cache file.
 export interface ReadSlice {
@@ -150,6 +154,7 @@ export interface LookupItem {
   note?: string; // the research directive for this lane — what to find + ranked fallbacks; steers BOTH the scheduler (source pick) and the reader (extraction); distinct from `why`
   ref?: string; // a concrete fetch target (URL/DOI) the lane fetches directly instead of WebSearching
   kind?: LeadKind; // the lead's origin channel when ORIGINATING a lane — passed through to the store
+  refetch?: boolean; // brainer-set corrupted-cache remediation — rides to the store entry and on to the scheduler
 }
 export interface Stop {
   done: boolean;

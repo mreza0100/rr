@@ -106,7 +106,9 @@ export class BrainerState {
   clusterOf: Record<string, number>; // lineage KEY → cluster id — the persistent union-find; its OWN keys ARE the "known keys" the lineageClerk is told about (one canonical structure, no second list)
   nextClusterId: number; // next fresh cluster id to mint; 0 is reserved for the shared "unknown lineage" cluster
   chao: ChaoStats | null; // collect-mode coverage estimate over the claim ledger; null until the first collect wave computes it
-  venueStats: Record<string, { assigned: number; yielded: number }>; // per-venue-source lane assignment/yield tally — flags a 0-yield venue to the brainer
+  venueStats: Record<string, { assigned: number; yielded: number; served: number }>; // per-venue-source lane assignment/yield tally — flags a 0-yield venue to the brainer; served = lanes where the scheduler's chosen sources actually came from this venue (assigned-vs-served reconciliation)
+  knownCachePaths: Set<string>; // every cache path the scheduler returned this run; the ingest trust-check accepts a claim cachePath only when known or matching the harvester cache signature
+  corruptCachePaths: Set<string>; // cache paths readers reported CORRUPT (spam/mismatched content); the scheduler is told to never return them
 
   // ── crawl accumulators (own) ──
   resultSoFar: ResultSoFar | null; // this brainer's living memory
@@ -116,6 +118,7 @@ export class BrainerState {
   resultLog: ResultLogEntry[];
   validatorLog: ValidatorLogEntry[];
   lastValidatorMissing: string;
+  lastUnsourced: string; // the last wave's scheduler honesty report (unsourced refs + venue substitutions), threaded into the next brainer prompt
   coord: Coord | null;
   lookupNext: RabbitHole[]; // the pending lanes this brainer pursues next wave (was a runCrawl local — per-brainer now)
   starvedWaves: number; // consecutive empty-schedule waves for THIS brainer (B6 starvation guard)
@@ -129,6 +132,12 @@ export class BrainerState {
   synthesiserOut: ReportOut | null;
   reportOk: boolean;
   citationsBogus: number; // synthesiser citation lint: [cN] markers stripped because the id was unknown/retracted
+  citationsAuditFailed: number; // synthesiser citation lint: [cN] markers stripped because the claim's quote-pin audit failed
+  quotesRepinned: number; // claims whose broken quote the auditor replaced with a verified contiguous span
+  cachePathsRejected: number; // claims whose cachePath was untrusted (never scheduled + outside the harvester cache) and was stripped to unpinned
+  reopenedLaneCount: number; // finalize judge-reopen lanes — feeds metrics.reopenedLanes so crawl-vs-finalize counts reconcile
+  goalMet: boolean | null; // this brainer's FINAL judge verdict's goalMet (null when no judge ran)
+  judgePasses: number; // how many judge passes ran in finalize for this brainer (including the gate on the multi-brainer path)
 
   constructor(g: RunGlobals, id: BrainerIdentity) {
     this.name = id.name;
@@ -164,6 +173,8 @@ export class BrainerState {
     this.nextClusterId = 1;
     this.chao = null;
     this.venueStats = {};
+    this.knownCachePaths = new Set();
+    this.corruptCachePaths = new Set();
     // own accumulators
     this.resultSoFar = null;
     this.topScores = [];
@@ -172,6 +183,7 @@ export class BrainerState {
     this.resultLog = [];
     this.validatorLog = [];
     this.lastValidatorMissing = '';
+    this.lastUnsourced = '';
     this.coord = null;
     this.lookupNext = [];
     this.starvedWaves = 0;
@@ -184,6 +196,12 @@ export class BrainerState {
     this.synthesiserOut = null;
     this.reportOk = false;
     this.citationsBogus = 0;
+    this.citationsAuditFailed = 0;
+    this.quotesRepinned = 0;
+    this.cachePathsRejected = 0;
+    this.reopenedLaneCount = 0;
+    this.goalMet = null;
+    this.judgePasses = 0;
   }
 
   get isRoot(): boolean {
@@ -232,9 +250,18 @@ export function spawnBrainer(
   child.nextClusterId = parent.nextClusterId;
   child.chao = parent.chao ? { ...parent.chao } : null;
   child.venueStats = JSON.parse(JSON.stringify(parent.venueStats));
+  child.knownCachePaths = new Set(parent.knownCachePaths);
+  child.corruptCachePaths = new Set(parent.corruptCachePaths);
   child.topScoresBase = parent.topScores.length; // the child's plateau window starts at ITS spawn point
   // the parent AUTHORS the child's resultSoFar — a deep clone of its own living memory, the seed the mandate aims.
   child.resultSoFar = parent.resultSoFar ? JSON.parse(JSON.stringify(parent.resultSoFar)) : null;
   child.wave = parent.wave;
+  child.lastUnsourced = parent.lastUnsourced;
+  child.citationsAuditFailed = parent.citationsAuditFailed;
+  child.quotesRepinned = parent.quotesRepinned;
+  child.cachePathsRejected = parent.cachePathsRejected;
+  child.reopenedLaneCount = parent.reopenedLaneCount;
+  child.goalMet = parent.goalMet;
+  child.judgePasses = parent.judgePasses;
   return child;
 }

@@ -65,9 +65,10 @@ describe('schemas — shape', () => {
     expect(SCOUT.required).toEqual(['landscape', 'pages']);
     expect(SCOUT_ANGLE.required).toEqual(['name', 'searchQuery', 'why']);
     expect(SCOUT_PLANNER.required).toEqual(['decomposition', 'angles']);
-    // claims/newTerms are optional (mirrors ReaderOut's TS optionality) — a reader may legitimately
-    // surface neither on a thin/off-topic slice; the engine's `|| []` guards treat their absence as empty.
-    expect(RESEARCH.required).toEqual(['runningAnswer']);
+    // the channel fields are REQUIRED so a reader consciously reports zero — a MISSING field is
+    // indistinguishable from a silently dropped one (a degraded lane once returned ONLY runningAnswer).
+    // newTerms/surprise stay optional (TS ReaderOut keeps its optionals — the engine's `|| []` guards still apply).
+    expect(RESEARCH.required).toEqual(['runningAnswer', 'claims', 'rabbitHoles', 'deadEnds']);
     expect(SCHEDULE.required).toEqual(['lanes']);
     expect(VALIDATE.required).toEqual(['checks', 'enough']);
     expect(SOURCES.required).toEqual(['highValueSources']);

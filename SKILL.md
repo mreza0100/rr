@@ -1,6 +1,6 @@
 ---
 name: rr
-version: "3.1.0"
+version: "3.2.0"
 repo: "https://github.com/mreza0100/rr"
 description: Launches Research and Report (RR) — a deterministic background Workflow that runs an unbounded, best-first, brainer-steered web crawl, DERIVES an answer over a quote-pinned, independence-clustered claim ledger with computed confidence (computing it when the answer must be built), and writes a cited multi-section report with a verdict and plan. Use when the user wants a researched answer or a topic landscape ("research X", "look into X", "RR X", "rr fast X") and a single web search is not enough. Modes: goal (answer one question) and collect (inventory a topic); "rr fast X" answers inline now via one quick sub-agent instead of the background Workflow. Runs in the background, returns a completion notification, and persists to RR/{slug}/.
 ---
@@ -51,7 +51,7 @@ Workflow({
 - `parallelLaneResearchAgentsPerWave` — `'auto'` (default, brainer-assigned, hidden cap of 5) or an integer clamped to `[1,5]`. How many lanes (rabbit-holes) a wave pursues at once.
 - `parallelSourcesPerLaneResearchAgent` — `'auto'` (default) or an integer clamped to `[1,5]`. Governs `MAX_SOURCES_PER_LANE`, the cap on sources bin-packed into one lane's reader thread per wave: `'auto'` keeps the fixed cap of 12; an integer override REPLACES it with that (clamped) value — lower it to bound a lane's reading cost, e.g. on a wide, shallow crawl.
 - `agents` (optional) — per-seat model/effort override, keyed by seat name: `{ <seat>: { model?: 'haiku'|'sonnet'|'opus', effort?: 'low'|'medium'|'high'|'xhigh' } }`. Valid seats: `scout`, `scoutPlanner`, `scoutMerger`, `prospector`, `brainer`, `validator`, `researcher`, `researchScheduler`, `initiator`, `refiner`, `judge`, `synthesiser`, `debugAnalyst`, `claimAuditor`, `lineageClerk`, `rerunner`. Unknown seat / bad model / bad effort all throw. Retunes ONLY the named seat/field — everything else keeps its documented default. Downgrading `brainer.model` below `'opus'` is allowed but logs a loud warning (measured: a Haiku brainer scored erratically and drifted off-goal) — reach for this only to deliberately trade quality for cost/speed on a specific seat. Example: `agents: { researcher: { model: 'sonnet' }, judge: { effort: 'high' } }`.
-- `compute` — `true` (default) or `false`. The master switch for derivation: `false` runs no compute agents (no stored/rerun derivation mid-wave, no finalize brain-derive) for a faster, gather-and-reason-only run.
+- `compute` — `true` (default) or `false`. The master switch for derivation: `false` runs no compute agents (no stored/rerun derivation mid-wave, no finalize brain-derive) for a faster, gather-and-reason-only run. The decision rule: compute is for a run whose answer must be BUILT BY RUNNING CODE — a quantitative estimate, arithmetic over gathered inputs, uncertainty propagation. Numbers merely READ from sources (effect sizes, prices, benchmark scores) are collation, not derivation — a qualitative synthesis or a collect-mode inventory wants `compute: false`.
 - `computeNote` (optional) — extra run-specific guidance for the compute-aware agents (a method to use, a constraint to respect). Appends to the always-present note that the compute environment ships a scientific Python stack (scipy, sympy, uncertainties, pandas, statsmodels, scikit-learn, networkx, pint, rdkit).
 - `thinkerNote` (optional) — operator run-steering for the reasoning tier: priorities, framing, constraints, audience. Shapes HOW the run is approached and what the report emphasizes — not additional questions to research. Reaches the prospector, brainer, initiator, judge, and synthesiser — never the cheap workers.
 - `researcherNote` (optional) — a terse one-line note (≈6-7 words) to the web-research agents — scout, prospector, brainer, researchScheduler, and researcher. Steers HOW they search and fetch (which sources to favour, what to skip). Passthrough, injected verbatim.
@@ -101,7 +101,7 @@ Read when a derivation is authored, re-run, and judged. Name the METHOD, the err
 - `maxParallelBrainers`: raise above 1 only when the goal has ≥2 genuinely separable deep branches (e.g. "what works today AND the 5-year migration path"); a single-question goal on 2+ brainers buys coordination cost, not coverage.
 - `maxWave`: force below `'auto'` only for a deadline; force high only when a collect run must saturate a long tail.
 - `chaoCoverageStop`: drop toward `0.65` when a collect answer is needed soon and a representative inventory beats an exhaustive one.
-- `compute: false`: pick when the answer is qualitative synthesis — skipping derivation agents saves a finalize round-trip.
+- `compute: false`: pick whenever nothing needs to be computed by running code — qualitative synthesis, a collect inventory, numbers that are read off sources rather than derived. Skipping derivation agents saves a finalize round-trip; compute earns its cost only when the answer itself is a calculation.
 - `tag`: always set when launching variants of one query in parallel — same slug would collide.
 - `debugPrompt`: pose ONE diagnostic question ("why did lane X starve?") — the analyst answers it against the raw I/O log.
 - `agents`: reach for it to trade quality for cost/speed on ONE seat (e.g. `researcher: { model: 'haiku', effort: 'low' }` on a run where reading is already cheap) or to harden ONE seat further (e.g. `judge: { effort: 'xhigh' }` — it already defaults there, so this is a no-op; raise a seat that defaults lower instead). Leave every seat alone unless you have a specific reason — the defaults are the measured-good policy.
@@ -141,10 +141,13 @@ This writes to `RR/{slug}/`:
 
 - `result.md` — the deliverable. Read this first; it opens with a compact **Run arguments** record (the complete launch args).
 - `_claims.json`, `_claims.md` — the full claim ledger: every quote-pinned claim with its status/cluster/audit verdict and the `nullAttacks` log, machine- and human-readable.
+- `_sources.json` — every cache file a live claim actually pins to (claim-referenced, never a raw cache dump).
 - `_rabbitHoles.json`, `_tree.md` — the rabbit-holes (with the run's launch `args` at the top) + the crawl tree; diagnostics.
 - per-wave files (`03-wave-0.md`, `04-wave-1.md`, …), plus `NN-validator.md`, `NN-initiator.md`, `NN-refinement.md`, `NN-judge.md`, and `_finalize-compute.md` when the judge sent the brain to derive — the full prompt/response trail of the run.
 - `_brainers.json`, `_brainers-tree.md`, `result-<name>.md` — only when `maxParallelBrainers > 1`: the brainer tree (who spawned whom, the winner) plus each non-winning brainer's preserved partial.
 - `_debug.md` — when launched with `debug: true`.
+
+`persist.js` also mirrors the claim-referenced cache files into `RR/{slug}/resources/` — provenance-filtered via `_sources.json`, so only files a ledger claim actually pins to are archived, never a raw cache dump. On an aborted or failed run (unparseable output, or a completed run with no files) it writes an auditable tombstone under `RR/_aborted/` instead of exiting with an error, so a retry chain never loses the forensics of what died on earlier attempts.
 
 Crash-safety no longer writes a file — each wave logs a `⏺CKPT` recovery line instead (`checkpoint: true` by default); see Recovery below.
 

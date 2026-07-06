@@ -91,6 +91,14 @@ export interface Metrics {
   nullAttacksTotal: number; // completed counter-searches that found nothing
   chao: ChaoStats | null; // collect-mode coverage estimate; null outside collect mode / before the first estimate
   citationsBogus: number; // synthesiser citation lint: [cN] markers stripped because the id was unknown/retracted
+  citationsAuditFailed: number; // synthesiser citation lint: [cN] markers stripped because the claim's quote-pin audit failed
+  auditCounts: { pass: number; fail: number; repinned: number; unpinned: number; pending: number }; // quote-pin audit outcome over the final ledger (repinned = the auditor located and replaced a broken quote — those claims read audit 'pass')
+  quotesRepinned: number; // claims whose broken quote the auditor replaced with a verified contiguous span
+  cachePathsRejected: number; // claims whose cachePath was untrusted (never scheduled + outside the harvester cache) and was stripped to unpinned
+  venuesUnrouted: number; // prospector venues never assigned to any lane across the whole run
+  goalMet: boolean | null; // the FINAL judge verdict's goalMet (null when no judge ran)
+  judgePasses: number; // how many judge passes ran in finalize (including the gate on the multi-brainer path)
+  reopenedLanes: number; // finalize judge-reopen lanes — included in pursuedTotal, split out so crawl-vs-finalize counts reconcile
 }
 
 // a rabbit-hole flattened for the finalize report / _rabbitHoles.json.

@@ -45,6 +45,22 @@ export const SCHEDULE: Schema = {
             description:
               'the highest-value sources chosen for this lane (multiple, no cap); empty only when every candidate failed',
           },
+          venuesServed: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              "the subset of this lane's ASSIGNED venue source strings its chosen sources actually come from; [] when none",
+          },
+          unsourced: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { ref: { type: 'string' }, reason: { type: 'string' } },
+              required: ['ref', 'reason'],
+            },
+            description:
+              'directive-named refs/venues that could NOT be sourced — reported honestly, never silently substituted',
+          },
         },
         required: ['id', 'sources'],
       },

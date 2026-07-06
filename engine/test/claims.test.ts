@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  makeUF,
   domainOf,
   lineageKeyOf,
   claimStatus,
@@ -42,33 +41,6 @@ const claim = (over: Partial<Claim> & { id: number }): Claim => ({
 });
 const CFG = { SETTLED_MIN_CLUSTERS: 2 };
 const NO_ATTACKS: NullAttack[] = [];
-
-describe('makeUF', () => {
-  it('a fresh key is its own root', () => {
-    const uf = makeUF();
-    expect(uf.find('a')).toBe('a');
-  });
-  it('merges chains transitively: union(a,b) + union(b,c) → one root for all three', () => {
-    const uf = makeUF();
-    uf.union('a', 'b');
-    uf.union('b', 'c');
-    expect(uf.find('a')).toBe(uf.find('c'));
-    expect(uf.find('b')).toBe(uf.find('c'));
-  });
-  it('keeps disjoint groups separate', () => {
-    const uf = makeUF();
-    uf.union('a', 'b');
-    uf.union('x', 'y');
-    expect(uf.find('a')).not.toBe(uf.find('x'));
-  });
-  it('survives a long merge chain (path compression keeps find correct)', () => {
-    const uf = makeUF();
-    const keys = ['k0', 'k1', 'k2', 'k3', 'k4', 'k5'];
-    for (let i = 1; i < keys.length; i++) uf.union(keys[i - 1], keys[i]);
-    const root = uf.find(keys[0]);
-    expect(keys.every((k) => uf.find(k) === root)).toBe(true);
-  });
-});
 
 describe('domainOf', () => {
   it('returns the host without www', () => {
@@ -455,12 +427,23 @@ describe('lintCitations — v3 SYNTHESISER citation lint (batch 4)', () => {
     expect(report).toBe('[c1] holds but  and  do not.');
     expect(bogus).toEqual([2, 7]);
   });
+  it('strips a marker whose live claim FAILED its quote-pin audit, collecting it in auditFailed (not bogus)', () => {
+    const withFailed = [claim({ id: 1 }), claim({ id: 3, audit: 'fail' })];
+    const { report, bogus, auditFailed } = lintCitations(
+      'pgvector wins [c1] but the pin on [c3] is discredited.',
+      withFailed,
+    );
+    expect(report).toBe('pgvector wins [c1] but the pin on  is discredited.');
+    expect(bogus).toEqual([]);
+    expect(auditFailed).toEqual([3]);
+  });
   it('passes through unchanged text with no markers, and empty input', () => {
     expect(lintCitations('no citations here', claims)).toEqual({
       report: 'no citations here',
       bogus: [],
+      auditFailed: [],
     });
-    expect(lintCitations('', claims)).toEqual({ report: '', bogus: [] });
+    expect(lintCitations('', claims)).toEqual({ report: '', bogus: [], auditFailed: [] });
   });
 });
 

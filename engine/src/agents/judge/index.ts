@@ -44,6 +44,11 @@ export const JUDGE: Schema = {
       description:
         '1-3 concrete gap searches ONLY when a real evidence/coverage gap needs more crawling (NONE already pursued); empty otherwise',
     },
+    reopenDirective: {
+      type: 'string',
+      description:
+        'only with reopenRabbitHoles: the reader-facing extraction directive for the reopened lane — what to find; distinct from directive (the refine/report fix)',
+    },
     retractClaimIds: {
       type: 'array',
       items: { type: 'number' },

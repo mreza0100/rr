@@ -130,14 +130,51 @@ export class ResearchReport {
   }
 
   // SCHEDULER (B4) — thin delegator to runScheduler (researchScheduler/run.ts); the crawl + finalize reopen route
-  // their source discovery through here. Returns a Map<lane id, sources> the engine bin-packs into reader-units.
-  scheduleSources(
+  // their source discovery through here. Returns a Map<lane id, sources> the engine bin-packs into reader-units
+  // (the external signature is unchanged so both call sites stay untouched); internally it also folds runScheduler's
+  // honesty side-channels into bs: the scheduler's own unsourced report, the served-cache-path allowlist
+  // (knownCachePaths — the ingest cachePath-trust check reads this), the assigned-vs-served venue reconciliation,
+  // and a mechanical cache-poisoning tripwire (the Zur spam incident: two different URLs, byte-identical spam
+  // payload, flowed into three lanes undetected — a same-size+same-chars group spanning ≥2 distinct urls is
+  // near-certainly one payload served under two names, so it is surfaced loudly rather than silently trusted).
+  async scheduleSources(
     bs: BrainerState,
     picks: RabbitHole[],
     tag: string,
     phaseName: string,
   ): Promise<Map<number, SchedulerSource[]>> {
-    return runScheduler(bs, picks, tag, phaseName);
+    const res = await runScheduler(bs, picks, tag, phaseName);
+    bs.lastUnsourced = res.unsourced; // each wave overwrites; '' clears a prior wave's report
+    for (const srcs of res.schedule.values())
+      for (const s of srcs || []) if (s && s.path) bs.knownCachePaths.add(s.path);
+    for (const p of picks) {
+      const served = res.venuesServed.get(p.id) || [];
+      for (const src of p.sources || []) {
+        const entry = bs.venueStats[src] || (bs.venueStats[src] = { assigned: 0, yielded: 0, served: 0 });
+        if (served.includes(src)) entry.served++;
+      }
+    }
+    // IDENTICAL-PAYLOAD DETECTION — flatten every scheduled source across all lanes; a group sharing the exact
+    // same size+chars pair that spans ≥2 DISTINCT source urls is the cache-poisoning signature (one payload,
+    // multiple names) — never inferred from a single lane alone, since that could be a legitimate re-cited source.
+    const bySize = new Map<string, SchedulerSource[]>();
+    for (const srcs of res.schedule.values())
+      for (const s of srcs || []) {
+        const key = s.size + '|' + s.chars;
+        const g = bySize.get(key);
+        if (g) g.push(s);
+        else bySize.set(key, [s]);
+      }
+    for (const g of bySize.values()) {
+      const distinctSources = [...new Set(g.map((s) => s.source))];
+      if (distinctSources.length >= 2) {
+        const urls = distinctSources.join(', ');
+        log('  ⚠ identical payloads across distinct urls (cache-poisoning signature): ' + urls);
+        bs.lastUnsourced =
+          (bs.lastUnsourced ? bs.lastUnsourced + '\n' : '') + '⚠ identical payloads: ' + urls;
+      }
+    }
+    return res.schedule;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -170,17 +207,37 @@ export class ResearchReport {
         const dedupeKey = norm(quote) + '|' + norm(c.source);
         // dedupe: an identical quote+source already ledgered (from an earlier wave or another lane this wave)
         if (bs.claims.some((e) => norm(e.quote) + '|' + norm(e.source) === dedupeKey)) continue;
-        const stance = c.stance && priorIds.has(c.stance.target) ? c.stance : undefined; // hallucinated-id filter
+        // STANCE COERCION — run forensics: readers emitted prose targets ('c36 (Dutch GGZ…)') despite the
+        // numeric schema, and the whole attack graph was silently dropped at ingest (a non-numeric target
+        // failed the priorIds check below no matter what). Salvage the recoverable ones: pull the first
+        // digit-run out of the prose and coerce to a number; only a target with NO digit-run at all is
+        // truly unrecoverable and drops the stance (never fabricates a target that was not named).
+        let stanceIn = c.stance;
+        if (stanceIn && typeof stanceIn.target !== 'number') {
+          const m = String(stanceIn.target).match(/\d+/);
+          stanceIn = m ? { ...stanceIn, target: Number(m[0]) } : undefined;
+        }
+        const stance = stanceIn && priorIds.has(stanceIn.target) ? stanceIn : undefined; // hallucinated-id filter
+        // CACHEPATH TRUST — run forensics: a reader once pinned claims to /tmp scratch files and session
+        // tool-result paths, non-reproducible provenance an archiver/persist pass can never follow later.
+        // Only a path the scheduler actually returned this run (bs.knownCachePaths), or one matching the
+        // harvester's own cache-directory signature (/.fetch/), is trusted — everything else is honestly
+        // unpinned rather than silently kept.
+        let cachePath = c.cachePath;
+        if (cachePath && !bs.knownCachePaths.has(cachePath) && !/\/\.fetch\//.test(cachePath)) {
+          cachePath = undefined;
+          bs.cachePathsRejected++;
+        }
         const claim: Claim = {
           id: bs.nextClaimId++,
           claim: c.claim,
           value: c.value,
           quote,
           source: c.source,
-          cachePath: c.cachePath,
+          cachePath,
           entities: c.entities,
           cluster: -1, // resolved below (applyLineage) — never left unset
-          audit: c.cachePath ? 'pending' : 'unpinned',
+          audit: cachePath ? 'pending' : 'unpinned',
           status: 'tentative',
           stance,
           attacksSurvived: 0,
@@ -201,7 +258,21 @@ export class ResearchReport {
       ]);
       for (const c of fresh) {
         const v = auditMap.get(c.id);
-        if (v) c.audit = v.verdict; // a dead auditor leaves it 'pending' (unpinned downstream) — never guessed
+        if (!v) continue; // a dead auditor leaves it 'pending' (unpinned downstream) — never guessed
+        // REPIN CONTRACT — 'repinned' means the sent quote did not match verbatim, but the auditor located
+        // a verified contiguous span that DOES carry the claim: adopt it as the claim's quote (through the
+        // same scrub + clip every quote passes through at ingest) and count it a genuine pass, not a guess.
+        // A 'repinned' verdict with NO newQuote is a malformed repin — never trust an unverifiable
+        // replacement, so it reads as a failed pin instead of a silent pass.
+        if (v.verdict === 'repinned' && v.newQuote) {
+          c.quote = clip(scrubArtifacts(v.newQuote), CONFIG.QUOTE_MAX_CHARS);
+          c.audit = 'pass';
+          bs.quotesRepinned++;
+        } else if (v.verdict === 'repinned') {
+          c.audit = 'fail';
+        } else {
+          c.audit = v.verdict;
+        }
       }
       const keyMap = new Map<number, string[]>();
       for (const c of fresh)
@@ -298,6 +369,21 @@ export class ResearchReport {
         c.quote = scrubArtifacts(c.quote);
       }
     }
+    // 1b — CORRUPT CACHE QUARANTINE: readers report poisoned cache content via the CORRUPT deadEnds
+    // convention (run forensics: a remediation lane was re-pointed at the same poisoned hash because
+    // nothing downstream ever consumed a reader's deadEnds). Pull the cache path out of every CORRUPT
+    // deadEnd, quarantine it (bs.corruptCachePaths — the scheduler is told to never re-serve it) and drop
+    // it from knownCachePaths so the ingest cachePath-trust check stops treating it as reproducible.
+    for (const r of raw) {
+      for (const d of r?.deadEnds || []) {
+        if (!/^\s*CORRUPT/i.test(d)) continue;
+        const m = d.match(/(\/[^\s'"«»)]+)/);
+        if (!m) continue;
+        bs.corruptCachePaths.add(m[1]);
+        bs.knownCachePaths.delete(m[1]);
+        log('  ⚠ corrupt cache quarantined: ' + m[1]);
+      }
+    }
     // 2–4 — claim ingest + audit ∥ lineage + status (shared with the scout seed). Snapshot every claim's
     // status BEFORE the ingest so the diff below can tell the derivation-rerun test (D2) which ids actually
     // moved this wave — added, or flipped status (e.g. an attack just landed) — not just "the ledger grew".
@@ -372,7 +458,7 @@ export class ResearchReport {
         fresh.some((c) => c.lane === p.keyword) ||
         (raw[i]?.rabbitHoles?.length || 0) + (raw[i]?.nextSources?.length || 0) > 0;
       for (const src of p.sources || []) {
-        const s = bs.venueStats[src] || (bs.venueStats[src] = { assigned: 0, yielded: 0 });
+        const s = bs.venueStats[src] || (bs.venueStats[src] = { assigned: 0, yielded: 0, served: 0 });
         s.assigned++;
         if (yielded) s.yielded++;
       }
@@ -696,16 +782,27 @@ export class ResearchReport {
           ' new after dedup',
       );
 
-      // VALIDATOR GATE — the per-wave coverage check. Runs only when a lane died or a finding is thin (keeps it cheap).
-      // Re-opens every lane that returned null OR fulfilled:false (bounded per-lane by MAX_LANE_REFAILS) so the next
-      // brainer can re-pursue; a lane past the cap is surfaced as a known gap; `missing` threads into the next brainer.
+      // VALIDATOR GATE — the per-wave coverage check. Runs only when a lane died, a finding is thin, a read came
+      // back CORRUPT, or a lane reported dead ends but landed no claims at all (keeps it cheap otherwise). The
+      // reader prompt has always promised "the engine will reopen the lane" on a dead read — before this,
+      // deadEnds were never consumed by anything downstream. Re-opens every lane that returned null OR
+      // fulfilled:false (bounded per-lane by MAX_LANE_REFAILS) so the next brainer can re-pursue; a lane past
+      // the cap is surfaced as a known gap; `missing` threads into the next brainer.
       const anyNull = raw.some((r) => !r);
       const anyThin = findings.some((f) => !f.summary || f.summary.length < CONFIG.VALIDATOR_THIN);
-      if (anyNull || anyThin) {
+      const anyCorrupt = raw.some((r) => r && (r.deadEnds || []).some((d) => /^\s*CORRUPT/i.test(d)));
+      const anyDeadNoClaims = raw.some(
+        (r) => r && (r.deadEnds || []).length > 0 && !(r.claims || []).length,
+      );
+      if (anyNull || anyThin || anyCorrupt || anyDeadNoClaims) {
         const requests = toPursue.map((p) => ({ id: p.id, keyword: p.keyword, why: p.why }));
-        const vFindings = findings.map((f) => ({
+        const vFindings = findings.map((f, i) => ({
           keyword: f.rabbitHole,
-          intro: (f.summary || '').slice(0, CONFIG.VALIDATOR_INTRO_CHARS),
+          intro:
+            (f.summary || '').slice(0, CONFIG.VALIDATOR_INTRO_CHARS) +
+            (raw[i] && (raw[i]!.deadEnds || []).length
+              ? ' [deadEnds: ' + raw[i]!.deadEnds!.join('; ').slice(0, 200) + ']'
+              : ''),
         }));
         const nullLanes = toPursue.filter((p, i) => !raw[i]).map((p) => p.keyword);
         const val = await runValidator(bs, wave, requests, vFindings, nullLanes);
@@ -944,6 +1041,7 @@ export class ResearchReport {
       return;
     }
     pursue(bs, picks);
+    bs.reopenedLaneCount += picks.length; // crawl-vs-finalize lane-count reconciliation for metrics
     const schedule = await this.scheduleSources(bs, picks, 'reopen', CONFIG.PHASE.finalize);
     const raw = await runResearchers(bs, picks, schedule, 'reopen', CONFIG.PHASE.finalize);
     // v3 HARVEST (a v2 weak point: this used to discard almost everything the readers gathered) — claims/
@@ -1042,6 +1140,32 @@ export class ResearchReport {
         claim.attacksSurvived = (claim.attacksSurvived || 0) + 1;
       }
     });
+    // MECHANICAL COUNTER-PROPAGATION — run forensics: a refine pass falsified the headline claim but the
+    // synthesis rubber-stamped the pre-correction answer; only the judge caught it, one pass later than it
+    // should have. The engine now propagates every counterFound into the answer + tensions BEFORE the judge
+    // ever sees it — single point of failure removed. Runs over EVERY fact the refiner touched, not just
+    // claimId-bound ones (a refine pass can falsify the headline answer itself with no ledger claim behind it).
+    const corrections = facts
+      .map((f, i) =>
+        refined[i] && refined[i]!.counterFound
+          ? f.fact + ' → ' + (refined[i]!.counterNote || 'counter-evidence found')
+          : null,
+      )
+      .filter((l): l is string => !!l);
+    if (corrections.length && bs.resultSoFar) {
+      const existingAnswer = bs.resultSoFar.answer || '';
+      // dedupe across passes — a correction already folded into the answer by an earlier judge pass never repeats.
+      const fresh = corrections.filter((l) => !existingAnswer.includes(l));
+      if (fresh.length)
+        bs.resultSoFar = {
+          ...bs.resultSoFar,
+          answer:
+            existingAnswer +
+            '\n\n**Corrections from the refine pass (machine-appended):**\n' +
+            fresh.map((l) => '- ' + l).join('\n'),
+          tensions: [...(bs.resultSoFar.tensions || []), ...fresh],
+        };
+    }
     for (const c of bs.claims)
       if (!c.retracted)
         c.status = claimStatus(c, bs.claims, bs.nullAttacks, {
@@ -1122,6 +1246,7 @@ export class ResearchReport {
     bs.synthesiserOut = agg;
     bs.reportOk = !!(agg && agg.report);
     bs.citationsBogus = 0;
+    bs.citationsAuditFailed = 0;
     if (!bs.reportOk) {
       log('✗ ' + label + ' FAILED — no report returned');
       // Salvage: the run's evidence still has value — deliver a degraded result.md from
@@ -1140,14 +1265,22 @@ export class ResearchReport {
       this.files['result.md'] = runArgsMd() + salvage.join('\n');
       return;
     }
-    const { report: linted, bogus } = lintCitations(agg!.report, bs.claims);
+    const { report: linted, bogus, auditFailed } = lintCitations(agg!.report, bs.claims);
     bs.citationsBogus = bogus.length;
+    bs.citationsAuditFailed = auditFailed.length;
     if (bogus.length)
       log(
         '⚠ ' +
           label +
           ' citation lint — stripped bogus id(s): ' +
           bogus.map((id) => 'c' + id).join(', '),
+      );
+    if (auditFailed.length)
+      log(
+        '⚠ ' +
+          label +
+          ' citation lint — stripped audit-failed id(s): ' +
+          auditFailed.map((id) => 'c' + id).join(', '),
       );
     const keyClaimIds = (bs.resultSoFar && bs.resultSoFar.keyClaimIds) || [];
     const computed = computedConfidence(keyClaimIds, bs.claims);
@@ -1300,6 +1433,8 @@ export class ResearchReport {
     };
     const judgeLog: JudgeOut[] = [];
     const computeDirectives: string[] = [];
+    let pendingDirective = ''; // set only when the judge's last directive was a report-layer fix the
+    // remediation loop had no lever for — forwarded to the synthesiser instead of silently dropped.
     let judgement = foldComputeLimitation(await runJudge(bs, cleanReports, synthFocus, 0));
     if (judgement) judgeLog.push(judgement);
     await this.applyJudgeRetractions(bs, judgement, CONFIG.PHASE.finalize);
@@ -1334,9 +1469,12 @@ export class ResearchReport {
         judgement.reopenRabbitHoles &&
         judgement.reopenRabbitHoles.length
       ) {
-        // CRAWL REOPEN (rare) — a real evidence/coverage gap; reopen the crawl on the judge's leads, then re-harden
+        // CRAWL REOPEN (rare) — a real evidence/coverage gap; reopen the crawl on the judge's leads, then re-harden.
+        // reopenDirective (when the judge supplied one) is the reader-facing EXTRACTION directive for the
+        // reopened lane; `directive` alone is a poor lane brief — run forensics: "Rewrite the open-differentiator
+        // section" (a report-layer fix) was once handed straight to a haiku reader as its research mandate.
         log('· finalize · judge pass ' + pass + ' → reopen the crawl on a real gap');
-        await this.reopenCrawl(bs, judgement.reopenRabbitHoles, directive);
+        await this.reopenCrawl(bs, judgement.reopenRabbitHoles, judgement.reopenDirective || directive);
         cleanReports = await this.refineAndLedger(
           bs,
           facts,
@@ -1346,17 +1484,23 @@ export class ResearchReport {
           CONFIG.PHASE.finalize,
         );
       } else {
+        // the directive WAS actionable — just at the report layer, not one the crawl/refine/compute levers
+        // above can fix. Forward it to the synthesiser instead of the dishonest "no actionable remediation" label.
         log(
           '· finalize · judge pass ' +
             pass +
-            ' → no actionable remediation; proceeding to the report',
+            ' → no remediation lever fits — directive forwarded to the synthesiser',
         );
+        pendingDirective = directive;
         break;
       }
       judgement = foldComputeLimitation(await runJudge(bs, cleanReports, synthFocus, pass));
       if (judgement) judgeLog.push(judgement);
       await this.applyJudgeRetractions(bs, judgement, CONFIG.PHASE.finalize);
     }
+    // the FINAL judge verdict's goalMet (null when no judge ever ran) + how many passes ran — feeds metrics.
+    bs.goalMet = judgeLog.length ? judgeLog[judgeLog.length - 1].goalMet : null;
+    bs.judgePasses = judgeLog.length;
 
     // JUDGE file — every pass: the four-flag verdict + reasoning + directive + any reopen
     if (judgeLog.length)
@@ -1404,7 +1548,14 @@ export class ResearchReport {
 
     // ── SYNTHESISER — writes the END report (always) from the judged answer + the hardened facts; the
     // citation-lint + confidence-floor finish (v3 batch 4) is shared with the multi-brainer winner path.
-    const agg = await runSynthesiser(bs, cleanReports, synthFocus, topOpen);
+    // pendingDirective rides along when the judge's last word was a report-layer fix no remediation lever
+    // fit — the synthesiser is the one agent that CAN act on it.
+    const agg = await runSynthesiser(
+      bs,
+      cleanReports,
+      synthFocus + (pendingDirective ? '\nJudge directive (apply in the report): ' + pendingDirective : ''),
+      topOpen,
+    );
     this.applyReportFinish(bs, agg, 'finalize');
   }
 
@@ -1435,6 +1586,20 @@ export class ResearchReport {
       nullAttacksTotal: bs.nullAttacks.length,
       chao: bs.chao,
       citationsBogus: bs.citationsBogus,
+      citationsAuditFailed: bs.citationsAuditFailed,
+      auditCounts: {
+        pass: bs.claims.filter((c) => c.audit === 'pass').length,
+        fail: bs.claims.filter((c) => c.audit === 'fail').length,
+        repinned: bs.quotesRepinned, // those claims already read audit 'pass' above — a distinct count, not a 4th audit value
+        unpinned: bs.claims.filter((c) => c.audit === 'unpinned').length,
+        pending: bs.claims.filter((c) => c.audit === 'pending').length,
+      },
+      quotesRepinned: bs.quotesRepinned,
+      cachePathsRejected: bs.cachePathsRejected,
+      venuesUnrouted: this.highValueSources.filter((v) => !bs.venueStats[v.source]).length,
+      goalMet: bs.goalMet,
+      judgePasses: bs.judgePasses,
+      reopenedLanes: bs.reopenedLaneCount,
     };
     log('■ RR DONE · ' + JSON.stringify(metrics));
 
@@ -1445,6 +1610,27 @@ export class ResearchReport {
       2,
     );
     this.files['_claims.md'] = claimsMd(bs);
+
+    // SOURCES artifact (run forensics: an ad-hoc cache-dir sweep once archived 136 foreign files out of
+    // 191) — the claim-referenced cache files only, so an archiver's copy step follows claim provenance,
+    // never a blind directory sweep. Unique by cachePath — a source many claims share is listed once.
+    {
+      const seenPaths = new Set<string>();
+      const sources: { cachePath: string; source: string }[] = [];
+      for (const c of bs.claims) {
+        if (c.retracted || !c.cachePath || seenPaths.has(c.cachePath)) continue;
+        seenPaths.add(c.cachePath);
+        sources.push({ cachePath: c.cachePath, source: c.source });
+      }
+      this.files['_sources.json'] = JSON.stringify(
+        {
+          note: 'claim-referenced cache files — the provenance-filtered set an archiver should copy (persist.js mirrors these into resources/)',
+          sources,
+        },
+        null,
+        2,
+      );
+    }
 
     this.files['_rabbitHoles.json'] = JSON.stringify(
       {
@@ -1695,13 +1881,23 @@ export class ResearchReport {
         });
     });
     const newCount = bs.rabbitHoles.length - beforeAdd;
+    // mirrors runCrawl's VALIDATOR GATE widening — the reader prompt has always promised "the engine will
+    // reopen the lane" on a dead read; before this, deadEnds were never consumed by anything downstream.
     const anyNull = raw.some((r) => !r);
     const anyThin = findings.some((f) => !f.summary || f.summary.length < CONFIG.VALIDATOR_THIN);
-    if (anyNull || anyThin) {
+    const anyCorrupt = raw.some((r) => r && (r.deadEnds || []).some((d) => /^\s*CORRUPT/i.test(d)));
+    const anyDeadNoClaims = raw.some(
+      (r) => r && (r.deadEnds || []).length > 0 && !(r.claims || []).length,
+    );
+    if (anyNull || anyThin || anyCorrupt || anyDeadNoClaims) {
       const requests = toPursue.map((p) => ({ id: p.id, keyword: p.keyword, why: p.why }));
-      const vFindings = findings.map((f) => ({
+      const vFindings = findings.map((f, i) => ({
         keyword: f.rabbitHole,
-        intro: (f.summary || '').slice(0, CONFIG.VALIDATOR_INTRO_CHARS),
+        intro:
+          (f.summary || '').slice(0, CONFIG.VALIDATOR_INTRO_CHARS) +
+          (raw[i] && (raw[i]!.deadEnds || []).length
+            ? ' [deadEnds: ' + raw[i]!.deadEnds!.join('; ').slice(0, 200) + ']'
+            : ''),
       }));
       const nullLanes = toPursue.filter((p, i) => !raw[i]).map((p) => p.keyword);
       const val = await runValidator(bs, gw, requests, vFindings, nullLanes);
@@ -1897,6 +2093,9 @@ export class ResearchReport {
     const verdict = await runJudge(bs, cleanReports, synthFocus, 0);
     await this.applyJudgeRetractions(bs, verdict, CONFIG.PHASE.finalize);
     bs.gateCache = { facts, synthFocus, cleanReports, topOpen };
+    // gate-vs-finalize judge-pass reconciliation: the gate IS a judge pass on the multi-brainer path.
+    bs.goalMet = verdict ? verdict.goalMet : null;
+    bs.judgePasses += 1;
     if (verdict)
       this.files[bs.name + '/judge.md'] =
         '# Gate judge — ' +

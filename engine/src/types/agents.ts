@@ -31,6 +31,7 @@ import type {
   ResultLogEntry,
   ResultSoFar,
   SchedulerLane,
+  SchedulerSource,
   ScoredLead,
   Spawn,
   Stop,
@@ -139,6 +140,7 @@ export interface BrainerArgs {
   venues: Venue[];
   languageGuidance?: string; // non-empty ⇒ route some lanes to the non-English venues
   lastValidatorMissing?: string; // the last wave's validator gaps (reopened lanes + capped known-gaps), 1 line; '' when none
+  unsourced?: string; // pre-rendered scheduler honesty report from the last wave (unsourced refs + venue substitutions + payload anomalies); '' when clean — omits the clause
   compute?: boolean;
   computeNote?: string;
   thinkerNote?: string;
@@ -196,15 +198,26 @@ export interface SchedulerLaneInput {
   note: string; // the brainer's research directive (what to find + ranked fallbacks)
   venues: Venue[]; // the prospector venues the brainer assigned this lane (prefer these)
   ref?: string; // a concrete url/DOI to take directly instead of searching (a followed citation)
+  kind?: LeadKind; // the lane's origin channel — 'attack' lanes get mandatory suspect-surface sourcing
+  refetch?: boolean; // the cached copy is corrupted — bypass the cache, never return the existing cache path
 }
 export interface ResearchSchedulerArgs {
   query: string;
   lanes: SchedulerLaneInput[];
   researcherNote?: string;
   vocabulary?: string; // pre-rendered top community terms of art (utils vocabSummary), '' when bs.vocabulary is empty
+  corruptCache?: string[]; // cache paths reported corrupted by earlier readers — never returned as a source path
 }
 export interface SchedulerOut {
   lanes: SchedulerLane[]; // the chosen, sized sources grouped per lane id
+}
+// what runScheduler hands back to the engine: the bin-packable schedule plus the honesty side-channels
+// (assigned-vs-served venue reconciliation + directive-named refs that could not be sourced). The ENGINE
+// folds these into bs (lastUnsourced, venueStats.served) — the run fn stays pure request/response.
+export interface ScheduleResult {
+  schedule: Map<number, SchedulerSource[]>;
+  unsourced: string; // pre-rendered "lane #id: ref — reason" lines; '' when everything named was sourced
+  venuesServed: Map<number, string[]>; // per lane id: the subset of its ASSIGNED venues its chosen sources actually came from
 }
 
 // ── researcher (a lane READER: reads its assigned cache slice(s) from disk via code, then digests) ──
@@ -306,6 +319,7 @@ export interface JudgeOut {
   reasoning: string;
   directive?: string; // the precise fix/derivation to perform when not satisfied; '' when satisfied
   reopenRabbitHoles?: RabbitHoleSeed[]; // only for a genuine evidence/coverage gap that needs the crawl; else empty
+  reopenDirective?: string; // ONLY with reopenRabbitHoles: the reader-facing EXTRACTION directive for the reopened lane (what to find in the fetched pages) — distinct from `directive`, which fixes the refine/report layer
   computeLimitation?: string; // engine-applied (not from the model): the compute-off stated limitation runJudge returns for the engine to fold into openGaps
   retractClaimIds?: number[]; // ledger claim ids whose evidence is discredited (retraction/fabrication/misattribution) — the engine retracts them and recomputes everything downstream
 }
@@ -388,8 +402,9 @@ export interface ClaimAuditArgs {
 }
 export interface ClaimAuditCheck {
   id: number;
-  verdict: 'pass' | 'fail';
+  verdict: 'pass' | 'fail' | 'repinned'; // repinned = quote not found as sent, but a contiguous span carrying the claim WAS located — newQuote holds it
   note?: string;
+  newQuote?: string; // repinned only: the verbatim contiguous span from the file that replaces the broken quote
 }
 export interface ClaimAuditOut {
   checks: ClaimAuditCheck[];

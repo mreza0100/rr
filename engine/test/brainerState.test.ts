@@ -67,7 +67,7 @@ describe('spawnBrainer — the ledger branches with the brainer (no shared refs)
   });
   it('deep-copies venueStats/lastChangedClaimIds and carries derivationDirty/derivationStale (batch 3)', () => {
     const p = root();
-    p.venueStats = { arxiv: { assigned: 2, yielded: 0 } };
+    p.venueStats = { arxiv: { assigned: 2, yielded: 0, served: 0 } };
     p.lastChangedClaimIds = new Set([1, 2]);
     p.derivationDirty = true;
     p.derivationStale = true;

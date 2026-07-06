@@ -67,7 +67,7 @@ export const CLAIM_ITEM: Schema = {
     value: { type: 'string', description: 'the number/quantity, when the claim is quantitative' },
     quote: {
       type: 'string',
-      description: `a VERBATIM span, copied exactly from the source, of at most ${CONFIG.QUOTE_MAX_CHARS} characters that carries the claim`,
+      description: `a VERBATIM span, copied exactly and CONTIGUOUSLY from the source, of at most ${CONFIG.QUOTE_MAX_CHARS} characters that carries the claim — one unbroken span, NEVER separate fragments stitched with an ellipsis (a spliced quote fails the mechanical audit and the claim dies)`,
     },
     source: { type: 'string', description: 'the url or DOI this quote is from' },
     entities: {
@@ -102,6 +102,7 @@ export const CLAIM_ITEM_STANCE: Schema = {
         },
         kind: { type: 'string', enum: ['supports', 'attacks'] },
       },
+      required: ['target', 'kind'], // a stance without a numeric target is unlinkable — run forensics: prose targets were silently dropped and the attack graph never formed
       description:
         'ONLY when this claim directly bears on one of the KEY CLAIMS listed in the digest',
     },
@@ -156,6 +157,11 @@ export const LOOKUP: Schema = {
       type: 'string',
       enum: ['gap', 'attack', 'entity', 'origin'],
       description: 'the lead channel; set "attack" for a counter-evidence lane',
+    },
+    refetch: {
+      type: 'boolean',
+      description:
+        'force a FRESH fetch for this lane — its cached copy is corrupted; the scheduler bypasses the cache',
     },
   },
 };
