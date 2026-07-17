@@ -26,12 +26,16 @@ The data above is enough to decide. You may consult a tool if it genuinely helps
 // WEB_ONLY: the refine pass checks claims on the web — the local repo code is never evidence.
 export const WEB_ONLY = `
 Use the web only (WebSearch / mcp__harvester__fetch) to check sources — never read local files or this repo's own code; they are not evidence.`;
-// EMIT: JSON-emission discipline for the agents whose StructuredOutput payload is large (readers, probes,
-// merger, prospector, scheduler, brainer). Run forensics: emitters intermittently sent prose-/<parameter>-
+// EMIT: JSON-emission discipline for the agents whose StructuredOutput payload can grow large — the wave
+// seats (readers, probes, merger, prospector, scheduler, brainer) AND the batch/finalize seats (claimAuditor
+// ≤AUDIT_BATCH items, lineageClerk ≤LINEAGE_BATCH, initiator, refiner, judge, synthesiser's whole report,
+// debugAnalyst's diagnosis, brain-compute). Run forensics: emitters intermittently sent prose-/<parameter>-
 // wrapped JSON and unescaped control characters in long string values — each a parse failure that burns a
 // visible retry. Schemas are null-tolerant for optional fields; this clause attacks the malformed-JSON class.
+// The last line teaches the recovery that measured cheapest (every observed failure recovered by full
+// re-emission): the WHOLE object again, corrected — a fragment or single-field patch fails validation anew.
 export const EMIT = `
-StructuredOutput discipline: its input must be ONE valid JSON object — escape every quote, newline, and backslash inside string values; no code fences, no XML/<parameter> syntax, no prose outside the JSON. Omit optional fields you have nothing for. Keep free-text values tight (one line each unless the field says otherwise) — a compact payload parses, an essay-sized one truncates and dies.`;
+StructuredOutput discipline: its input must be ONE valid JSON object — escape every quote, newline, and backslash inside string values; no code fences, no XML/<parameter> syntax, no prose outside the JSON. Omit optional fields you have nothing for. Keep free-text values tight (one line each unless the field says otherwise) — a compact payload parses, an essay-sized one truncates and dies. If the tool reports a parse/schema error, re-emit the ENTIRE corrected object in one fresh call — never a fragment or only the fixed field.`;
 
 // ── shared schema bricks (declaration order respects nesting) ──
 export const RABBITHOLE: Schema = {

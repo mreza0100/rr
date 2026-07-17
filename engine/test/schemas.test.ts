@@ -191,6 +191,28 @@ describe('schemas — nesting', () => {
     expect(JSON.stringify(buildCoord({ compute: false, canSpawn: false })).length).toBeLessThanOrEqual(3966);
     expect(JSON.stringify(buildCoord({ compute: true, canSpawn: true })).length).toBeLessThanOrEqual(5311);
   });
+  it('the other big top-level schemas stay inside classifier-safe pins (v3.2.4)', () => {
+    // Same guard as COORD's, extended to the schemas that have grown (null-tolerant unions + soft-cap
+    // descriptions): sizes measured at v3.2.4 + small headroom. Growing one of these requires shrinking
+    // elsewhere first — the spawn classifier kills silently at run time.
+    expect(JSON.stringify(RESEARCH).length).toBeLessThanOrEqual(4000);
+    expect(JSON.stringify(SCOUT).length).toBeLessThanOrEqual(2900);
+    expect(JSON.stringify(SOURCES).length).toBeLessThanOrEqual(1200);
+  });
+  it('reader payload soft caps render into RESEARCH descriptions — steering, never hard maxItems (v3.2.4)', () => {
+    // wf_b49463fc-f46: the reader that recovered from two parse-dead payloads did so by SHRINKING its
+    // emission. A hard maxItems/maxLength would convert an overfull emission into exactly the schema
+    // failure this exists to prevent — so the caps live in descriptions only.
+    expect(RESEARCH.properties!.claims.description).toContain('keep the strongest ~12');
+    expect(RESEARCH.properties!.runningAnswer.description).toContain('≤16000 chars');
+    expect(RESEARCH.properties!.claims.maxItems).toBeUndefined();
+  });
+  it('prospector reasoning is capped to a terse note — venue data may never live in it (v3.2.4)', () => {
+    // wf_b49463fc-f46: the prospector stuffed the whole venue list into `reasoning` (5.6k chars) and
+    // dropped the required highValueSources — the description now forbids exactly that.
+    expect(SOURCES.properties!.reasoning.description).toContain('2-3 sentences max');
+    expect(SOURCES.properties!.reasoning.description).toContain('ONLY in highValueSources');
+  });
   it('RESULT_SO_FAR requires the full memory contract (v3: keyClaimIds replaces evidence as required)', () => {
     expect(RESULT_SO_FAR.required).toEqual([
       'answer',

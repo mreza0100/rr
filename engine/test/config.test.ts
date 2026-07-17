@@ -132,6 +132,18 @@ describe('Configs canonicalization', () => {
   it('holds the CHECKPOINT_MARK log-line prefix', () => {
     expect(new Configs({ query: 'q' }).CHECKPOINT_MARK).toBe('⏺CKPT');
   });
+  it('holds the emission soft caps + preflight thresholds (v3.2.4 — wf_b49463fc-f46 forensics)', () => {
+    const c = new Configs({ query: 'q' });
+    expect(c.READER_CLAIMS_CAP).toBe(12);
+    expect(c.ANSWER_SOFT_CAP).toBe(3000);
+    expect(c.SCHEMA_WARN_BYTES).toBe(5311); // largest serialized schema measured classifier-safe (COORD full)
+    expect(c.QUERY_WARN_CHARS).toBe(6000);
+  });
+  it('an oversized query WARNS but never throws or clamps (query-size preflight, v3.2.4)', () => {
+    const huge = 'q'.repeat(9000);
+    const c = new Configs({ query: huge });
+    expect(c.query).toBe(huge); // untouched — the warning is advisory, the operator may still want the run
+  });
   it('holds the claim-ledger knobs (v3)', () => {
     const c = new Configs({ query: 'q' });
     expect(c.QUOTE_MAX_CHARS).toBe(300);

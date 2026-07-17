@@ -1,7 +1,7 @@
 // SYNTHESISER prompts — the report-writer template + its assembly function. Template strings are
 // module-level consts; buildSynthesiser only assembles/substitutes the compute-mention clauses.
 import { plain, render } from '../../utils/index.js';
-import { FINISH } from '../shared.js';
+import { EMIT, FINISH } from '../shared.js';
 import type { SynthesiserArgs } from '../../types/index.js';
 
 const SYNTHESISER_TPL = `{{! synthesiser — writes the final multi-section cited report }}
@@ -17,7 +17,7 @@ Hardened facts (the corrected claims):
 {{cleanReports}}
 Top remaining open rabbit-holes (for Open questions):
 {{openRabbitHoles}}{{ledgerClause}}{{nullAttacksClause}}{{confidenceClause}}
-Write \`report\` as markdown with exactly these sections in order: (1) Prompt — the goal; (2) Research waves — per wave: what was pursued and how the answer sharpened (from the per-wave log); (3) Scout landscape; (4) Findings — the synthesized answer, {{computeLeading}}weaving each hardened fact in with its corrected value; (5) Assumptions — the working assumptions the answer leans on (from resultSoFar.assumptions), each with its basis, flagging any that is load-bearing but unconfirmed; (6) Verdict + overall confidence; (7) Plan — concrete operator actions; (8) Open questions. Also return verdict (1-3 sentences), confidence, plan (array of action strings), openQuestions (array).{{FINISH}}
+Write \`report\` as markdown with exactly these sections in order: (1) Prompt — the goal; (2) Research waves — per wave: what was pursued and how the answer sharpened (from the per-wave log); (3) Scout landscape; (4) Findings — the synthesized answer, {{computeLeading}}weaving each hardened fact in with its corrected value; (5) Assumptions — the working assumptions the answer leans on (from resultSoFar.assumptions), each with its basis, flagging any that is load-bearing but unconfirmed; (6) Verdict + overall confidence; (7) Plan — concrete operator actions; (8) Open questions. Also return verdict (1-3 sentences), confidence, plan (array of action strings), openQuestions (array).${EMIT}{{FINISH}}
 `;
 
 export const buildSynthesiser = ({

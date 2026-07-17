@@ -1,6 +1,6 @@
 {
   "name": "rr-engine",
-  "version": "3.2.3",
+  "version": "3.2.4",
   "private": true,
   "type": "module",
   "description": "Research and Report (RR) Workflow engine — modular source that bundles to ../workflow.js",

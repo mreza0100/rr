@@ -15,8 +15,7 @@ export const RESEARCH: Schema = {
   properties: {
     runningAnswer: {
       type: 'string',
-      description:
-        'the accumulated answer for this lane: merge what you found in your slice INTO the prior answer (or begin it if you are reader 1), kept a coherent whole — the next reader continues it and the brainer reads the final one',
+      description: `the accumulated answer for this lane: merge what you found in your slice INTO the prior answer (or begin it if you are reader 1), kept a coherent whole — the next reader continues it and the brainer reads the final one; ≤${CONFIG.HANDOFF_CHARS} chars (the engine clips beyond)`,
     },
     rabbitHoles: { type: 'array', items: RABBITHOLE },
     nextSources: {
@@ -50,8 +49,7 @@ export const RESEARCH: Schema = {
     claims: {
       type: 'array',
       items: CLAIM_ITEM_STANCE,
-      description:
-        'load-bearing facts this slice carries — each pinned to a verbatim quote; only facts the answer could rest on, never a transcript of everything read',
+      description: `load-bearing facts this slice carries — each pinned to a verbatim quote; only facts the answer could rest on, never a transcript of everything read; keep the strongest ~${CONFIG.READER_CLAIMS_CAP}`,
     },
     newTerms: {
       type: 'array',

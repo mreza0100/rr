@@ -1,7 +1,7 @@
 // INITIATOR prompts — the finalize-planner template + its assembly function. Template strings are
 // module-level consts; buildInitiator only substitutes the operator-steering clause.
 import { plain, render } from '../../utils/index.js';
-import { FINISH } from '../shared.js';
+import { EMIT, FINISH } from '../shared.js';
 import type { InitiatorArgs } from '../../types/index.js';
 
 const INITIATOR_TPL = `{{! initiator — plans the finalize pipeline, shaping the finish to this query }}
@@ -18,7 +18,7 @@ Top open rabbit-holes left unpursued:
 {{openRabbitHoles}}{{ledgerClause}}{{sensitivityClause}}
 Return:
 - refinement.facts[] — the load-bearing facts to harden, aggressively grouped: bundle facts that share sources or stand or fall together into ONE item (each {fact, why, claimId?}); prefer a few broad groups over many atomic facts. Cover every fact that would change the answer if wrong; skip soft restatements. Where a fact corresponds to a ledger claim, set its claimId — hardening then updates that claim's record.
-- synthesiser.focus — one note on what the report must emphasize / the shape the answer should take.{{thinkerClause}}{{FINISH}}
+- synthesiser.focus — one note on what the report must emphasize / the shape the answer should take.{{thinkerClause}}${EMIT}{{FINISH}}
 `;
 
 export const buildInitiator = ({

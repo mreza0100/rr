@@ -1,7 +1,7 @@
 // DEBUG ANALYST prompts — the diagnostics template + its assembly function. Template strings are
 // module-level consts; buildDebugAnalyst only assembles/substitutes the focus clause.
 import { plain, render } from '../../utils/index.js';
-import { FINISH } from '../shared.js';
+import { EMIT, FINISH } from '../shared.js';
 import type { DebugAnalystArgs } from '../../types/index.js';
 
 const DEBUG_TPL = `{{! debug — consolidates metrics, run log, and raw agent I/O into one debug report }}
@@ -19,7 +19,7 @@ Per-wave log:
 {{waveLog}}
 Per-wave result-so-far log (the brainer's running memory each wave):
 {{resultLog}}
-Return diagnosis (markdown).{{FINISH}}
+Return diagnosis (markdown).${EMIT}{{FINISH}}
 `;
 
 export const buildDebugAnalyst = ({
