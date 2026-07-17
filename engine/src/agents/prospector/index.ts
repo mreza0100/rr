@@ -40,7 +40,8 @@ export const SOURCES: Schema = {
     },
     reasoning: {
       type: ['string', 'null'],
-      description: '2-3 sentences max: how you chose these venues / what you searched to confirm',
+      description:
+        '2-3 sentences max: what you searched to confirm the venues — never the venue data itself (that lives ONLY in highValueSources)',
     },
   },
   required: ['highValueSources'],

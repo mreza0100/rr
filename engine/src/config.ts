@@ -49,6 +49,10 @@ export class Configs {
   MAX_STARVED_WAVES: number;
   TREE_LOG_WIDTH: number;
   QUOTE_MAX_CHARS: number;
+  READER_CLAIMS_CAP: number;
+  ANSWER_SOFT_CAP: number;
+  SCHEMA_WARN_BYTES: number;
+  QUERY_WARN_CHARS: number;
   CLAIM_DIGEST_CAP: number;
   CLAIM_DIGEST_CLIP: number;
   CALIB_DEFAULT_SCORE: number;
@@ -173,6 +177,15 @@ export class Configs {
     this.TREE_LOG_WIDTH = 120; // crawl-tree render: per-line clip width for the LIVE TERMINAL log ONLY — the persisted _tree.md + returned tree keep full, unclipped lines
     // claim-ledger knobs (v3) — read by utils claimStatus/chao1/updateCalib/calibFactor + the prompt builders
     this.QUOTE_MAX_CHARS = 300; // max chars of the VERBATIM quote a claim pins (the FOOTER + reader schema ceiling)
+    // emission soft caps (v3.2.4) — wf_b49463fc-f46 forensics: the reader that recovered from two identical
+    // parse-dead payloads did so by SHRINKING its emission (5.1KB → 3.7KB). These steer the payload smaller
+    // via schema descriptions + prompts; STEERING only, never hard maxItems/maxLength — a hard bound would
+    // convert an overfull emission into exactly the schema failure it exists to prevent.
+    this.READER_CLAIMS_CAP = 12; // soft cap on claims per reader emission — keep the most load-bearing; a slice is a digest, not a transcript
+    this.ANSWER_SOFT_CAP = 3000; // soft cap (chars) on resultSoFar.answer — detail lives in the ledger via keyClaimIds, not restated in prose
+    // preflight thresholds (v3.2.4) — both name a platform-classifier risk BEFORE it kills silently
+    this.SCHEMA_WARN_BYTES = 5311; // retryAgent: largest serialized schema measured classifier-safe (COORD full); the v3.2.0 wave-0 spawn-classifier kill measured 5455
+    this.QUERY_WARN_CHARS = 6000; // constructor: an rr2-era run died at wave-0 to a query-class-dependent safety-classifier block on a very large query; 4.4k chars measured safe (wf_b49463fc-f46)
     this.CLAIM_DIGEST_CAP = 30; // max existing key-claim one-liners woven into a reader prompt (the stance targets)
     this.CLAIM_DIGEST_CLIP = 90; // max chars of a claim's text on ONE claimDigestOf line (distinct from CLAIM_DIGEST_CAP, which caps the line COUNT)
     this.CALIB_DEFAULT_SCORE = 50; // ingestWave: predicted-yield default when a pursued lead carries no score history yet (the neutral midpoint)
@@ -327,6 +340,23 @@ export class Configs {
 
     // ---- run config (validated + defaulted) ----
     this.query = arg.query;
+    // QUERY-SIZE PREFLIGHT (v3.2.4) — an rr2-era run died at wave-0 to a query-class-dependent platform
+    // safety-classifier block on a very large query string. Warn loudly, never clamp — the operator may
+    // still want the run, and the block is probabilistic; the warning names the risk before the crawl spends.
+    if (this.query.length > this.QUERY_WARN_CHARS) {
+      try {
+        if (typeof log === 'function')
+          log(
+            '⚠ RR: query is ' +
+              this.query.length +
+              ' chars (> ' +
+              this.QUERY_WARN_CHARS +
+              ') — very large queries have triggered platform safety-classifier blocks at wave-0; consider tightening it',
+          );
+      } catch (e) {
+        /* log not available at construction (unit test) → skip the warning */
+      }
+    }
     // normalize mode (B8): trim + lowercase BEFORE the 'collect' test (so 'Collect'/' COLLECT ' canonicalize),
     // and warn LOUDLY when a non-empty mode fails to match either canonical value instead of silently → goal.
     const rawMode = arg.mode == null ? '' : String(arg.mode).trim().toLowerCase();

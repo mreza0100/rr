@@ -65,6 +65,10 @@ class Configs {
   MAX_STARVED_WAVES        ;
   TREE_LOG_WIDTH        ;
   QUOTE_MAX_CHARS        ;
+  READER_CLAIMS_CAP        ;
+  ANSWER_SOFT_CAP        ;
+  SCHEMA_WARN_BYTES        ;
+  QUERY_WARN_CHARS        ;
   CLAIM_DIGEST_CAP        ;
   CLAIM_DIGEST_CLIP        ;
   CALIB_DEFAULT_SCORE        ;
@@ -189,6 +193,15 @@ class Configs {
     this.TREE_LOG_WIDTH = 120; // crawl-tree render: per-line clip width for the LIVE TERMINAL log ONLY — the persisted _tree.md + returned tree keep full, unclipped lines
     // claim-ledger knobs (v3) — read by utils claimStatus/chao1/updateCalib/calibFactor + the prompt builders
     this.QUOTE_MAX_CHARS = 300; // max chars of the VERBATIM quote a claim pins (the FOOTER + reader schema ceiling)
+    // emission soft caps (v3.2.4) — wf_b49463fc-f46 forensics: the reader that recovered from two identical
+    // parse-dead payloads did so by SHRINKING its emission (5.1KB → 3.7KB). These steer the payload smaller
+    // via schema descriptions + prompts; STEERING only, never hard maxItems/maxLength — a hard bound would
+    // convert an overfull emission into exactly the schema failure it exists to prevent.
+    this.READER_CLAIMS_CAP = 12; // soft cap on claims per reader emission — keep the most load-bearing; a slice is a digest, not a transcript
+    this.ANSWER_SOFT_CAP = 3000; // soft cap (chars) on resultSoFar.answer — detail lives in the ledger via keyClaimIds, not restated in prose
+    // preflight thresholds (v3.2.4) — both name a platform-classifier risk BEFORE it kills silently
+    this.SCHEMA_WARN_BYTES = 5311; // retryAgent: largest serialized schema measured classifier-safe (COORD full); the v3.2.0 wave-0 spawn-classifier kill measured 5455
+    this.QUERY_WARN_CHARS = 6000; // constructor: an rr2-era run died at wave-0 to a query-class-dependent safety-classifier block on a very large query; 4.4k chars measured safe (wf_b49463fc-f46)
     this.CLAIM_DIGEST_CAP = 30; // max existing key-claim one-liners woven into a reader prompt (the stance targets)
     this.CLAIM_DIGEST_CLIP = 90; // max chars of a claim's text on ONE claimDigestOf line (distinct from CLAIM_DIGEST_CAP, which caps the line COUNT)
     this.CALIB_DEFAULT_SCORE = 50; // ingestWave: predicted-yield default when a pursued lead carries no score history yet (the neutral midpoint)
@@ -343,6 +356,23 @@ class Configs {
 
     // ---- run config (validated + defaulted) ----
     this.query = arg.query;
+    // QUERY-SIZE PREFLIGHT (v3.2.4) — an rr2-era run died at wave-0 to a query-class-dependent platform
+    // safety-classifier block on a very large query string. Warn loudly, never clamp — the operator may
+    // still want the run, and the block is probabilistic; the warning names the risk before the crawl spends.
+    if (this.query.length > this.QUERY_WARN_CHARS) {
+      try {
+        if (typeof log === 'function')
+          log(
+            '⚠ RR: query is ' +
+              this.query.length +
+              ' chars (> ' +
+              this.QUERY_WARN_CHARS +
+              ') — very large queries have triggered platform safety-classifier blocks at wave-0; consider tightening it',
+          );
+      } catch (e) {
+        /* log not available at construction (unit test) → skip the warning */
+      }
+    }
     // normalize mode (B8): trim + lowercase BEFORE the 'collect' test (so 'Collect'/' COLLECT ' canonicalize),
     // and warn LOUDLY when a non-empty mode fails to match either canonical value instead of silently → goal.
     const rawMode = arg.mode == null ? '' : String(arg.mode).trim().toLowerCase();
@@ -472,12 +502,16 @@ The data above is enough to decide. You may consult a tool if it genuinely helps
 // WEB_ONLY: the refine pass checks claims on the web — the local repo code is never evidence.
 const WEB_ONLY = `
 Use the web only (WebSearch / mcp__harvester__fetch) to check sources — never read local files or this repo's own code; they are not evidence.`;
-// EMIT: JSON-emission discipline for the agents whose StructuredOutput payload is large (readers, probes,
-// merger, prospector, scheduler, brainer). Run forensics: emitters intermittently sent prose-/<parameter>-
+// EMIT: JSON-emission discipline for the agents whose StructuredOutput payload can grow large — the wave
+// seats (readers, probes, merger, prospector, scheduler, brainer) AND the batch/finalize seats (claimAuditor
+// ≤AUDIT_BATCH items, lineageClerk ≤LINEAGE_BATCH, initiator, refiner, judge, synthesiser's whole report,
+// debugAnalyst's diagnosis, brain-compute). Run forensics: emitters intermittently sent prose-/<parameter>-
 // wrapped JSON and unescaped control characters in long string values — each a parse failure that burns a
 // visible retry. Schemas are null-tolerant for optional fields; this clause attacks the malformed-JSON class.
+// The last line teaches the recovery that measured cheapest (every observed failure recovered by full
+// re-emission): the WHOLE object again, corrected — a fragment or single-field patch fails validation anew.
 const EMIT = `
-StructuredOutput discipline: its input must be ONE valid JSON object — escape every quote, newline, and backslash inside string values; no code fences, no XML/<parameter> syntax, no prose outside the JSON. Omit optional fields you have nothing for. Keep free-text values tight (one line each unless the field says otherwise) — a compact payload parses, an essay-sized one truncates and dies.`;
+StructuredOutput discipline: its input must be ONE valid JSON object — escape every quote, newline, and backslash inside string values; no code fences, no XML/<parameter> syntax, no prose outside the JSON. Omit optional fields you have nothing for. Keep free-text values tight (one line each unless the field says otherwise) — a compact payload parses, an essay-sized one truncates and dies. If the tool reports a parse/schema error, re-emit the ENTIRE corrected object in one fresh call — never a fragment or only the fixed field.`;
 
 // ── shared schema bricks (declaration order respects nesting) ──
 const RABBITHOLE         = {
@@ -1482,7 +1516,7 @@ Findings this wave (from the researchers' page-reading):
 {{findings}}{{trajectory}}{{venuesClause}}{{languageClause}}{{calibrationClause}}{{sensitivityClause}}{{chaoClause}}
 
 {{memoryClause}}{{ledgerClause}}
-Update and return \`resultSoFar\` as the run's memory: refine \`answer\`; set \`keyClaimIds\` to the ledger ids the answer rests on; record the working \`assumptions\` the answer leans on (each {claim, basis}) and revise or retire them as evidence lands; move closed parts into \`resolved\`; keep \`openGaps\` current; record any \`tensions\` (conflicting sources); {{workingClause}}; set \`confidence\`.
+Update and return \`resultSoFar\` as the run's memory: refine \`answer\`; set \`keyClaimIds\` to the ledger ids the answer rests on; record the working \`assumptions\` the answer leans on (each {claim, basis}) and revise or retire them as evidence lands; move closed parts into \`resolved\`; keep \`openGaps\` current; record any \`tensions\` (conflicting sources); {{workingClause}}; set \`confidence\`. Keep resultSoFar LEAN: \`answer\` ≤ ~{{answerCap}} chars — the detail lives in the claim ledger and is CITED via keyClaimIds, never restated in prose; resolved/openGaps/tensions are one-liners.
 Weight findings by evidence quality — funding independence, sample size, replication, stated limitations — not mere existence; let it drive both your scores and \`confidence\`.
 For each headline / load-bearing finding, originate a lane to hunt failed replications, null trials, or refutations. Corroboration is what feeds the ledger's own settled/tentative computation — you never set status yourself; originate lanes that give the machinery independent clusters to count.{{attackClause}}{{computeField}}
 
@@ -1633,6 +1667,7 @@ When the answer must be BUILT (an estimate, a synthesis with arithmetic), AUTHOR
       ? `\nCOVERAGE — statistical estimate from the claim ledger: ~${Math.round(chao.unseen)} distinct findings remain unfound (coverage ≈${Math.round(chao.coverage * 100)}%). Read it as the inventory's completeness, not a feeling.`
       : '';
   return render(BRAINER_TPL, {
+    answerCap: CONFIG.ANSWER_SOFT_CAP,
     roleClause,
     lastWaveClause,
     spawnClause,
@@ -1685,7 +1720,7 @@ Derive with rigor:
 - write and run a short script for any non-trivial arithmetic — load Bash + Write via ToolSearch if absent, run python (or node) — compute, do not estimate;
 - propagate the input uncertainties into an explicit ± error range;
 - adversarially check your own work: re-derive a second way or sanity-check against an anchor, and fix any unit / formula / arithmetic slip.{{noteClause}}{{thinkerClause}}
-Return the updated \`resultSoFar\`: fold the completed derivation into \`working\` (the verified inputs, the steps, the numbers, the ± result, the self-check), put the headline computed result in \`answer\`, and keep \`keyClaimIds\` / \`resolved\` / \`openGaps\` / \`tensions\` / \`confidence\` current — \`keyClaimIds\` are the ledger claim ids the answer rests on; the deprecated \`evidence\` array is never populated.{{FINISH}}
+Return the updated \`resultSoFar\`: fold the completed derivation into \`working\` (the verified inputs, the steps, the numbers, the ± result, the self-check), put the headline computed result in \`answer\`, and keep \`keyClaimIds\` / \`resolved\` / \`openGaps\` / \`tensions\` / \`confidence\` current — \`keyClaimIds\` are the ledger claim ids the answer rests on; the deprecated \`evidence\` array is never populated.${EMIT}{{FINISH}}
 `;
 
 const buildBrainerCompute = ({
@@ -1893,6 +1928,23 @@ try {
 // run a sub-agent with AGENT_RETRIES retries, narrowing the result to its agent's typed `*Out` shape (T); degrades to null when exhausted.
 const retryAgent = async    (prompt        , opts           )                    => {
   if (opts && opts.label) PROMPT_LOG[opts.label] = prompt;
+  // SCHEMA-SIZE PREFLIGHT (v3.2.4) — the platform's spawn classifier kills agents whose output schema
+  // serializes too large ("output schema too large to classify safely"; it murdered a v3.2.0 wave-0
+  // brainer at 5,455 bytes). The kill is silent from in here (agent → null), so name the risk BEFORE
+  // the spawn: any schema above the largest measured-safe size logs loudly.
+  if (opts && opts.schema) {
+    const schemaBytes = JSON.stringify(opts.schema).length;
+    if (schemaBytes > CONFIG.SCHEMA_WARN_BYTES)
+      log(
+        '  ⚠ ' +
+          (opts.label || '?') +
+          ' schema serializes to ' +
+          schemaBytes +
+          ' bytes (> ' +
+          CONFIG.SCHEMA_WARN_BYTES +
+          ' largest measured classifier-safe) — spawn-classifier kill risk',
+      );
+  }
   for (let attempt = 0; attempt <= CONFIG.AGENT_RETRIES; attempt++) {
     try {
       const out = (await _agent(prompt, opts))     ;
@@ -2065,7 +2117,7 @@ For EACH item, use python3 for a robust NORMALIZED substring search — never ju
 3. verdict 'pass' when the normalized quote is a substring of the normalized file text AND the quoted text, on its own, actually carries the claim (not merely nearby context).
 4. When the substring test fails and the quote contains '...': split on '...' and test each fragment of ≥15 chars as its own normalized substring, required to appear IN ORDER in the file. All found in order ⇒ the quote was ellipsis-spliced from real text: verdict 'repinned', and set newQuote to ONE contiguous span copied EXACTLY from the ORIGINAL (un-normalized) file text, at most {{quoteMax}} characters, that best carries the claim on its own (typically the strongest fragment's full sentence). Copy it from the file byte-for-byte — never compose or paraphrase it.
 5. When the substring test fails without an ellipsis: search the file for the claim's key phrases; if ONE contiguous span of at most {{quoteMax}} chars carries the claim, verdict 'repinned' with that span as newQuote (same copy-exactly rule); otherwise verdict 'fail' with a one-line note naming precisely where it diverges (e.g. "quote not in file at all", "number differs: quote says 'over one year', file says 'over 1 year'").
-Return checks: one {id, verdict, note?, newQuote?} per item — verdict is 'pass', 'fail', or 'repinned'; newQuote ONLY with 'repinned'.{{FINISH}}
+Return checks: one {id, verdict, note?, newQuote?} per item — verdict is 'pass', 'fail', or 'repinned'; newQuote ONLY with 'repinned'.${EMIT}{{FINISH}}
 `;
 
 const buildClaimAuditor = ({ items }                ) =>
@@ -2195,7 +2247,7 @@ Per-wave log:
 {{waveLog}}
 Per-wave result-so-far log (the brainer's running memory each wave):
 {{resultLog}}
-Return diagnosis (markdown).{{FINISH}}
+Return diagnosis (markdown).${EMIT}{{FINISH}}
 `;
 
 const buildDebugAnalyst = ({
@@ -2357,7 +2409,7 @@ Top open rabbit-holes left unpursued:
 {{openRabbitHoles}}{{ledgerClause}}{{sensitivityClause}}
 Return:
 - refinement.facts[] — the load-bearing facts to harden, aggressively grouped: bundle facts that share sources or stand or fall together into ONE item (each {fact, why, claimId?}); prefer a few broad groups over many atomic facts. Cover every fact that would change the answer if wrong; skip soft restatements. Where a fact corresponds to a ledger claim, set its claimId — hardening then updates that claim's record.
-- synthesiser.focus — one note on what the report must emphasize / the shape the answer should take.{{thinkerClause}}{{FINISH}}
+- synthesiser.focus — one note on what the report must emphasize / the shape the answer should take.{{thinkerClause}}${EMIT}{{FINISH}}
 `;
 
 const buildInitiator = ({
@@ -2498,7 +2550,7 @@ Judge four things, each a strict boolean:
 - needsCompute — the answer rests on a quantitative derivation it does not yet hold.{{computeClause}}
 - computeSound — any derivation already present is valid (right inputs, propagated error bars, no arithmetic slip); true when none is needed.
 Uphold a sound finish: when goalMet, verificationSound, and computeSound all hold, return them true with an empty directive. Otherwise name the single most load-bearing problem and the precise fix.
-Return goalMet, verificationSound, needsCompute, computeSound, reasoning (the load-bearing reason for the verdict), directive (the exact fix or derivation to perform; '' when satisfied), reopenRabbitHoles (1-3 {keyword, why} ONLY when a real evidence/coverage gap needs more crawling, else []), reopenDirective (ONLY with reopenRabbitHoles: the EXTRACTION directive for the reopened lane's reader — WHAT to find in the fetched pages; keep it distinct from directive, which fixes the refine/report layer), retractClaimIds (ledger claim ids whose evidence is discredited — retraction, fabrication, or misattribution surfaced during verification; [] otherwise).{{thinkerClause}}{{FINISH}}
+Return goalMet, verificationSound, needsCompute, computeSound, reasoning (the load-bearing reason for the verdict), directive (the exact fix or derivation to perform; '' when satisfied), reopenRabbitHoles (1-3 {keyword, why} ONLY when a real evidence/coverage gap needs more crawling, else []), reopenDirective (ONLY with reopenRabbitHoles: the EXTRACTION directive for the reopened lane's reader — WHAT to find in the fetched pages; keep it distinct from directive, which fixes the refine/report layer), retractClaimIds (ledger claim ids whose evidence is discredited — retraction, fabrication, or misattribution surfaced during verification; [] otherwise).{{thinkerClause}}${EMIT}{{FINISH}}
 `;
 
 const buildJudge = ({
@@ -2655,6 +2707,7 @@ const judge                   = {
 // strings are module-level consts; buildLineageClerk only assembles/substitutes the items + known keys.
 // No FINISH here: the clerk carries no tools (a plain subagent) — there is no tool-use rabbit hole to guard against.
 
+
                                                              
 
 const LINEAGE_TPL = `{{! lineageClerk — canonicalize provenance entities so JS can union-find independence clusters }}
@@ -2664,7 +2717,7 @@ New claims (\`#id source | entities\`):
 Known canonical keys already in use this run (reuse one of these EXACTLY whenever a claim's entity is the same real-world thing, however it is spelled):
 {{knownKeys}}
 For each claim return its canonical keys: lowercase, kebab-ish, prefixed by entity type — author:j-smith, funder:pfizer, dataset:gaia-dr3, venue:apj. Only emit a key for an entity actually present on that claim; skip absent/unknown entities entirely (never invent one to fill a slot).
-Return links: one {id, keys} per claim.
+Return links: one {id, keys} per claim.${EMIT}
 `;
 
 const buildLineageClerk = ({ items, knownKeys }                  ) =>
@@ -2772,7 +2825,7 @@ Span what is relevant here: primary research (papers/preprints + where they live
 Assess where this subject is most actively researched. When a non-English literature is genuinely significant for this topic — a disease studied mostly in China/Japan, a field led by Russian or Korean groups — name the high-value native venues for those languages (CNKI/Wanfang → Chinese, J-STAGE/ICHUSHI → Japanese, SciELO/LILACS → Spanish/Portuguese, eLibrary.ru → Russian, KoreaMed → Korean), each with how to query it, and set languageGuidance: one line telling the brainer which languages to cover and why. For an English-dominated topic, return only English venues and languageGuidance "".
 Where the same concept is indexed under other names (older or alternate terms, regional spellings), fold those synonyms into the venues' search guidance so English-indexed work filed under a different name is still found.
 For each venue: source (venue + how to reach/search it, e.g. "arXiv (site:arxiv.org)"), goodFor (the sub-questions it is best for — specific enough for the downstream brainer to match each research lane to the right venue), and lang (its language as an ISO-ish code like zh/ja/es/ru/ko — omit for English).
-Run WebSearch (one or more queries) to discover and verify the actual highest-value venues — confirm each exists and is authoritative (memory alone misses recent venues). Return highValueSources (6-8, lang-tagged when non-English), languageGuidance ("" when the topic is English-dominated), and a brief reasoning naming what you searched.${EMIT}{{thinkerClause}}{{researcherClause}}{{WEB_ONLY}}
+Run WebSearch (one or more queries) to discover and verify the actual highest-value venues — confirm each exists and is authoritative (memory alone misses recent venues). Return highValueSources (6-8, lang-tagged when non-English), languageGuidance ("" when the topic is English-dominated), and reasoning: 2-3 sentences max naming what you searched — the venue list itself belongs ONLY in highValueSources, never narrated into reasoning.${EMIT}{{thinkerClause}}{{researcherClause}}{{WEB_ONLY}}
 `;
 
 const buildProspector = ({
@@ -2836,7 +2889,8 @@ const SOURCES         = {
     },
     reasoning: {
       type: ['string', 'null'],
-      description: '2-3 sentences max: how you chose these venues / what you searched to confirm',
+      description:
+        '2-3 sentences max: what you searched to confirm the venues — never the venue data itself (that lives ONLY in highValueSources)',
     },
   },
   required: ['highValueSources'],
@@ -2860,7 +2914,7 @@ Fact-check and harden this load-bearing fact for the goal "{{query}}". {{net}}
 Fact: {{fact}}
 Why it is load-bearing: {{why}}{{pinnedClause}}
 First verify it adversarially: hunt counter-evidence, newer information, and the real numbers — actively look for where it is false, outdated, or imprecise. Record every counter-search query you actually run, verbatim, in queriesTried — the record of the attack matters as much as its outcome. Do not rubber-stamp a well-supported fact; do not manufacture doubt about one you cannot actually break. Then settle every doubt against the sources and return only the clean, corrected claim(s) — the right values, current and verified, dropping anything that does not hold. Cite sources inline.{{directiveClause}}
-Return report (markdown: the hardened claim(s) for this fact), queriesTried (the exact counter-search queries you ran), counterFound (true only when a real counter-example/contradiction turned up — a completed search that found nothing is false, not a lie), counterNote (what the counter-evidence was, when counterFound; '' otherwise).{{WEB_ONLY}}
+Return report (markdown: the hardened claim(s) for this fact), queriesTried (the exact counter-search queries you ran), counterFound (true only when a real counter-example/contradiction turned up — a completed search that found nothing is false, not a lie), counterNote (what the counter-evidence was, when counterFound; '' otherwise).{{WEB_ONLY}}${EMIT}
 `;
 
 const buildRefiner = ({
@@ -3208,12 +3262,12 @@ TOP GOAL: "{{query}}".
 TRAIL (top goal → … → this lane): {{trail}}.
 This lane: "{{keyword}}" (why it matters: {{why}}).
 DIRECTIVE — what to extract, with ranked fallbacks: {{note}}{{claimSection}}
-READ NOW — your assigned slice(s), from the local cache on disk (already fetched; never re-fetch). First confirm each file exists and is non-empty (e.g. wc -c PATH); then read each char window with code, e.g. python3 -c "print(open('PATH',encoding='utf-8',errors='replace').read()[OFFSET:OFFSET+LIMIT])" — if the output is truncated, read it in sub-parts (OFFSET, OFFSET+step, … to OFFSET+LIMIT) until the whole window is consumed. Use this code path for every read — the Read tool errors out above ~25k tokens on a big cache file; if you do reach for Read, page it with offset/limit, never request the whole file:
+READ NOW — your assigned slice(s), from the local cache on disk (already fetched; never re-fetch). First confirm each file exists and is non-empty (e.g. wc -c PATH); then read each char window with code, e.g. python3 -c "print(open('PATH',encoding='utf-8',errors='replace').read()[OFFSET:OFFSET+LIMIT])" — if the output is truncated, read it in sub-parts (OFFSET, OFFSET+step, … to OFFSET+LIMIT) until the whole window is consumed. NEVER open a cache file with the built-in Read tool — its token pre-check fires on the WHOLE file regardless of offset/limit (a reader passing limit:8000 still died on a 41k-token file; two turns burned), so python3 window slices are the only read path:
 {{reads}}
 HONEST READ — if an assigned file is MISSING, empty, or unreadable, do NOT invent its content: record it in deadEnds, leave the running answer unchanged (an honest gap, never a fabricated summary), and the engine will reopen the lane. A confident wrong summary is worse than an admitted empty read. If a cached file's CONTENT is corrupted — spam, a different page than its URL promises, garbled or foreign-language filler — record it in deadEnds as "CORRUPT: <cachePath> — <one line why>"; the engine quarantines that cache path and routes a fresh fetch.
 Extract everything that serves the DIRECTIVE and the top goal — facts, numbers, and for any trial or study its funding source, conflicts of interest, sample size, and key limitations. You may read images to understand the content. If the content is in another language, translate your findings to English, keeping each cited source's original-language title alongside the translation.
 Extract each load-bearing fact as a claim: {claim (one sentence), value (the number/verdict if any), quote (VERBATIM from the content, ≤${CONFIG.QUOTE_MAX_CHARS} chars — ONE CONTIGUOUS unbroken span that carries the fact; NEVER stitch fragments with an ellipsis, a spliced quote fails the mechanical audit and the claim dies), source (url/DOI), cachePath (the cache file you read it in), entities (authors/funder/dataset/venue when visible)}. A claim without its verbatim quote is worthless — no quote, no claim.{{attackClause}}{{wallClause}}
-Return: runningAnswer (extend the prior answer with what you found, kept a coherent whole — or begin it if you are reader 1); rabbitHoles (new gap searches the content raises, {keyword, why}); nextSources (up to 5 of the content's top outbound citations/links, each {ref: exact url or DOI, why, expect: support/attack/neutral, target: the claim id it bears on}); claims (each load-bearing fact pinned to a verbatim quote, this read's cachePath, its source, and entities when visible); newTerms (the community's terms of art this slice uses that we don't, {term, gloss}); surprise (one line, ONLY when this slice contradicts a KEY CLAIM above); deadEnds (any slice that was missing/empty/garbled/walled). <<{{footer}}>>${EMIT}{{researcherClause}}{{priorClause}}
+Return: runningAnswer (extend the prior answer with what you found, kept a coherent whole — or begin it if you are reader 1; ≤${CONFIG.HANDOFF_CHARS} chars, the engine clips beyond); rabbitHoles (new gap searches the content raises, {keyword, why}); nextSources (up to 5 of the content's top outbound citations/links, each {ref: exact url or DOI, why, expect: support/attack/neutral, target: the claim id it bears on — omit when none}); claims (each load-bearing fact pinned to a verbatim quote, this read's cachePath, its source, and entities when visible; keep the strongest ~${CONFIG.READER_CLAIMS_CAP}); newTerms (the community's terms of art this slice uses that we don't, {term, gloss}); surprise (one line, ONLY when this slice contradicts a KEY CLAIM above); deadEnds (any slice that was missing/empty/garbled/walled). <<{{footer}}>>${EMIT}{{researcherClause}}{{priorClause}}
 `;
 
 const readLine = (r           , i        )         =>
@@ -3304,8 +3358,7 @@ const RESEARCH         = {
   properties: {
     runningAnswer: {
       type: 'string',
-      description:
-        'the accumulated answer for this lane: merge what you found in your slice INTO the prior answer (or begin it if you are reader 1), kept a coherent whole — the next reader continues it and the brainer reads the final one',
+      description: `the accumulated answer for this lane: merge what you found in your slice INTO the prior answer (or begin it if you are reader 1), kept a coherent whole — the next reader continues it and the brainer reads the final one; ≤${CONFIG.HANDOFF_CHARS} chars (the engine clips beyond)`,
     },
     rabbitHoles: { type: 'array', items: RABBITHOLE },
     nextSources: {
@@ -3339,8 +3392,7 @@ const RESEARCH         = {
     claims: {
       type: 'array',
       items: CLAIM_ITEM_STANCE,
-      description:
-        'load-bearing facts this slice carries — each pinned to a verbatim quote; only facts the answer could rest on, never a transcript of everything read',
+      description: `load-bearing facts this slice carries — each pinned to a verbatim quote; only facts the answer could rest on, never a transcript of everything read; keep the strongest ~${CONFIG.READER_CLAIMS_CAP}`,
     },
     newTerms: {
       type: 'array',
@@ -3812,7 +3864,7 @@ Hardened facts (the corrected claims):
 {{cleanReports}}
 Top remaining open rabbit-holes (for Open questions):
 {{openRabbitHoles}}{{ledgerClause}}{{nullAttacksClause}}{{confidenceClause}}
-Write \`report\` as markdown with exactly these sections in order: (1) Prompt — the goal; (2) Research waves — per wave: what was pursued and how the answer sharpened (from the per-wave log); (3) Scout landscape; (4) Findings — the synthesized answer, {{computeLeading}}weaving each hardened fact in with its corrected value; (5) Assumptions — the working assumptions the answer leans on (from resultSoFar.assumptions), each with its basis, flagging any that is load-bearing but unconfirmed; (6) Verdict + overall confidence; (7) Plan — concrete operator actions; (8) Open questions. Also return verdict (1-3 sentences), confidence, plan (array of action strings), openQuestions (array).{{FINISH}}
+Write \`report\` as markdown with exactly these sections in order: (1) Prompt — the goal; (2) Research waves — per wave: what was pursued and how the answer sharpened (from the per-wave log); (3) Scout landscape; (4) Findings — the synthesized answer, {{computeLeading}}weaving each hardened fact in with its corrected value; (5) Assumptions — the working assumptions the answer leans on (from resultSoFar.assumptions), each with its basis, flagging any that is load-bearing but unconfirmed; (6) Verdict + overall confidence; (7) Plan — concrete operator actions; (8) Open questions. Also return verdict (1-3 sentences), confidence, plan (array of action strings), openQuestions (array).${EMIT}{{FINISH}}
 `;
 
 const buildSynthesiser = ({

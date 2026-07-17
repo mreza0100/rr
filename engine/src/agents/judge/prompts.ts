@@ -1,7 +1,7 @@
 // JUDGE prompts — the finalize-phase terminal-skeptic template + its assembly function. Template
 // strings are module-level consts; buildJudge only assembles/substitutes the compute-aware clauses.
 import { plain, render } from '../../utils/index.js';
-import { FINISH } from '../shared.js';
+import { EMIT, FINISH } from '../shared.js';
 import type { JudgeArgs } from '../../types/index.js';
 
 const JUDGE_TPL = `{{! judge — finalize-phase terminal skeptic: judges the hardened answer before the report is written }}
@@ -24,7 +24,7 @@ Judge four things, each a strict boolean:
 - needsCompute — the answer rests on a quantitative derivation it does not yet hold.{{computeClause}}
 - computeSound — any derivation already present is valid (right inputs, propagated error bars, no arithmetic slip); true when none is needed.
 Uphold a sound finish: when goalMet, verificationSound, and computeSound all hold, return them true with an empty directive. Otherwise name the single most load-bearing problem and the precise fix.
-Return goalMet, verificationSound, needsCompute, computeSound, reasoning (the load-bearing reason for the verdict), directive (the exact fix or derivation to perform; '' when satisfied), reopenRabbitHoles (1-3 {keyword, why} ONLY when a real evidence/coverage gap needs more crawling, else []), reopenDirective (ONLY with reopenRabbitHoles: the EXTRACTION directive for the reopened lane's reader — WHAT to find in the fetched pages; keep it distinct from directive, which fixes the refine/report layer), retractClaimIds (ledger claim ids whose evidence is discredited — retraction, fabrication, or misattribution surfaced during verification; [] otherwise).{{thinkerClause}}{{FINISH}}
+Return goalMet, verificationSound, needsCompute, computeSound, reasoning (the load-bearing reason for the verdict), directive (the exact fix or derivation to perform; '' when satisfied), reopenRabbitHoles (1-3 {keyword, why} ONLY when a real evidence/coverage gap needs more crawling, else []), reopenDirective (ONLY with reopenRabbitHoles: the EXTRACTION directive for the reopened lane's reader — WHAT to find in the fetched pages; keep it distinct from directive, which fixes the refine/report layer), retractClaimIds (ledger claim ids whose evidence is discredited — retraction, fabrication, or misattribution surfaced during verification; [] otherwise).{{thinkerClause}}${EMIT}{{FINISH}}
 `;
 
 export const buildJudge = ({

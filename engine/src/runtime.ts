@@ -30,6 +30,23 @@ try {
 // run a sub-agent with AGENT_RETRIES retries, narrowing the result to its agent's typed `*Out` shape (T); degrades to null when exhausted.
 export const retryAgent = async <T>(prompt: string, opts: AgentOpts): Promise<T | null> => {
   if (opts && opts.label) PROMPT_LOG[opts.label] = prompt;
+  // SCHEMA-SIZE PREFLIGHT (v3.2.4) — the platform's spawn classifier kills agents whose output schema
+  // serializes too large ("output schema too large to classify safely"; it murdered a v3.2.0 wave-0
+  // brainer at 5,455 bytes). The kill is silent from in here (agent → null), so name the risk BEFORE
+  // the spawn: any schema above the largest measured-safe size logs loudly.
+  if (opts && opts.schema) {
+    const schemaBytes = JSON.stringify(opts.schema).length;
+    if (schemaBytes > CONFIG.SCHEMA_WARN_BYTES)
+      log(
+        '  ⚠ ' +
+          (opts.label || '?') +
+          ' schema serializes to ' +
+          schemaBytes +
+          ' bytes (> ' +
+          CONFIG.SCHEMA_WARN_BYTES +
+          ' largest measured classifier-safe) — spawn-classifier kill risk',
+      );
+  }
   for (let attempt = 0; attempt <= CONFIG.AGENT_RETRIES; attempt++) {
     try {
       const out = (await _agent(prompt, opts)) as T;

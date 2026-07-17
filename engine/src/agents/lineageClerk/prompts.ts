@@ -2,6 +2,7 @@
 // strings are module-level consts; buildLineageClerk only assembles/substitutes the items + known keys.
 // No FINISH here: the clerk carries no tools (a plain subagent) — there is no tool-use rabbit hole to guard against.
 import { plain, render } from '../../utils/index.js';
+import { EMIT } from '../shared.js';
 import type { LineageClerkArgs } from '../../types/index.js';
 
 const LINEAGE_TPL = `{{! lineageClerk — canonicalize provenance entities so JS can union-find independence clusters }}
@@ -11,7 +12,7 @@ New claims (\`#id source | entities\`):
 Known canonical keys already in use this run (reuse one of these EXACTLY whenever a claim's entity is the same real-world thing, however it is spelled):
 {{knownKeys}}
 For each claim return its canonical keys: lowercase, kebab-ish, prefixed by entity type — author:j-smith, funder:pfizer, dataset:gaia-dr3, venue:apj. Only emit a key for an entity actually present on that claim; skip absent/unknown entities entirely (never invent one to fill a slot).
-Return links: one {id, keys} per claim.
+Return links: one {id, keys} per claim.${EMIT}
 `;
 
 export const buildLineageClerk = ({ items, knownKeys }: LineageClerkArgs) =>
