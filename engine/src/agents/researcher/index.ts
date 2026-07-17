@@ -30,14 +30,15 @@ export const RESEARCH: Schema = {
             description: 'an exact url or DOI the content points to, worth fetching directly',
           },
           why: { type: 'string', description: 'one line on why following it advances the goal' },
+          // expect/target are advisory (the engine seeds only ref/why into the store) — null-tolerant
+          // and un-enumed so a loose value can never fail the whole reader payload into a retry.
           expect: {
-            type: 'string',
-            enum: ['support', 'attack', 'neutral'],
+            type: ['string', 'null'],
             description:
-              'whether following it is expected to SUPPORT or ATTACK `target`, or is neutral',
+              'support | attack | neutral — whether following it is expected to SUPPORT or ATTACK `target`',
           },
           target: {
-            type: 'number',
+            type: ['number', 'string', 'null'],
             description: 'id of the existing claim this source is expected to support or attack',
           },
         },
@@ -59,7 +60,7 @@ export const RESEARCH: Schema = {
         "the community's terms of art this slice uses that the digest/query does not — empty when the slice speaks our vocabulary",
     },
     surprise: {
-      type: 'string',
+      type: ['string', 'null'],
       description:
         'one line naming the contradiction — set ONLY when this slice contradicts one of the KEY CLAIMS in the digest',
     },

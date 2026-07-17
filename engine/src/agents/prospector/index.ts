@@ -25,7 +25,7 @@ export const SOURCES: Schema = {
               'the kinds of sub-questions/rabbit-holes this venue is BEST for — specific enough for the brainer to match a research lane to it',
           },
           lang: {
-            type: 'string',
+            type: ['string', 'null'],
             description:
               "the venue's language as an ISO-ish code (zh, ja, es, pt, ru, ko, …) or language name; OMIT for English venues",
           },
@@ -34,13 +34,13 @@ export const SOURCES: Schema = {
       },
     },
     languageGuidance: {
-      type: 'string',
+      type: ['string', 'null'],
       description:
         'one line routing the brainer to the non-English literatures that matter for this topic and why; "" when the topic is English-dominated',
     },
     reasoning: {
-      type: 'string',
-      description: 'brief: how you chose these venues / what you searched to confirm',
+      type: ['string', 'null'],
+      description: '2-3 sentences max: how you chose these venues / what you searched to confirm',
     },
   },
   required: ['highValueSources'],

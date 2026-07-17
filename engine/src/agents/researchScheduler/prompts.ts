@@ -1,5 +1,6 @@
 // RESEARCH SCHEDULER prompts — the discovery template + its assembly function. Template strings are
 // module-level consts; buildResearchScheduler only assembles/substitutes the per-wave clauses.
+import { EMIT } from '../shared.js';
 import { render } from '../../utils/index.js';
 import type { ResearchSchedulerArgs, SchedulerLaneInput } from '../../types/index.js';
 
@@ -14,7 +15,7 @@ Work in TWO batched rounds — never one-source-at-a-time round-trips:
 2. SIZE — call mcp__harvester__fetch with size_only:true on EVERY candidate across all lanes in ONE parallel batch. With size_only it fetches + caches the full text and returns {size in tokens, path to the cache file, chars} and NO body. Drop any candidate that failed or came back walled/thin and pick another from the same lane.
 SANITY — after sizing, compare the batch: two DIFFERENT urls returning identical {size, chars} is a cache-poisoning signature — treat both as failed and replace them.
 For each lane, return its chosen sources as {source (the exact url or DOI), path (the cache path from size_only), size (tokens), chars}. Group them under the lane's id. A lane may return several sources; return an empty list for a lane only when every candidate failed.{{translateClause}}{{researcherClause}}{{vocabClause}}{{corruptClause}}
-Return \`lanes\`: one entry per input lane id, each {id, sources:[{source, path, size, chars}], venuesServed:[...], unsourced:[{ref, reason}]}. venuesServed is the subset of THIS lane's ASSIGNED venues (the legend entries' exact source strings) its chosen sources actually come from — [] when none. unsourced lists every ref/DOI/venue the lane's directive or brief NAMED that could not be fetched, each {ref, reason} — omit the field entirely when everything named was sourced. A lane whose PRIORITY venue yielded nothing must say so in unsourced (reason e.g. "venue unfetchable") — never silently substitute a lower tier for it. Use the sizes you measured — never invent them.
+Return \`lanes\`: one entry per input lane id, each {id, sources:[{source, path, size, chars}], venuesServed:[...], unsourced:[{ref, reason}]}. venuesServed is the subset of THIS lane's ASSIGNED venues (the legend entries' exact source strings) its chosen sources actually come from — [] when none. unsourced lists every ref/DOI/venue the lane's directive or brief NAMED that could not be fetched, each {ref, reason} — omit the field entirely when everything named was sourced. A lane whose PRIORITY venue yielded nothing must say so in unsourced (reason e.g. "venue unfetchable") — never silently substitute a lower tier for it. Use the sizes you measured — never invent them.${EMIT}
 `;
 
 // laneLine — renders one LANES entry. `legend` maps a venue's exact source string → its VENUE LEGEND number

@@ -1747,6 +1747,45 @@ describe('ResearchReport.ingestClaimSeeds — stance coercion, cachePath trust, 
     expect(fresh[1].stance).toBeUndefined();
   });
 
+  it('null-scrubs worker-emitted nulls (v3.2.3): null value/cachePath/entity fields ingest cleanly, and a null cachePath is NOT counted as a trust rejection', async () => {
+    const RR = await loadEngine({ query: 'q' }, () => null); // dead auditor/clerk — the scrub is engine-side
+    const rr = new RR();
+    const bs = mkBs();
+    const fresh = await rr.ingestClaimSeeds(
+      bs,
+      [
+        {
+          lane: 'l',
+          claims: [
+            {
+              claim: 'claim with nulled optionals',
+              quote: 'a quote long enough to carry the fact',
+              source: 's1',
+              value: null,
+              cachePath: null,
+              entities: { authors: null, funder: null, dataset: null, venue: 'NeurIPS' },
+            },
+            {
+              claim: 'claim with all-null entities',
+              quote: 'another quote long enough to carry it',
+              source: 's2',
+              entities: { funder: null, dataset: null },
+            },
+          ] as any,
+        },
+      ],
+      1,
+      'w1',
+      'Research',
+    );
+    expect(fresh[0].value).toBeUndefined();
+    expect(fresh[0].cachePath).toBeUndefined();
+    expect(fresh[0].audit).toBe('unpinned'); // no cachePath → honestly unpinned
+    expect(fresh[0].entities).toEqual({ venue: 'NeurIPS' }); // null members dropped, real one kept
+    expect(fresh[1].entities).toBeUndefined(); // nothing survived the scrub
+    expect(bs.cachePathsRejected).toBe(0); // a null cachePath is absent, not untrusted
+  });
+
   it('strips an untrusted cachePath to unpinned + counts cachePathsRejected; a harvester-signature path stays pending', async () => {
     const RR = await loadEngine({ query: 'q' }, () => null); // dead auditor — verdicts never override the initial audit value
     const rr = new RR();

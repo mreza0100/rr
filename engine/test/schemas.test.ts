@@ -137,11 +137,27 @@ describe('schemas — nesting', () => {
     expect(SCORED.properties!.kind.enum).toEqual(['gap', 'attack', 'entity', 'origin']);
     expect(SCORED.required).not.toContain('kind');
   });
-  it('RESEARCH.nextSources carries the optional expect/target stance-bearing pair', () => {
+  it('RESEARCH.nextSources expect/target are advisory + null-tolerant (v3.2.3: the engine seeds only ref/why, so a loose value must never fail the whole reader payload)', () => {
     const item = RESEARCH.properties!.nextSources.items!;
-    expect(item.properties!.expect.enum).toEqual(['support', 'attack', 'neutral']);
-    expect(item.properties!.target.type).toBe('number');
-    expect(item.required).toEqual(['ref', 'why']); // both new fields stay optional
+    expect(item.properties!.expect.enum).toBeUndefined(); // un-enumed — values live in the description
+    expect(item.properties!.expect.type).toEqual(['string', 'null']);
+    expect(item.properties!.target.type).toEqual(['number', 'string', 'null']);
+    expect(item.required).toEqual(['ref', 'why']); // both stay optional
+  });
+  it('worker-emitted optional fields are null-tolerant (v3.2.3 — a null must validate, the engine null-scrubs at ingest)', () => {
+    const ent = CLAIM_ITEM.properties!.entities;
+    expect(ent.type).toEqual(['object', 'null']);
+    expect(ent.properties!.funder.type).toEqual(['string', 'null']);
+    expect(ent.properties!.dataset.type).toEqual(['string', 'null']);
+    expect(ent.properties!.venue.type).toEqual(['string', 'null']);
+    expect(CLAIM_ITEM.properties!.value.type).toEqual(['string', 'null']);
+    expect(CLAIM_ITEM.properties!.cachePath.type).toEqual(['string', 'null']);
+    // a stance target may arrive as 'c12' prose — validates as string, ingest coerces the digit-run
+    expect(CLAIM_ITEM_STANCE.properties!.stance.properties!.target.type).toEqual([
+      'number',
+      'string',
+    ]);
+    expect(RESEARCH.properties!.surprise.type).toEqual(['string', 'null']);
   });
   it('COORD nests RESULT_SO_FAR/SCORED/LOOKUP and requires the delta fields', () => {
     expect(COORD.properties!.resultSoFar).toBe(RESULT_SO_FAR);

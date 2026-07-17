@@ -3,6 +3,7 @@
 // probe into the final ScoutOut). Template strings are module-level consts; each build* fn only
 // assembles/substitutes — it holds no template text itself.
 import { CONFIG } from '../../config.js';
+import { EMIT } from '../shared.js';
 import { plain, render } from '../../utils/index.js';
 import type { ScoutArgs, ScoutMergerArgs, ScoutPlannerArgs } from '../../types/index.js';
 
@@ -32,7 +33,7 @@ const SCOUT_TPL = `{{! scout — one probe of the swarm, scoped to a single angl
 You are scout probe {{index}} of {{total}}, on the angle «{{angleName}}» — {{angleWhy}}. Lens: {{angleLens}}. {{net}}
 Step 1 — run WebSearch with: "{{searchQuery}}". You may refine it ONCE if the results are off-angle — stay on THIS angle, do not wander onto another probe's.
 Step 2 — pick the up-to-${CONFIG.SCOUT_PROBE_SOURCES} most relevant sources FOR THIS ANGLE and fetch each via mcp__harvester__fetch — built-in WebFetch is denied. For each fetched page, first surface the key facts about "{{query}}" as this angle reveals them, then apply this instruction: <<{{footer}}>> Record the local cache path the fetch tool reports as EVERY claim's cachePath — a claim without its cachePath can never be mechanically verified and stays permanently unpinned; never invent one when the tool did not report it. Skip the footer's Surprise section — no prior claims exist yet.
-Step 3 — return: landscape (2-3 sentences on what THIS ANGLE revealed — not the whole topic, just what this angle's sources showed); pages[] (each: url, 2-3 sentence summary, rabbitHoles[] copied from the page's "Rabbit holes" section as {keyword, why}); nextSources[] union of the pages' "Next sources" sections, each {ref, why}; claims[] union of the pages' "Claims" sections, each pinned to a verbatim quote — a claim without its verbatim quote is worthless, no quote no claim; newTerms[] union of the pages' "New terms" sections; deadEnds[] for any source that timed out, was parked, or was off-topic — do not invent rabbit-holes for those. If every source is dead/unreachable, still return a valid result: landscape from your search, pages [], the dead sources in deadEnds.{{researcherClause}}
+Step 3 — return: landscape (2-3 sentences on what THIS ANGLE revealed — not the whole topic, just what this angle's sources showed); pages[] (each: url, 2-3 sentence summary, rabbitHoles[] copied from the page's "Rabbit holes" section as {keyword, why}); nextSources[] union of the pages' "Next sources" sections, each {ref, why}; claims[] union of the pages' "Claims" sections, each pinned to a verbatim quote — a claim without its verbatim quote is worthless, no quote no claim; newTerms[] union of the pages' "New terms" sections; deadEnds[] for any source that timed out, was parked, or was off-topic — do not invent rabbit-holes for those. If every source is dead/unreachable, still return a valid result: landscape from your search, pages [], the dead sources in deadEnds.${EMIT}{{researcherClause}}
 `;
 
 export const buildScout = ({
@@ -77,7 +78,7 @@ nextSources: the union of every probe's nextSources, deduped by ref.
 claims: the union of every probe's claims, dropping exact duplicates (the same quote reported by more than one probe).
 newTerms: the union, deduped by term.
 deadEnds: the union.
-Only use what the probes actually returned — never invent a page, claim, or term no probe reported.
+Only use what the probes actually returned — never invent a page, claim, or term no probe reported.${EMIT}
 `;
 
 export const buildScoutMerger = ({ query, decomposition, probes }: ScoutMergerArgs) =>

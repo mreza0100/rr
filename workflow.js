@@ -472,6 +472,12 @@ The data above is enough to decide. You may consult a tool if it genuinely helps
 // WEB_ONLY: the refine pass checks claims on the web — the local repo code is never evidence.
 const WEB_ONLY = `
 Use the web only (WebSearch / mcp__harvester__fetch) to check sources — never read local files or this repo's own code; they are not evidence.`;
+// EMIT: JSON-emission discipline for the agents whose StructuredOutput payload is large (readers, probes,
+// merger, prospector, scheduler, brainer). Run forensics: emitters intermittently sent prose-/<parameter>-
+// wrapped JSON and unescaped control characters in long string values — each a parse failure that burns a
+// visible retry. Schemas are null-tolerant for optional fields; this clause attacks the malformed-JSON class.
+const EMIT = `
+StructuredOutput discipline: its input must be ONE valid JSON object — escape every quote, newline, and backslash inside string values; no code fences, no XML/<parameter> syntax, no prose outside the JSON. Omit optional fields you have nothing for. Keep free-text values tight (one line each unless the field says otherwise) — a compact payload parses, an essay-sized one truncates and dies.`;
 
 // ── shared schema bricks (declaration order respects nesting) ──
 const RABBITHOLE         = {
@@ -510,24 +516,31 @@ const CLAIM_ITEM         = {
   type: 'object',
   properties: {
     claim: { type: 'string', description: 'one load-bearing fact, in one line' },
-    value: { type: 'string', description: 'the number/quantity, when the claim is quantitative' },
+    value: {
+      type: ['string', 'null'],
+      description: 'the number/quantity, when the claim is quantitative',
+    },
     quote: {
       type: 'string',
       description: `a VERBATIM span, copied exactly and CONTIGUOUSLY from the source, of at most ${CONFIG.QUOTE_MAX_CHARS} characters that carries the claim — one unbroken span, NEVER separate fragments stitched with an ellipsis (a spliced quote fails the mechanical audit and the claim dies)`,
     },
     source: { type: 'string', description: 'the url or DOI this quote is from' },
+    // every optional provenance field is null-tolerant (run forensics: haiku readers emit null for an
+    // entity the page does not show, and a hard 'must be string' fails the whole payload) — the engine
+    // null-scrubs at ingest (utils scrubEntities), so tolerance here costs nothing downstream.
     entities: {
-      type: 'object',
+      type: ['object', 'null'],
       properties: {
-        authors: { type: 'array', items: { type: 'string' } },
-        funder: { type: 'string' },
-        dataset: { type: 'string' },
-        venue: { type: 'string' },
+        authors: { type: ['array', 'null'], items: { type: ['string', 'null'] } },
+        funder: { type: ['string', 'null'] },
+        dataset: { type: ['string', 'null'] },
+        venue: { type: ['string', 'null'] },
       },
-      description: "the source's provenance — only what is visibly stated, never inferred",
+      description:
+        "the source's provenance — only what is visibly stated, never inferred; omit what is absent",
     },
     cachePath: {
-      type: 'string',
+      type: ['string', 'null'],
       description:
         'local cache file path this quote can be verified against, ONLY as reported by the fetch tool — never invented',
     },
@@ -539,16 +552,18 @@ const CLAIM_ITEM_STANCE         = {
   properties: {
     ...CLAIM_ITEM.properties,
     stance: {
-      type: 'object',
+      type: ['object', 'null'],
       properties: {
         target: {
-          type: 'number',
+          // number preferred; a string ('c12') validates and the engine's ingest coercion pulls the
+          // digit-run out — a hard number-only type made every prose target a schema-mismatch retry.
+          type: ['number', 'string'],
           description:
-            "the NUMBER from the existing KEY CLAIM's c-id in the digest (e.g. c12 → target: 12) this claim bears on",
+            "the NUMBER from the existing KEY CLAIM's c-id in the digest (e.g. c12 → target: 12) this claim bears on — a bare number, never prose",
         },
         kind: { type: 'string', enum: ['supports', 'attacks'] },
       },
-      required: ['target', 'kind'], // a stance without a numeric target is unlinkable — run forensics: prose targets were silently dropped and the attack graph never formed
+      required: ['target', 'kind'], // a stance without a target is unlinkable — run forensics: prose targets were silently dropped and the attack graph never formed
       description:
         'ONLY when this claim directly bears on one of the KEY CLAIMS listed in the digest',
     },
@@ -558,7 +573,7 @@ const CLAIM_ITEM_STANCE         = {
 // TERM_SEED = one community term of art a reader/scout surfaces (pre-ledger — `uses` is engine-owned).
 const TERM_SEED         = {
   type: 'object',
-  properties: { term: { type: 'string' }, gloss: { type: 'string' } },
+  properties: { term: { type: 'string' }, gloss: { type: ['string', 'null'] } },
   required: ['term'],
 };
 const PAGE         = {
@@ -820,6 +835,28 @@ function scrubArtifacts(s        )         {
   if (lastLt === -1 || out.slice(lastLt).includes('>')) return out;
   const frag = out.slice(lastLt + 1).replace(/^\//, ''); // a closing-tag fragment drops its leading '/' first
   return isArtifactTagPrefix(frag) ? out.slice(0, lastLt) : out;
+}
+
+// scrubEntities — null-scrub a claim's provenance as emitted by a worker model. The entity schema is
+// null-tolerant (a hard 'must be string' on funder/dataset failed whole reader payloads into retries), so
+// ingest normalizes here: keep only non-empty strings, drop null/junk, undefined when nothing survives.
+function scrubEntities(e         )                            {
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return undefined;
+  const raw = e                           ;
+  const out                = {};
+  const str = (v         )                     =>
+    typeof v === 'string' && v.trim() ? v : undefined;
+  const authors = Array.isArray(raw.authors)
+    ? (raw.authors.filter((a) => typeof a === 'string' && a.trim())            )
+    : [];
+  if (authors.length) out.authors = authors;
+  const funder = str(raw.funder);
+  if (funder) out.funder = funder;
+  const dataset = str(raw.dataset);
+  if (dataset) out.dataset = dataset;
+  const venue = str(raw.venue);
+  if (venue) out.venue = venue;
+  return Object.keys(out).length ? out : undefined;
 }
 
 // domainOf — the lineage signal inside a source ref: the host without www, or a DOI's registrant
@@ -1455,7 +1492,7 @@ Then return deltas against the store:
 (3) \`lookupNext\`: the rabbit-holes to research now — each either {id} (a stored one) or {keyword, why, score{{scoreFields}}} (one you originate and pursue now). None may be already pursued.{{assignClause}} For EVERY lookupNext lane author a \`note\`: the research directive — WHAT to find plus ranked fallbacks ("if not X, focus on Y; give both if available"). It steers both the scheduler's source pick and the reader's extraction; keep it distinct from \`why\` (your store/scoring rationale). A lane's method must be executable by a READ-ONLY reader over fetched pages (attack lanes alone get a bounded live search) — never assign per-item tracker probes, review-cadence checks, or interactive verification; reshape such a method into fetchable-source questions. Set refetch:true on a lane whose cached copy was reported CORRUPT so the scheduler bypasses the poisoned cache.
 (4) \`rename\`: [{id, keyword, why?}] — relabel a rabbit-hole, keeping its id + history (optional).
 (5) \`drop\`: [id, …] — eliminate a dead/duplicate rabbit-hole; a merge = drop the duplicate and rescore the survivor (optional).{{spawnClause}}
-(6) \`stop\`: {done, reason}. {{stop}}{{goalClause}}{{voiClause}}{{validatorClause}}{{unsourcedClause}}{{FINISH}}
+(6) \`stop\`: {done, reason}. {{stop}}{{goalClause}}{{voiClause}}{{validatorClause}}{{unsourcedClause}}${EMIT}{{FINISH}}
 `;
 
 const buildBrainer = ({
@@ -2735,7 +2772,7 @@ Span what is relevant here: primary research (papers/preprints + where they live
 Assess where this subject is most actively researched. When a non-English literature is genuinely significant for this topic — a disease studied mostly in China/Japan, a field led by Russian or Korean groups — name the high-value native venues for those languages (CNKI/Wanfang → Chinese, J-STAGE/ICHUSHI → Japanese, SciELO/LILACS → Spanish/Portuguese, eLibrary.ru → Russian, KoreaMed → Korean), each with how to query it, and set languageGuidance: one line telling the brainer which languages to cover and why. For an English-dominated topic, return only English venues and languageGuidance "".
 Where the same concept is indexed under other names (older or alternate terms, regional spellings), fold those synonyms into the venues' search guidance so English-indexed work filed under a different name is still found.
 For each venue: source (venue + how to reach/search it, e.g. "arXiv (site:arxiv.org)"), goodFor (the sub-questions it is best for — specific enough for the downstream brainer to match each research lane to the right venue), and lang (its language as an ISO-ish code like zh/ja/es/ru/ko — omit for English).
-Run WebSearch (one or more queries) to discover and verify the actual highest-value venues — confirm each exists and is authoritative (memory alone misses recent venues). Return highValueSources (6-8, lang-tagged when non-English), languageGuidance ("" when the topic is English-dominated), and a brief reasoning naming what you searched.{{thinkerClause}}{{researcherClause}}{{WEB_ONLY}}
+Run WebSearch (one or more queries) to discover and verify the actual highest-value venues — confirm each exists and is authoritative (memory alone misses recent venues). Return highValueSources (6-8, lang-tagged when non-English), languageGuidance ("" when the topic is English-dominated), and a brief reasoning naming what you searched.${EMIT}{{thinkerClause}}{{researcherClause}}{{WEB_ONLY}}
 `;
 
 const buildProspector = ({
@@ -2784,7 +2821,7 @@ const SOURCES         = {
               'the kinds of sub-questions/rabbit-holes this venue is BEST for — specific enough for the brainer to match a research lane to it',
           },
           lang: {
-            type: 'string',
+            type: ['string', 'null'],
             description:
               "the venue's language as an ISO-ish code (zh, ja, es, pt, ru, ko, …) or language name; OMIT for English venues",
           },
@@ -2793,13 +2830,13 @@ const SOURCES         = {
       },
     },
     languageGuidance: {
-      type: 'string',
+      type: ['string', 'null'],
       description:
         'one line routing the brainer to the non-English literatures that matter for this topic and why; "" when the topic is English-dominated',
     },
     reasoning: {
-      type: 'string',
-      description: 'brief: how you chose these venues / what you searched to confirm',
+      type: ['string', 'null'],
+      description: '2-3 sentences max: how you chose these venues / what you searched to confirm',
     },
   },
   required: ['highValueSources'],
@@ -2971,6 +3008,7 @@ async function runRerunner(
 // RESEARCH SCHEDULER prompts — the discovery template + its assembly function. Template strings are
 // module-level consts; buildResearchScheduler only assembles/substitutes the per-wave clauses.
 
+
                                                                                       
 
 const SCHEDULER_TPL = `{{! researchScheduler — discovery: per lane, find + size the highest-value sources, grouped per lane }}
@@ -2984,7 +3022,7 @@ Work in TWO batched rounds — never one-source-at-a-time round-trips:
 2. SIZE — call mcp__harvester__fetch with size_only:true on EVERY candidate across all lanes in ONE parallel batch. With size_only it fetches + caches the full text and returns {size in tokens, path to the cache file, chars} and NO body. Drop any candidate that failed or came back walled/thin and pick another from the same lane.
 SANITY — after sizing, compare the batch: two DIFFERENT urls returning identical {size, chars} is a cache-poisoning signature — treat both as failed and replace them.
 For each lane, return its chosen sources as {source (the exact url or DOI), path (the cache path from size_only), size (tokens), chars}. Group them under the lane's id. A lane may return several sources; return an empty list for a lane only when every candidate failed.{{translateClause}}{{researcherClause}}{{vocabClause}}{{corruptClause}}
-Return \`lanes\`: one entry per input lane id, each {id, sources:[{source, path, size, chars}], venuesServed:[...], unsourced:[{ref, reason}]}. venuesServed is the subset of THIS lane's ASSIGNED venues (the legend entries' exact source strings) its chosen sources actually come from — [] when none. unsourced lists every ref/DOI/venue the lane's directive or brief NAMED that could not be fetched, each {ref, reason} — omit the field entirely when everything named was sourced. A lane whose PRIORITY venue yielded nothing must say so in unsourced (reason e.g. "venue unfetchable") — never silently substitute a lower tier for it. Use the sizes you measured — never invent them.
+Return \`lanes\`: one entry per input lane id, each {id, sources:[{source, path, size, chars}], venuesServed:[...], unsourced:[{ref, reason}]}. venuesServed is the subset of THIS lane's ASSIGNED venues (the legend entries' exact source strings) its chosen sources actually come from — [] when none. unsourced lists every ref/DOI/venue the lane's directive or brief NAMED that could not be fetched, each {ref, reason} — omit the field entirely when everything named was sourced. A lane whose PRIORITY venue yielded nothing must say so in unsourced (reason e.g. "venue unfetchable") — never silently substitute a lower tier for it. Use the sizes you measured — never invent them.${EMIT}
 `;
 
 // laneLine — renders one LANES entry. `legend` maps a venue's exact source string → its VENUE LEGEND number
@@ -3161,6 +3199,7 @@ const researchScheduler                               = {
 // handoff LAST; "reader i of N" stated once.
 
 
+
                                                                       
 
 const RESEARCHER_TPL = `{{! researcher — a lane reader: reads its assigned cache slice(s) from disk via code, then digests into the running answer }}
@@ -3169,12 +3208,12 @@ TOP GOAL: "{{query}}".
 TRAIL (top goal → … → this lane): {{trail}}.
 This lane: "{{keyword}}" (why it matters: {{why}}).
 DIRECTIVE — what to extract, with ranked fallbacks: {{note}}{{claimSection}}
-READ NOW — your assigned slice(s), from the local cache on disk (already fetched; never re-fetch). First confirm each file exists and is non-empty (e.g. wc -c PATH); then read each char window with code, e.g. python3 -c "print(open('PATH',encoding='utf-8',errors='replace').read()[OFFSET:OFFSET+LIMIT])" — if the output is truncated, read it in sub-parts (OFFSET, OFFSET+step, … to OFFSET+LIMIT) until the whole window is consumed:
+READ NOW — your assigned slice(s), from the local cache on disk (already fetched; never re-fetch). First confirm each file exists and is non-empty (e.g. wc -c PATH); then read each char window with code, e.g. python3 -c "print(open('PATH',encoding='utf-8',errors='replace').read()[OFFSET:OFFSET+LIMIT])" — if the output is truncated, read it in sub-parts (OFFSET, OFFSET+step, … to OFFSET+LIMIT) until the whole window is consumed. Use this code path for every read — the Read tool errors out above ~25k tokens on a big cache file; if you do reach for Read, page it with offset/limit, never request the whole file:
 {{reads}}
 HONEST READ — if an assigned file is MISSING, empty, or unreadable, do NOT invent its content: record it in deadEnds, leave the running answer unchanged (an honest gap, never a fabricated summary), and the engine will reopen the lane. A confident wrong summary is worse than an admitted empty read. If a cached file's CONTENT is corrupted — spam, a different page than its URL promises, garbled or foreign-language filler — record it in deadEnds as "CORRUPT: <cachePath> — <one line why>"; the engine quarantines that cache path and routes a fresh fetch.
 Extract everything that serves the DIRECTIVE and the top goal — facts, numbers, and for any trial or study its funding source, conflicts of interest, sample size, and key limitations. You may read images to understand the content. If the content is in another language, translate your findings to English, keeping each cited source's original-language title alongside the translation.
 Extract each load-bearing fact as a claim: {claim (one sentence), value (the number/verdict if any), quote (VERBATIM from the content, ≤${CONFIG.QUOTE_MAX_CHARS} chars — ONE CONTIGUOUS unbroken span that carries the fact; NEVER stitch fragments with an ellipsis, a spliced quote fails the mechanical audit and the claim dies), source (url/DOI), cachePath (the cache file you read it in), entities (authors/funder/dataset/venue when visible)}. A claim without its verbatim quote is worthless — no quote, no claim.{{attackClause}}{{wallClause}}
-Return: runningAnswer (extend the prior answer with what you found, kept a coherent whole — or begin it if you are reader 1); rabbitHoles (new gap searches the content raises, {keyword, why}); nextSources (up to 5 of the content's top outbound citations/links, each {ref: exact url or DOI, why, expect: support/attack/neutral, target: the claim id it bears on}); claims (each load-bearing fact pinned to a verbatim quote, this read's cachePath, its source, and entities when visible); newTerms (the community's terms of art this slice uses that we don't, {term, gloss}); surprise (one line, ONLY when this slice contradicts a KEY CLAIM above); deadEnds (any slice that was missing/empty/garbled/walled). <<{{footer}}>>{{researcherClause}}{{priorClause}}
+Return: runningAnswer (extend the prior answer with what you found, kept a coherent whole — or begin it if you are reader 1); rabbitHoles (new gap searches the content raises, {keyword, why}); nextSources (up to 5 of the content's top outbound citations/links, each {ref: exact url or DOI, why, expect: support/attack/neutral, target: the claim id it bears on}); claims (each load-bearing fact pinned to a verbatim quote, this read's cachePath, its source, and entities when visible); newTerms (the community's terms of art this slice uses that we don't, {term, gloss}); surprise (one line, ONLY when this slice contradicts a KEY CLAIM above); deadEnds (any slice that was missing/empty/garbled/walled). <<{{footer}}>>${EMIT}{{researcherClause}}{{priorClause}}
 `;
 
 const readLine = (r           , i        )         =>
@@ -3280,14 +3319,15 @@ const RESEARCH         = {
             description: 'an exact url or DOI the content points to, worth fetching directly',
           },
           why: { type: 'string', description: 'one line on why following it advances the goal' },
+          // expect/target are advisory (the engine seeds only ref/why into the store) — null-tolerant
+          // and un-enumed so a loose value can never fail the whole reader payload into a retry.
           expect: {
-            type: 'string',
-            enum: ['support', 'attack', 'neutral'],
+            type: ['string', 'null'],
             description:
-              'whether following it is expected to SUPPORT or ATTACK `target`, or is neutral',
+              'support | attack | neutral — whether following it is expected to SUPPORT or ATTACK `target`',
           },
           target: {
-            type: 'number',
+            type: ['number', 'string', 'null'],
             description: 'id of the existing claim this source is expected to support or attack',
           },
         },
@@ -3309,7 +3349,7 @@ const RESEARCH         = {
         "the community's terms of art this slice uses that the digest/query does not — empty when the slice speaks our vocabulary",
     },
     surprise: {
-      type: 'string',
+      type: ['string', 'null'],
       description:
         'one line naming the contradiction — set ONLY when this slice contradicts one of the KEY CLAIMS in the digest',
     },
@@ -3334,6 +3374,7 @@ const researcher                        = {
 // decomposes the query, proposes search angles) → scout (one PROBE per angle) → scoutMerger (folds every
 // probe into the final ScoutOut). Template strings are module-level consts; each build* fn only
 // assembles/substitutes — it holds no template text itself.
+
 
 
                                                                                          
@@ -3364,7 +3405,7 @@ const SCOUT_TPL = `{{! scout — one probe of the swarm, scoped to a single angl
 You are scout probe {{index}} of {{total}}, on the angle «{{angleName}}» — {{angleWhy}}. Lens: {{angleLens}}. {{net}}
 Step 1 — run WebSearch with: "{{searchQuery}}". You may refine it ONCE if the results are off-angle — stay on THIS angle, do not wander onto another probe's.
 Step 2 — pick the up-to-${CONFIG.SCOUT_PROBE_SOURCES} most relevant sources FOR THIS ANGLE and fetch each via mcp__harvester__fetch — built-in WebFetch is denied. For each fetched page, first surface the key facts about "{{query}}" as this angle reveals them, then apply this instruction: <<{{footer}}>> Record the local cache path the fetch tool reports as EVERY claim's cachePath — a claim without its cachePath can never be mechanically verified and stays permanently unpinned; never invent one when the tool did not report it. Skip the footer's Surprise section — no prior claims exist yet.
-Step 3 — return: landscape (2-3 sentences on what THIS ANGLE revealed — not the whole topic, just what this angle's sources showed); pages[] (each: url, 2-3 sentence summary, rabbitHoles[] copied from the page's "Rabbit holes" section as {keyword, why}); nextSources[] union of the pages' "Next sources" sections, each {ref, why}; claims[] union of the pages' "Claims" sections, each pinned to a verbatim quote — a claim without its verbatim quote is worthless, no quote no claim; newTerms[] union of the pages' "New terms" sections; deadEnds[] for any source that timed out, was parked, or was off-topic — do not invent rabbit-holes for those. If every source is dead/unreachable, still return a valid result: landscape from your search, pages [], the dead sources in deadEnds.{{researcherClause}}
+Step 3 — return: landscape (2-3 sentences on what THIS ANGLE revealed — not the whole topic, just what this angle's sources showed); pages[] (each: url, 2-3 sentence summary, rabbitHoles[] copied from the page's "Rabbit holes" section as {keyword, why}); nextSources[] union of the pages' "Next sources" sections, each {ref, why}; claims[] union of the pages' "Claims" sections, each pinned to a verbatim quote — a claim without its verbatim quote is worthless, no quote no claim; newTerms[] union of the pages' "New terms" sections; deadEnds[] for any source that timed out, was parked, or was off-topic — do not invent rabbit-holes for those. If every source is dead/unreachable, still return a valid result: landscape from your search, pages [], the dead sources in deadEnds.${EMIT}{{researcherClause}}
 `;
 
 const buildScout = ({
@@ -3409,7 +3450,7 @@ nextSources: the union of every probe's nextSources, deduped by ref.
 claims: the union of every probe's claims, dropping exact duplicates (the same quote reported by more than one probe).
 newTerms: the union, deduped by term.
 deadEnds: the union.
-Only use what the probes actually returned — never invent a page, claim, or term no probe reported.
+Only use what the probes actually returned — never invent a page, claim, or term no probe reported.${EMIT}
 `;
 
 const buildScoutMerger = ({ query, decomposition, probes }                 ) =>
@@ -5218,8 +5259,9 @@ class ResearchReport {
         // tool-result paths, non-reproducible provenance an archiver/persist pass can never follow later.
         // Only a path the scheduler actually returned this run (bs.knownCachePaths), or one matching the
         // harvester's own cache-directory signature (/.fetch/), is trusted — everything else is honestly
-        // unpinned rather than silently kept.
-        let cachePath = c.cachePath;
+        // unpinned rather than silently kept. A null/non-string cachePath (the null-tolerant schema) is
+        // simply absent — unpinned without counting as a trust rejection.
+        let cachePath = typeof c.cachePath === 'string' && c.cachePath ? c.cachePath : undefined;
         if (cachePath && !bs.knownCachePaths.has(cachePath) && !/\/\.fetch\//.test(cachePath)) {
           cachePath = undefined;
           bs.cachePathsRejected++;
@@ -5227,11 +5269,11 @@ class ResearchReport {
         const claim        = {
           id: bs.nextClaimId++,
           claim: c.claim,
-          value: c.value,
+          value: typeof c.value === 'string' && c.value ? c.value : undefined,
           quote,
           source: c.source,
           cachePath,
-          entities: c.entities,
+          entities: scrubEntities(c.entities),
           cluster: -1, // resolved below (applyLineage) — never left unset
           audit: cachePath ? 'pending' : 'unpinned',
           status: 'tentative',

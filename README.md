@@ -1,6 +1,6 @@
 # RR — Research and Report
 
-**Version:** 3.2.1 · **License:** MIT · **Repo:** [github.com/mreza0100/rr](https://github.com/mreza0100/rr)
+**Version:** 3.2.3 · **License:** MIT · **Repo:** [github.com/mreza0100/rr](https://github.com/mreza0100/rr)
 
 A Claude Code skill that runs a deterministic background **Workflow** to research a question — an unbounded, best-first, brainer-steered web crawl that **derives** the answer and writes a cited, multi-section report with a verdict, stated assumptions, and a plan.
 

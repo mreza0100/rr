@@ -11,6 +11,7 @@ import {
   resultSoFarMd,
   laneCount,
   scrubArtifacts,
+  scrubEntities,
   claimsMd,
   claimStatus,
   lineageKeyOf,
@@ -222,8 +223,9 @@ export class ResearchReport {
         // tool-result paths, non-reproducible provenance an archiver/persist pass can never follow later.
         // Only a path the scheduler actually returned this run (bs.knownCachePaths), or one matching the
         // harvester's own cache-directory signature (/.fetch/), is trusted — everything else is honestly
-        // unpinned rather than silently kept.
-        let cachePath = c.cachePath;
+        // unpinned rather than silently kept. A null/non-string cachePath (the null-tolerant schema) is
+        // simply absent — unpinned without counting as a trust rejection.
+        let cachePath = typeof c.cachePath === 'string' && c.cachePath ? c.cachePath : undefined;
         if (cachePath && !bs.knownCachePaths.has(cachePath) && !/\/\.fetch\//.test(cachePath)) {
           cachePath = undefined;
           bs.cachePathsRejected++;
@@ -231,11 +233,11 @@ export class ResearchReport {
         const claim: Claim = {
           id: bs.nextClaimId++,
           claim: c.claim,
-          value: c.value,
+          value: typeof c.value === 'string' && c.value ? c.value : undefined,
           quote,
           source: c.source,
           cachePath,
-          entities: c.entities,
+          entities: scrubEntities(c.entities),
           cluster: -1, // resolved below (applyLineage) — never left unset
           audit: cachePath ? 'pending' : 'unpinned',
           status: 'tentative',

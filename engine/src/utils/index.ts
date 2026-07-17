@@ -164,6 +164,28 @@ export function scrubArtifacts(s: string): string {
   return isArtifactTagPrefix(frag) ? out.slice(0, lastLt) : out;
 }
 
+// scrubEntities — null-scrub a claim's provenance as emitted by a worker model. The entity schema is
+// null-tolerant (a hard 'must be string' on funder/dataset failed whole reader payloads into retries), so
+// ingest normalizes here: keep only non-empty strings, drop null/junk, undefined when nothing survives.
+export function scrubEntities(e: unknown): ClaimEntities | undefined {
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return undefined;
+  const raw = e as Record<string, unknown>;
+  const out: ClaimEntities = {};
+  const str = (v: unknown): string | undefined =>
+    typeof v === 'string' && v.trim() ? v : undefined;
+  const authors = Array.isArray(raw.authors)
+    ? (raw.authors.filter((a) => typeof a === 'string' && a.trim()) as string[])
+    : [];
+  if (authors.length) out.authors = authors;
+  const funder = str(raw.funder);
+  if (funder) out.funder = funder;
+  const dataset = str(raw.dataset);
+  if (dataset) out.dataset = dataset;
+  const venue = str(raw.venue);
+  if (venue) out.venue = venue;
+  return Object.keys(out).length ? out : undefined;
+}
+
 // domainOf — the lineage signal inside a source ref: the host without www, or a DOI's registrant
 // prefix ('10.x' = the publisher, per the normRef conventions). '' when nothing resolvable.
 export const domainOf = (url: string | null | undefined): string => normRef(url).split('/')[0];

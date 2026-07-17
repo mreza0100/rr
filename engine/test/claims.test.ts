@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   domainOf,
   lineageKeyOf,
+  scrubEntities,
   claimStatus,
   computedConfidence,
   minConfidence,
@@ -54,6 +55,25 @@ describe('domainOf', () => {
   it('returns "" when nothing resolvable', () => {
     expect(domainOf('')).toBe('');
     expect(domainOf(null)).toBe('');
+  });
+});
+
+describe('scrubEntities — null-scrub of worker-emitted provenance (v3.2.3 null-tolerant schemas)', () => {
+  it('keeps only non-empty strings; drops null/empty/junk members', () => {
+    expect(
+      scrubEntities({ authors: ['A. Author', null, ''], funder: null, dataset: '  ', venue: 'ICML' }),
+    ).toEqual({ authors: ['A. Author'], venue: 'ICML' });
+  });
+  it('returns undefined when nothing survives — or when the input is null/junk', () => {
+    expect(scrubEntities({ funder: null, dataset: null })).toBeUndefined();
+    expect(scrubEntities(null)).toBeUndefined();
+    expect(scrubEntities(undefined)).toBeUndefined();
+    expect(scrubEntities('not an object')).toBeUndefined();
+    expect(scrubEntities(['array'])).toBeUndefined();
+  });
+  it('passes a fully-populated entities object through intact', () => {
+    const e = { authors: ['X', 'Y'], funder: 'NIH', dataset: 'MIMIC-IV', venue: 'Nature' };
+    expect(scrubEntities(e)).toEqual(e);
   });
 });
 

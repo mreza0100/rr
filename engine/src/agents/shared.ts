@@ -26,6 +26,12 @@ The data above is enough to decide. You may consult a tool if it genuinely helps
 // WEB_ONLY: the refine pass checks claims on the web — the local repo code is never evidence.
 export const WEB_ONLY = `
 Use the web only (WebSearch / mcp__harvester__fetch) to check sources — never read local files or this repo's own code; they are not evidence.`;
+// EMIT: JSON-emission discipline for the agents whose StructuredOutput payload is large (readers, probes,
+// merger, prospector, scheduler, brainer). Run forensics: emitters intermittently sent prose-/<parameter>-
+// wrapped JSON and unescaped control characters in long string values — each a parse failure that burns a
+// visible retry. Schemas are null-tolerant for optional fields; this clause attacks the malformed-JSON class.
+export const EMIT = `
+StructuredOutput discipline: its input must be ONE valid JSON object — escape every quote, newline, and backslash inside string values; no code fences, no XML/<parameter> syntax, no prose outside the JSON. Omit optional fields you have nothing for. Keep free-text values tight (one line each unless the field says otherwise) — a compact payload parses, an essay-sized one truncates and dies.`;
 
 // ── shared schema bricks (declaration order respects nesting) ──
 export const RABBITHOLE: Schema = {
@@ -64,24 +70,31 @@ export const CLAIM_ITEM: Schema = {
   type: 'object',
   properties: {
     claim: { type: 'string', description: 'one load-bearing fact, in one line' },
-    value: { type: 'string', description: 'the number/quantity, when the claim is quantitative' },
+    value: {
+      type: ['string', 'null'],
+      description: 'the number/quantity, when the claim is quantitative',
+    },
     quote: {
       type: 'string',
       description: `a VERBATIM span, copied exactly and CONTIGUOUSLY from the source, of at most ${CONFIG.QUOTE_MAX_CHARS} characters that carries the claim — one unbroken span, NEVER separate fragments stitched with an ellipsis (a spliced quote fails the mechanical audit and the claim dies)`,
     },
     source: { type: 'string', description: 'the url or DOI this quote is from' },
+    // every optional provenance field is null-tolerant (run forensics: haiku readers emit null for an
+    // entity the page does not show, and a hard 'must be string' fails the whole payload) — the engine
+    // null-scrubs at ingest (utils scrubEntities), so tolerance here costs nothing downstream.
     entities: {
-      type: 'object',
+      type: ['object', 'null'],
       properties: {
-        authors: { type: 'array', items: { type: 'string' } },
-        funder: { type: 'string' },
-        dataset: { type: 'string' },
-        venue: { type: 'string' },
+        authors: { type: ['array', 'null'], items: { type: ['string', 'null'] } },
+        funder: { type: ['string', 'null'] },
+        dataset: { type: ['string', 'null'] },
+        venue: { type: ['string', 'null'] },
       },
-      description: "the source's provenance — only what is visibly stated, never inferred",
+      description:
+        "the source's provenance — only what is visibly stated, never inferred; omit what is absent",
     },
     cachePath: {
-      type: 'string',
+      type: ['string', 'null'],
       description:
         'local cache file path this quote can be verified against, ONLY as reported by the fetch tool — never invented',
     },
@@ -93,16 +106,18 @@ export const CLAIM_ITEM_STANCE: Schema = {
   properties: {
     ...CLAIM_ITEM.properties,
     stance: {
-      type: 'object',
+      type: ['object', 'null'],
       properties: {
         target: {
-          type: 'number',
+          // number preferred; a string ('c12') validates and the engine's ingest coercion pulls the
+          // digit-run out — a hard number-only type made every prose target a schema-mismatch retry.
+          type: ['number', 'string'],
           description:
-            "the NUMBER from the existing KEY CLAIM's c-id in the digest (e.g. c12 → target: 12) this claim bears on",
+            "the NUMBER from the existing KEY CLAIM's c-id in the digest (e.g. c12 → target: 12) this claim bears on — a bare number, never prose",
         },
         kind: { type: 'string', enum: ['supports', 'attacks'] },
       },
-      required: ['target', 'kind'], // a stance without a numeric target is unlinkable — run forensics: prose targets were silently dropped and the attack graph never formed
+      required: ['target', 'kind'], // a stance without a target is unlinkable — run forensics: prose targets were silently dropped and the attack graph never formed
       description:
         'ONLY when this claim directly bears on one of the KEY CLAIMS listed in the digest',
     },
@@ -112,7 +127,7 @@ export const CLAIM_ITEM_STANCE: Schema = {
 // TERM_SEED = one community term of art a reader/scout surfaces (pre-ledger — `uses` is engine-owned).
 export const TERM_SEED: Schema = {
   type: 'object',
-  properties: { term: { type: 'string' }, gloss: { type: 'string' } },
+  properties: { term: { type: 'string' }, gloss: { type: ['string', 'null'] } },
   required: ['term'],
 };
 export const PAGE: Schema = {
