@@ -61,7 +61,14 @@ export const scoutPlanner: Agent<ScoutPlannerArgs> = {
 export const SCOUT: Schema = {
   type: 'object',
   properties: {
-    landscape: { type: 'string' },
+    landscape: {
+      type: 'string',
+      // shared by probe (2-3 sentences) and merger (one paragraph) — the description binds the
+      // INVARIANT both share: run forensics caught a probe packing its entire return in here,
+      // omitting every other required key, and burning five identical schema-error retries.
+      description:
+        'the summary narrative ONLY — facts belong in claims[] and page detail in pages[]; never pack the whole return into this field',
+    },
     pages: { type: 'array', items: PAGE },
     deadEnds: { type: 'array', items: { type: 'string' } },
     claims: {

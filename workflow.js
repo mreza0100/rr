@@ -475,9 +475,11 @@ Use the web only (WebSearch / mcp__harvester__fetch) to check sources — never 
 // EMIT: JSON-emission discipline for the agents whose StructuredOutput payload is large (readers, probes,
 // merger, prospector, scheduler, brainer). Run forensics: emitters intermittently sent prose-/<parameter>-
 // wrapped JSON and unescaped control characters in long string values — each a parse failure that burns a
-// visible retry. Schemas are null-tolerant for optional fields; this clause attacks the malformed-JSON class.
+// visible retry — and one probe collapsed its whole return into the first prose field, omitted every other
+// required key, and re-sent that same shape through five schema-error retries. Schemas are null-tolerant
+// for optional fields; this clause attacks the malformed-JSON and required-field-collapse classes.
 const EMIT = `
-StructuredOutput discipline: its input must be ONE valid JSON object — escape every quote, newline, and backslash inside string values; no code fences, no XML/<parameter> syntax, no prose outside the JSON. Omit optional fields you have nothing for. Keep free-text values tight (one line each unless the field says otherwise) — a compact payload parses, an essay-sized one truncates and dies.`;
+StructuredOutput discipline: its input must be ONE valid JSON object — escape every quote, newline, and backslash inside string values; no code fences, no XML/<parameter> syntax, no prose outside the JSON. Emit EVERY required field in that one call — a required array with nothing to report is [], never omitted — and never collapse your findings into a single prose field the schema splits into structured ones. Omit optional fields you have nothing for. Keep free-text values tight (one line each unless the field says otherwise) — a compact payload parses, an essay-sized one truncates and dies. When a schema error comes back naming a field, fix exactly that field and re-emit the corrected COMPLETE object — resending the same shape fails the same way.`;
 
 // ── shared schema bricks (declaration order respects nesting) ──
 const RABBITHOLE         = {
@@ -3405,7 +3407,7 @@ const SCOUT_TPL = `{{! scout — one probe of the swarm, scoped to a single angl
 You are scout probe {{index}} of {{total}}, on the angle «{{angleName}}» — {{angleWhy}}. Lens: {{angleLens}}. {{net}}
 Step 1 — run WebSearch with: "{{searchQuery}}". You may refine it ONCE if the results are off-angle — stay on THIS angle, do not wander onto another probe's.
 Step 2 — pick the up-to-${CONFIG.SCOUT_PROBE_SOURCES} most relevant sources FOR THIS ANGLE and fetch each via mcp__harvester__fetch — built-in WebFetch is denied. For each fetched page, first surface the key facts about "{{query}}" as this angle reveals them, then apply this instruction: <<{{footer}}>> Record the local cache path the fetch tool reports as EVERY claim's cachePath — a claim without its cachePath can never be mechanically verified and stays permanently unpinned; never invent one when the tool did not report it. Skip the footer's Surprise section — no prior claims exist yet.
-Step 3 — return: landscape (2-3 sentences on what THIS ANGLE revealed — not the whole topic, just what this angle's sources showed); pages[] (each: url, 2-3 sentence summary, rabbitHoles[] copied from the page's "Rabbit holes" section as {keyword, why}); nextSources[] union of the pages' "Next sources" sections, each {ref, why}; claims[] union of the pages' "Claims" sections, each pinned to a verbatim quote — a claim without its verbatim quote is worthless, no quote no claim; newTerms[] union of the pages' "New terms" sections; deadEnds[] for any source that timed out, was parked, or was off-topic — do not invent rabbit-holes for those. If every source is dead/unreachable, still return a valid result: landscape from your search, pages [], the dead sources in deadEnds.${EMIT}{{researcherClause}}
+Step 3 — return ALL SIX fields (an array with nothing to report is [], never omitted): landscape (2-3 sentences on what THIS ANGLE revealed — not the whole topic, and NEVER your findings packed into prose: facts go in claims[], page detail in pages[].summary); pages[] (each: url, 2-3 sentence summary, rabbitHoles[] copied from the page's "Rabbit holes" section as {keyword, why}); nextSources[] union of the pages' "Next sources" sections, each {ref, why}; claims[] union of the pages' "Claims" sections, each pinned to a verbatim quote — a claim without its verbatim quote is worthless, no quote no claim; newTerms[] union of the pages' "New terms" sections; deadEnds[] for any source that timed out, was parked, or was off-topic — do not invent rabbit-holes for those. If every source is dead/unreachable, still return a valid result: landscape from your search, pages [], the dead sources in deadEnds.${EMIT}{{researcherClause}}
 `;
 
 const buildScout = ({
@@ -3519,7 +3521,14 @@ const scoutPlanner                          = {
 const SCOUT         = {
   type: 'object',
   properties: {
-    landscape: { type: 'string' },
+    landscape: {
+      type: 'string',
+      // shared by probe (2-3 sentences) and merger (one paragraph) — the description binds the
+      // INVARIANT both share: run forensics caught a probe packing its entire return in here,
+      // omitting every other required key, and burning five identical schema-error retries.
+      description:
+        'the summary narrative ONLY — facts belong in claims[] and page detail in pages[]; never pack the whole return into this field',
+    },
     pages: { type: 'array', items: PAGE },
     deadEnds: { type: 'array', items: { type: 'string' } },
     claims: {

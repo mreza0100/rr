@@ -29,9 +29,11 @@ Use the web only (WebSearch / mcp__harvester__fetch) to check sources — never 
 // EMIT: JSON-emission discipline for the agents whose StructuredOutput payload is large (readers, probes,
 // merger, prospector, scheduler, brainer). Run forensics: emitters intermittently sent prose-/<parameter>-
 // wrapped JSON and unescaped control characters in long string values — each a parse failure that burns a
-// visible retry. Schemas are null-tolerant for optional fields; this clause attacks the malformed-JSON class.
+// visible retry — and one probe collapsed its whole return into the first prose field, omitted every other
+// required key, and re-sent that same shape through five schema-error retries. Schemas are null-tolerant
+// for optional fields; this clause attacks the malformed-JSON and required-field-collapse classes.
 export const EMIT = `
-StructuredOutput discipline: its input must be ONE valid JSON object — escape every quote, newline, and backslash inside string values; no code fences, no XML/<parameter> syntax, no prose outside the JSON. Omit optional fields you have nothing for. Keep free-text values tight (one line each unless the field says otherwise) — a compact payload parses, an essay-sized one truncates and dies.`;
+StructuredOutput discipline: its input must be ONE valid JSON object — escape every quote, newline, and backslash inside string values; no code fences, no XML/<parameter> syntax, no prose outside the JSON. Emit EVERY required field in that one call — a required array with nothing to report is [], never omitted — and never collapse your findings into a single prose field the schema splits into structured ones. Omit optional fields you have nothing for. Keep free-text values tight (one line each unless the field says otherwise) — a compact payload parses, an essay-sized one truncates and dies. When a schema error comes back naming a field, fix exactly that field and re-emit the corrected COMPLETE object — resending the same shape fails the same way.`;
 
 // ── shared schema bricks (declaration order respects nesting) ──
 export const RABBITHOLE: Schema = {
