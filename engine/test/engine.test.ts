@@ -174,7 +174,8 @@ function goalAgent(prompt: string, opts: AgentOpts) {
 }
 
 describe('ResearchReport.run — goal mode (compute on, brainer-driven stop)', () => {
-  it('completes the full pipeline and writes the expected files', async () => {
+  // 30s: the full mocked pipeline sits at the 5s default's edge and flakes under host load
+  it('completes the full pipeline and writes the expected files', { timeout: 30000 }, async () => {
     const RR = await loadEngine(
       { query: 'best vector database for production RAG at scale', mode: 'goal' },
       goalAgent,
@@ -278,7 +279,8 @@ function collectAgent(prompt: string, opts: AgentOpts) {
 }
 
 describe('ResearchReport.run — collect mode (dry plateau)', () => {
-  it('stops on the collect dry-plateau and writes a report with no compute', async () => {
+  // 30s: same full-pipeline shape as the goal-mode run above — flakes at the 5s default under load
+  it('stops on the collect dry-plateau and writes a report with no compute', { timeout: 30000 }, async () => {
     const RR = await loadEngine(
       { query: 'survey the vector-db landscape', mode: 'collect' },
       collectAgent,
